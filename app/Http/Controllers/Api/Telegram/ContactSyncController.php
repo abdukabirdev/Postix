@@ -93,12 +93,16 @@ final class ContactSyncController extends Controller
          * shared with Join group and holds far more. Counted once every
          * half a minute, not on every poll of the page.
          */
-        $people = Cache::remember('contact-sync:people-totals', 30, fn (): array => [
+        $skipUsernames = (bool) app(\App\Application\Telegram\Services\ContactSyncSettings::class)->current()['skip_usernames'];
+
+        $people = Cache::remember('contact-sync:people-totals:' . (int) $skipUsernames, 30, fn (): array => [
             'users' => TelegramScrapedUser::query()->forContacts()->count(),
+            /* Those with a public @username stay in the database: they wait for nobody. */
             'unassigned' => TelegramScrapedUser::query()
                 ->where('is_bot', false)
                 ->forContacts()
                 ->whereDoesntHave('contact')
+                ->when($skipUsernames, fn ($q) => $q->withoutUsername())
                 ->count(),
         ]);
 
@@ -108,7 +112,7 @@ final class ContactSyncController extends Controller
             ->first();
 
         return response()->json(['data' => [
-            'running' => TelegramProcessLock::isHeldByOtherProcess(TelegramSyncContactsCommand::LOCK_NAME),
+            'running' => TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME),
             'pid' => TelegramProcessLock::holderPid(TelegramSyncContactsCommand::LOCK_NAME),
             'daily_limit' => app(\App\Application\Telegram\Services\ContactSyncSettings::class)->current()['daily_limit'],
             'last_event' => $lastRun ? [
@@ -133,7 +137,7 @@ final class ContactSyncController extends Controller
             'group_id' => ['nullable', 'integer', 'exists:telegram_scrape_groups,id'],
         ]);
 
-        if (TelegramProcessLock::isHeldByOtherProcess(TelegramSyncContactsCommand::LOCK_NAME)) {
+        if (TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME)) {
             return response()->json([
                 'message' => __('telegram.contact_sync.messages.already_running'),
             ], 409);

@@ -57,6 +57,23 @@ class TelegramScrapedUser extends Model
             ->orWhereHas('groups', fn ($g) => $g->where('type', TelegramScrapeGroup::TYPE_CONTACTS)));
     }
 
+    /**
+     * People with a public @username: anybody reaches them by the link, so a
+     * contact adds nothing - they are kept in the database only.
+     */
+    public function scopeWithUsername(Builder $query): Builder
+    {
+        return $query->whereNotNull('username')->where('username', '!=', '');
+    }
+
+    /**
+     * People without a @username: a contact is the only way to reach them.
+     */
+    public function scopeWithoutUsername(Builder $query): Builder
+    {
+        return $query->where(fn ($q) => $q->whereNull('username')->orWhere('username', ''));
+    }
+
     public function groups(): BelongsToMany
     {
         return $this->belongsToMany(

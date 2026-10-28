@@ -61,7 +61,7 @@ final class ContactSyncRunController extends Controller
             ->pluck('total', 'run_id');
 
         $newest = TelegramContactSyncLog::query()->where('event', 'started')->max('id');
-        $running = TelegramProcessLock::isHeldByOtherProcess(TelegramSyncContactsCommand::LOCK_NAME);
+        $running = TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME);
 
         $rows = $page->getCollection()->map(
             fn (TelegramContactSyncLog $start) => $this->summary(
@@ -104,7 +104,7 @@ final class ContactSyncRunController extends Controller
         $counts = $logs->groupBy('event')->map->count()->map(fn (int $n, string $event) => (object) ['event' => $event, 'total' => $n])->values();
 
         $accountIds = $logs->pluck('telegram_account_id')->filter()->unique()->values();
-        $running = TelegramProcessLock::isHeldByOtherProcess(TelegramSyncContactsCommand::LOCK_NAME)
+        $running = TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME)
             && $start->id === TelegramContactSyncLog::query()->where('event', 'started')->max('id');
 
         return response()->json(['data' => [
@@ -151,7 +151,6 @@ final class ContactSyncRunController extends Controller
             'held' => $count('flood') + $count('disabled'),
             'message' => $finished?->message,
             'settings' => [
-                'max_accounts' => $context['max_accounts'] ?? null,
                 'daily_limit' => $context['daily_limit'] ?? null,
                 'nick_base' => $context['nick_base'] ?? null,
             ],

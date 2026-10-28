@@ -6,9 +6,12 @@ use App\Application\Telegram\Services\ContactSyncService;
 use App\Models\Telegram\TelegramAccountContact;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramScrapeGroup;
+use danog\MadelineProto\API;
+use danog\MadelineProto\RPCError\FloodWaitError;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use ReflectionClass;
 use ReflectionMethod;
 use Tests\TestCase;
 
@@ -102,6 +105,87 @@ final class ContactSyncTest extends TestCase
         );
     }
 
+    public function test_members_are_read_page_after_page(): void
+    {
+        $group = TelegramScrapeGroup::create(['link' => 'drivers', 'last_error' => 'The operation was cancelled']);
+
+        $api = $this->fakeApi([
+            [
+                'count' => 3,
+                'participants' => [['_' => 'channelParticipant', 'user_id' => 101, 'inviter_id' => 999], ['_' => 'channelParticipant', 'user_id' => 102]],
+                'users' => [
+                    ['id' => 101, 'first_name' => 'Ali'],
+                    ['id' => 102, 'deleted' => true],
+                    ['id' => 999, 'first_name' => 'Inviter, not a member here'],
+                ],
+            ],
+            [
+                'count' => 3,
+                'participants' => [['_' => 'channelParticipant', 'user_id' => 103]],
+                'users' => [['id' => 103, 'first_name' => 'Bot', 'bot' => true]],
+            ],
+        ]);
+
+        $members = $this->invokeService('readMembers', [$api, $group, $this->account(1), ['delay_min' => 0, 'delay_max' => 0]]);
+
+        $this->assertSame([101, 103], array_column($members, 'id'), 'a deleted account is left out, an inviter is not a member');
+        $this->assertSame([0, 2], $api->channels->offsets);
+        $this->assertSame(0, $api->channels->joins);
+        $this->assertSame(3, $group->fresh()->members_count);
+        $this->assertNull($group->fresh()->last_error);
+    }
+
+    public function test_a_public_group_listing_nobody_is_joined_and_read_again(): void
+    {
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $api = $this->fakeApi([
+            ['count' => 0, 'participants' => [], 'users' => []],
+            ['count' => 1, 'participants' => [['_' => 'channelParticipant', 'user_id' => 101]], 'users' => [['id' => 101]]],
+        ]);
+
+        $members = $this->invokeService('readMembers', [$api, $group, $this->account(1), ['delay_min' => 0, 'delay_max' => 0]]);
+
+        $this->assertSame([101], array_column($members, 'id'));
+        $this->assertSame(1, $api->channels->joins);
+    }
+
+    public function test_a_flood_wait_is_thrown_at_once_not_taken_for_not_a_member(): void
+    {
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $api = $this->fakeApi([new FloodWaitError('FLOOD_WAIT_120', 120, 420, 'channels.getParticipants')]);
+
+        try {
+            $this->invokeService('readMembers', [$api, $group, $this->account(1), ['delay_min' => 0, 'delay_max' => 0]]);
+
+            $this->fail('the flood wait was swallowed');
+        } catch (FloodWaitError $e) {
+            $this->assertSame('FLOOD_WAIT_120', $e->rpc);
+        }
+
+        $this->assertSame(0, $api->channels->joins, 'no join, no second read');
+    }
+
+    public function test_people_with_a_username_are_nobodys_to_save_when_the_setting_says_so(): void
+    {
+        /* Who an account holds: somebody held is not for the sync either. */
+        (include database_path('migrations/2026_10_17_100000_create_telegram_account_contacts_state_tables.php'))->up();
+
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $this->invokeService('storeMembers', [$group, [['id' => 501, 'first_name' => 'Ali', 'username' => 'ali']], []]);
+
+        $groups = TelegramScrapeGroup::query()->get();
+
+        $this->assertFalse($this->invokeService('hasUnclaimed', [$groups, true]), 'reached by the link: left in the database');
+        $this->assertTrue($this->invokeService('hasUnclaimed', [$groups, false]));
+
+        $this->invokeService('storeMembers', [$group, [['id' => 502, 'first_name' => 'Vali']], []]);
+
+        $this->assertTrue($this->invokeService('hasUnclaimed', [$groups, true]), 'no @username: a contact is the only way');
+    }
+
     public function test_links_are_normalised(): void
     {
         foreach (['https://t.me/taxi_group', 't.me/taxi_group', '@taxi_group', ' taxi_group '] as $input) {
@@ -114,5 +198,48 @@ final class ContactSyncTest extends TestCase
     private function account(int $id): \App\Models\Telegram\TelegramAccount
     {
         return \App\Models\Telegram\TelegramAccount::query()->findOrFail($id);
+    }
+
+    /**
+     * An unconstructed API (the class is final) whose channels namespace
+     * hands out the given pages, one a call, and counts the joins.
+     *
+     * @param list<array<string, mixed>|\Throwable> $pages
+     */
+    private function fakeApi(array $pages): API
+    {
+        $api = (new ReflectionClass(API::class))->newInstanceWithoutConstructor();
+
+        $api->channels = new class($pages)
+        {
+            /** @var list<int> */
+            public array $offsets = [];
+
+            public int $joins = 0;
+
+            public function __construct(private array $pages) {}
+
+            public function getParticipants(mixed ...$args): array
+            {
+                $this->offsets[] = $args['offset'];
+
+                $page = array_shift($this->pages);
+
+                if ($page instanceof \Throwable) {
+                    throw $page;
+                }
+
+                return $page;
+            }
+
+            public function joinChannel(mixed ...$args): array
+            {
+                $this->joins++;
+
+                return [];
+            }
+        };
+
+        return $api;
     }
 }

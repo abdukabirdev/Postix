@@ -187,7 +187,7 @@ final class ContactAccountsController extends Controller
      */
     private function running(): bool
     {
-        return TelegramProcessLock::isHeldByOtherProcess(TelegramAccountContactsCommand::LOCK_NAME);
+        return TelegramProcessLock::isHeld(TelegramAccountContactsCommand::LOCK_NAME);
     }
 
     /**
@@ -197,7 +197,7 @@ final class ContactAccountsController extends Controller
     private function busy(): bool
     {
         return $this->running()
-            || TelegramProcessLock::isHeldByOtherProcess(TelegramSyncContactsCommand::LOCK_NAME);
+            || TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME);
     }
 
     private function busyResponse(): JsonResponse

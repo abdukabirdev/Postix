@@ -50,6 +50,9 @@ final class ContactSyncService
      */
     private const MAX_FAILURE_STREAK = 5;
 
+    /** People in one page of the members list, Telegram's own maximum. */
+    private const MEMBERS_PAGE = 200;
+
     private string $runId = '';
 
     public function __construct(
@@ -74,7 +77,7 @@ final class ContactSyncService
 
         /* The panel's settings, read once: a run is not changed half way. */
         $config = $this->settings->current();
-        $maxAccounts = max(1, (int) $config['max_accounts']);
+        $dailyLimit = max(0, (int) $config['daily_limit']);
 
         $totals = ['accounts' => 0, 'added' => 0, 'failed' => 0, 'members' => 0];
 
@@ -88,8 +91,8 @@ final class ContactSyncService
         $this->log('started', 'Sync started', null, null, [
             'trigger' => $trigger,
             'groups' => $groups->pluck('link')->all(),
-            'max_accounts' => $maxAccounts,
-            'daily_limit' => (int) $config['daily_limit'],
+            'daily_limit' => $dailyLimit,
+            'skip_usernames' => (bool) $config['skip_usernames'],
             'nick_base' => $config['nick_base'] !== '' ? $config['nick_base'] : null,
             'excluded_accounts' => $config['excluded_accounts'],
         ]);
@@ -103,12 +106,16 @@ final class ContactSyncService
         /* Accounts left out in the panel are taken for used from the start. */
         $usedAccountIds = array_map('intval', (array) $config['excluded_accounts']);
 
-        for ($i = 0; $i < $maxAccounts; $i++) {
+        /* Whether an account has read the groups in this run yet. */
+        $read = false;
+
+        /* Every available account takes its turn, however many there are. */
+        while (true) {
             /*
-             * The first pass has to read the groups to learn who is in them;
-             * after that, stop as soon as nobody is left without an owner.
+             * The groups have to be read to learn who is in them; after
+             * that, stop as soon as nobody is left without an owner.
              */
-            if ($i > 0 && ! $this->hasUnclaimed($groups)) {
+            if ($read && ! $this->hasUnclaimed($groups, (bool) $config['skip_usernames'])) {
                 break;
             }
 
@@ -124,6 +131,14 @@ final class ContactSyncService
             }
 
             $usedAccountIds[] = $account->id;
+
+            /* Its contacts for today are added already: not even started. */
+            if ($this->addedToday($account) >= $dailyLimit) {
+                $this->pool->release($account, ProcessEnum::ContactSync);
+
+                continue;
+            }
+
             $totals['accounts']++;
 
             $say("Account #{$account->id} {$account->phone}");
@@ -143,6 +158,8 @@ final class ContactSyncService
                 $totals['added'] += $result['added'];
                 $totals['failed'] += $result['failed'];
                 $totals['members'] += $result['members'];
+
+                $read = $read || $result['members'] > 0;
 
                 $this->pool->registerSuccess($account, ProcessEnum::ContactSync);
             } catch (Throwable $e) {
@@ -261,6 +278,8 @@ final class ContactSyncService
                 /* Somebody's contact already (read from an account): not added to a second one. */
                 ->whereDoesntHave('accountLinks')
                 ->where('is_bot', false)
+                /* A public @username is reached by its link: kept in the database only. */
+                ->when($config['skip_usernames'] ?? false, fn ($q) => $q->withoutUsername())
                 ->orderBy('telegram_scraped_users.id')
                 ->get();
 
@@ -379,7 +398,18 @@ final class ContactSyncService
     }
 
     /**
-     * @return list<array<string, mixed>> the "user" part of every participant
+     * Who is in the group: the members list page after page, as Telegram
+     * gives it (up to about 10 000 people).
+     *
+     * Not getPwrChat: it searches the members a, b, c ... aa, ab ... in
+     * hundreds of requests and waits out any flood wait up to a day, while
+     * MadelineProto drops every request after 60 seconds. A wait over a
+     * minute came back as "The operation was cancelled", and the account
+     * could not read the group again until the wait was over.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return list<array<string, mixed>> the users of the members list
      */
     private function readMembers(
         API $api,
@@ -387,49 +417,98 @@ final class ContactSyncService
         TelegramAccount $account,
         array $config,
     ): array {
-        try {
-            $chat = $api->getPwrChat($group->link);
-        } catch (Throwable $e) {
-            /*
-             * Flood and dead-account errors are not "not a member yet".
-             */
-            if ($this->isFlood($e) || $this->isAccountError($e)) {
+        /* A link works for every account; a chat id only for one that has met the group. */
+        $peer = 'https://t.me/' . $group->link;
+
+        $members = [];
+        $total = 0;
+        $offset = 0;
+        $joined = false;
+
+        while (true) {
+            try {
+                /* A flood wait longer than half a minute is thrown, not waited out. */
+                $page = $api->channels->getParticipants(
+                    channel: $peer,
+                    filter: ['_' => 'channelParticipantsRecent'],
+                    offset: $offset,
+                    limit: self::MEMBERS_PAGE,
+                );
+            } catch (Throwable $e) {
+                /*
+                 * Not in the group yet (an invite link, members shown to
+                 * members only): it joins once and reads from the start.
+                 * Flood and dead-account errors are not "not a member yet".
+                 */
+                if ($offset === 0 && ! $joined && ! $this->isFlood($e) && ! $this->isAccountError($e)
+                    && $this->join($api, $group, $account, $config)) {
+                    $joined = true;
+
+                    continue;
+                }
+
                 throw $e;
             }
 
-            $this->join($api, $group, $account, $config);
+            $participants = (array) ($page['participants'] ?? []);
 
-            $chat = $api->getPwrChat($group->link);
+            /* A public group opens for a non-member without listing anybody. */
+            if ($participants === [] && $offset === 0 && ! $joined) {
+                $joined = true;
+
+                if ($this->join($api, $group, $account, $config)) {
+                    continue;
+                }
+            }
+
+            if ($participants === []) {
+                break;
+            }
+
+            $total = max($total, (int) ($page['count'] ?? 0));
+
+            $users = [];
+
+            foreach ((array) ($page['users'] ?? []) as $user) {
+                if (isset($user['id'])) {
+                    $users[(int) $user['id']] = $user;
+                }
+            }
+
+            foreach ($participants as $participant) {
+                $user = $users[(int) ($participant['user_id'] ?? 0)] ?? null;
+
+                /* A deleted account cannot be saved into anybody's contacts. */
+                if ($user !== null && empty($user['deleted'])) {
+                    $members[(int) $user['id']] = $user;
+                }
+            }
+
+            $offset += count($participants);
+
+            if ($offset >= $total) {
+                break;
+            }
+
+            sleep(random_int(1, 3));
         }
 
-        /*
-         * A public group opens for a non-member without listing anybody.
-         */
-        if (($chat['participants'] ?? []) === []) {
-            if ($this->join($api, $group, $account, $config)) {
-                $chat = $api->getPwrChat($group->link);
-            }
+        try {
+            /* Known from the read already: no request of its own. */
+            $info = (array) $api->getInfo($peer);
+        } catch (Throwable) {
+            $info = [];
         }
 
         $group->update([
-            'title' => $chat['title'] ?? $group->title,
-            'telegram_chat_id' => $chat['id'] ?? $group->telegram_chat_id,
-            'members_count' => (int) ($chat['participants_count'] ?? count($chat['participants'] ?? [])),
+            'title' => $info['Chat']['title'] ?? $group->title,
+            'telegram_chat_id' => $info['bot_api_id'] ?? $group->telegram_chat_id,
+            'members_count' => $total ?: count($members),
             'last_synced_at' => now(),
             'last_error' => null,
         ]);
 
-        $members = [];
-
-        foreach ($chat['participants'] ?? [] as $participant) {
-            $user = $participant['user'] ?? null;
-
-            if (is_array($user) && isset($user['id'])) {
-                $members[] = $user;
-            }
-        }
-
-        return $members;
+        return array_values($members);
     }
 
     /**
@@ -648,12 +727,13 @@ final class ContactSyncService
     /**
      * @param \Illuminate\Support\Collection<int, TelegramScrapeGroup> $groups
      */
-    private function hasUnclaimed($groups): bool
+    private function hasUnclaimed($groups, bool $skipUsernames): bool
     {
         return TelegramScrapedUser::query()
             ->where('is_bot', false)
             ->whereDoesntHave('contact')
             ->whereDoesntHave('accountLinks')
+            ->when($skipUsernames, fn ($q) => $q->withoutUsername())
             ->whereHas('groups', fn ($q) => $q->whereIn('telegram_scrape_groups.id', $groups->pluck('id')))
             ->exists();
     }

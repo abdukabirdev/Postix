@@ -333,7 +333,6 @@ export function contactReportPage(config) {
             const settings = this.detail?.run?.settings ?? {};
 
             return t.detail.settings_text
-                .replace(':accounts', settings.max_accounts ?? EM_DASH)
                 .replace(':limit', settings.daily_limit ?? EM_DASH)
                 .replace(':nick', settings.nick_base || t.detail.own_names);
         },

@@ -3,8 +3,8 @@
 | Contact sync: the settings page
 |--------------------------------------------------------------------------
 |
-| When a run starts, how many accounts it uses, how many contacts each may
-| add a day, how fast, and under which name the contacts are saved. Read and
+| When a run starts, how many contacts each account may add a day, how
+| fast, and under which name the contacts are saved. Read and
 | written through ContactSyncSettingsController; a run reads them fresh when
 | it starts, so a change applies from the next run.
 |
@@ -17,7 +17,7 @@ const notify = (message, success = true) => {
 };
 
 /** What the form holds; compared as text, the inputs hand back strings. */
-const FIELDS = ['enabled', 'schedule_at', 'max_accounts', 'daily_limit', 'delay_min', 'delay_max', 'nick_base', 'excluded_accounts'];
+const FIELDS = ['enabled', 'schedule_at', 'daily_limit', 'skip_usernames', 'delay_min', 'delay_max', 'nick_base', 'excluded_accounts'];
 
 export function contactSettingsPage(config) {
     const s = config.translations;
@@ -115,7 +115,6 @@ export function contactSettingsPage(config) {
             try {
                 const json = await requestJson(this.endpoint, 'PUT', {
                     ...this.form,
-                    max_accounts: Number(this.form.max_accounts),
                     daily_limit: Number(this.form.daily_limit),
                     delay_min: Number(this.form.delay_min),
                     delay_max: Number(this.form.delay_max),

@@ -11,9 +11,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 
 /**
- * The contact sync's settings page: when it runs, how many accounts, how
- * many contacts each may add a day, the pauses, the nick the contacts are
- * saved under. Access is the `role:driverCheck,superadmin` middleware of the
+ * The contact sync's settings page: when it runs, how many contacts each
+ * account may add a day, the pauses, the nick the contacts are saved under. Access is the `role:driverCheck,superadmin` middleware of the
  * route group.
  */
 final class ContactSyncSettingsController extends Controller
@@ -27,15 +26,14 @@ final class ContactSyncSettingsController extends Controller
 
     public function update(Request $request): JsonResponse
     {
-        [$accountsMin, $accountsMax] = ContactSyncSettings::LIMITS['max_accounts'];
         [$limitMin, $limitMax] = ContactSyncSettings::LIMITS['daily_limit'];
         [$delayMin, $delayMax] = ContactSyncSettings::LIMITS['delay_min'];
 
         $data = $request->validate([
             'enabled' => ['required', 'boolean'],
             'schedule_at' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
-            'max_accounts' => ['required', 'integer', "min:{$accountsMin}", "max:{$accountsMax}"],
             'daily_limit' => ['required', 'integer', "min:{$limitMin}", "max:{$limitMax}"],
+            'skip_usernames' => ['required', 'boolean'],
             'delay_min' => ['required', 'integer', "min:{$delayMin}", "max:{$delayMax}"],
             'delay_max' => ['required', 'integer', "min:{$delayMin}", "max:{$delayMax}", 'gte:delay_min'],
             'nick_base' => ['nullable', 'string', 'max:60'],

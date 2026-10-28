@@ -219,12 +219,12 @@ final class ContactAccountsTest extends TestCase
         $unclaimed = new \ReflectionMethod($service, 'hasUnclaimed');
         $groups = collect([$group]);
 
-        $this->assertTrue($unclaimed->invoke($service, $groups), 'nobody has them: the sync may take them');
+        $this->assertTrue($unclaimed->invoke($service, $groups, false), 'nobody has them: the sync may take them');
 
         /* Account 2 was read and holds them - no owner row, only the account's own contact. */
         DB::table('telegram_account_contact_links')->insert(['telegram_account_id' => 2, 'scraped_user_id' => $person->id, 'synced_at' => now()]);
 
-        $this->assertFalse($unclaimed->invoke($service, $groups), 'held by an account: not for a second one');
+        $this->assertFalse($unclaimed->invoke($service, $groups, false), 'held by an account: not for a second one');
 
         /* Held by two accounts is what a read of both gives; the person is still one row. */
         DB::table('telegram_account_contact_links')->insert(['telegram_account_id' => 1, 'scraped_user_id' => $person->id, 'synced_at' => now()]);

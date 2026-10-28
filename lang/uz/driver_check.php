@@ -56,7 +56,7 @@ return [
             'added' => 'Saqlangan',
             'today' => 'Bugun saqlangan',
             'waiting' => 'Hali saqlanmagan',
-            'waiting_hint' => 'xatolar: :failed',
+            'waiting_hint' => 'xatolar: :failed · faqat bazada (havolasi bor): :by_link',
         ],
         'filters' => [
             'search' => 'Ism, @username, telefon yoki Telegram ID',
@@ -90,6 +90,7 @@ return [
             'failed' => 'Xato',
             'skipped' => 'Kontaktlarda bor edi',
             'unassigned' => 'Saqlanmagan',
+            'by_link' => 'Faqat bazada (havolasi bor)',
         ],
         'table' => [
             'person' => 'Odam',
@@ -193,7 +194,7 @@ return [
         'detail' => [
             'title' => 'Ishga tushirish',
             'settings' => 'Ishga tushirish sozlamalari',
-            'settings_text' => 'akkauntlar :accounts tagacha, akkauntga :limit tagacha kontakt, ism: :nick',
+            'settings_text' => 'akkauntga :limit tagacha kontakt, ism: :nick',
             'own_names' => 'haqiqiy ismlar',
             'accounts_title' => 'Qatnashgan akkauntlar',
             'account' => 'Akkaunt',
@@ -288,10 +289,10 @@ return [
             'enabled_hint' => 'O\'chiq bo\'lsa jadval bo\'yicha ishga tushmaydi, qo\'lda mumkin',
             'schedule_at' => 'Ishga tushish vaqti',
             'schedule_at_hint' => 'Server vaqti, har kuni',
-            'max_accounts' => 'Bir ishga tushirishda eng ko\'p akkaunt',
-            'max_accounts_hint' => 'Keyingi akkaunt faqat egasiz odamlar qolsa olinadi',
             'daily_limit' => 'Akkauntga sutkasiga kontaktlar',
             'daily_limit_hint' => 'Telegram ommaviy qo\'shishni cheklaydi, qiymatni kichik tuting',
+            'skip_usernames' => '@username bor odamlarni kontaktlarga saqlamaslik',
+            'skip_usernames_hint' => 'Ularga havola orqali yozish mumkin: ular faqat bazada qoladi, kontaktlarga @username yo\'q odamlar saqlanadi',
             'delay_min' => 'Pauza dan, soniya',
             'delay_max' => 'Pauza gacha, soniya',
             'delay_hint' => 'Qo\'shishlar orasida shu oraliqdagi tasodifiy pauza qilinadi',

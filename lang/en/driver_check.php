@@ -56,7 +56,7 @@ return [
             'added' => 'Saved',
             'today' => 'Saved today',
             'waiting' => 'Not saved yet',
-            'waiting_hint' => 'errors: :failed',
+            'waiting_hint' => 'errors: :failed · database only (has a link): :by_link',
         ],
         'filters' => [
             'search' => 'Name, @username, phone or Telegram ID',
@@ -90,6 +90,7 @@ return [
             'failed' => 'Failed',
             'skipped' => 'Already a contact',
             'unassigned' => 'Not saved',
+            'by_link' => 'Database only (has a link)',
         ],
         'table' => [
             'person' => 'Person',
@@ -193,7 +194,7 @@ return [
         'detail' => [
             'title' => 'Run',
             'settings' => 'Run settings',
-            'settings_text' => 'up to :accounts accounts, up to :limit contacts per account, name: :nick',
+            'settings_text' => 'up to :limit contacts per account, name: :nick',
             'own_names' => 'their own names',
             'accounts_title' => 'Accounts that took part',
             'account' => 'Account',
@@ -288,10 +289,10 @@ return [
             'enabled_hint' => 'Off: it does not start on schedule, by hand it still can',
             'schedule_at' => 'Start time',
             'schedule_at_hint' => 'Server time, every day',
-            'max_accounts' => 'Most accounts per run',
-            'max_accounts_hint' => 'The next account is taken only if people without an owner are left',
             'daily_limit' => 'Contacts per account a day',
             'daily_limit_hint' => 'Telegram limits adding in bulk - keep it small',
+            'skip_usernames' => 'Do not save people with a @username to contacts',
+            'skip_usernames_hint' => 'They can be reached by their link: they stay in the database only, contacts get the people without a @username',
             'delay_min' => 'Pause from, sec',
             'delay_max' => 'Pause to, sec',
             'delay_hint' => 'A random pause within these bounds is kept between additions',

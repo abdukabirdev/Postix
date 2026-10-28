@@ -62,8 +62,7 @@ return [
         'contact_sync' => [
             /* When the daily run starts (routes/console.php) and the report expects it. */
             'schedule_at' => env('TELEGRAM_CONTACT_SYNC_AT', '03:30'),
-            'max_accounts' => (int) env('TELEGRAM_CONTACT_SYNC_MAX_ACCOUNTS', 20),
-            'daily_limit' => (int) env('TELEGRAM_CONTACT_SYNC_DAILY_LIMIT', 100),
+            'daily_limit' => (int) env('TELEGRAM_CONTACT_SYNC_DAILY_LIMIT', 80),
             'delay_min' => (int) env('TELEGRAM_CONTACT_SYNC_DELAY_MIN', 3),
             'delay_max' => (int) env('TELEGRAM_CONTACT_SYNC_DELAY_MAX', 5),
         ],

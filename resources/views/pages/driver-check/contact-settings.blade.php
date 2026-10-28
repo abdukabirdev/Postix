@@ -64,13 +64,21 @@
 
                         {{-- How many --}}
                         <section class="grid gap-x-5 gap-y-4 p-4 sm:grid-cols-2">
-                            <x-driver-check.field :label="__('driver_check.sync.settings.max_accounts')" :hint="__('driver_check.sync.settings.max_accounts_hint')">
-                                <x-driver-check.input type="number" inputmode="numeric" x-model="form.max_accounts" ::min="limits.max_accounts?.[0]" ::max="limits.max_accounts?.[1]" required />
-                            </x-driver-check.field>
-
                             <x-driver-check.field :label="__('driver_check.sync.settings.daily_limit')" :hint="__('driver_check.sync.settings.daily_limit_hint')">
                                 <x-driver-check.input type="number" inputmode="numeric" x-model="form.daily_limit" ::min="limits.daily_limit?.[0]" ::max="limits.daily_limit?.[1]" required />
                             </x-driver-check.field>
+
+                            <label class="flex cursor-pointer items-start gap-3 sm:pt-6">
+                                <span class="relative mt-0.5 inline-flex h-6 w-10 shrink-0 items-center">
+                                    <input type="checkbox" x-model="form.skip_usernames" class="peer sr-only">
+                                    <span class="absolute inset-0 rounded-full bg-gray-300 transition peer-checked:bg-brand-500 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 dark:bg-gray-700"></span>
+                                    <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
+                                </span>
+                                <span>
+                                    <span class="block text-[13px] font-semibold text-gray-900 dark:text-white">{{ __('driver_check.sync.settings.skip_usernames') }}</span>
+                                    <span class="block text-[11.5px] leading-snug text-gray-400">{{ __('driver_check.sync.settings.skip_usernames_hint') }}</span>
+                                </span>
+                            </label>
                         </section>
 
                         {{-- How fast --}}

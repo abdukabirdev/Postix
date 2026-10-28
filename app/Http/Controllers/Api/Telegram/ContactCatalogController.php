@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\Telegram;
 
+use App\Application\Telegram\Services\ContactSyncSettings;
 use App\Http\Controllers\Controller;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountContact;
@@ -25,11 +26,14 @@ final class ContactCatalogController extends Controller
     /** What the list can be narrowed to besides the contact statuses. */
     private const UNASSIGNED = 'unassigned';
 
+    /** Nobody's contact on purpose: a public @username, reached by the link (the sync's setting). */
+    private const BY_LINK = 'by_link';
+
     public function index(Request $request): JsonResponse
     {
         $data = $request->validate([
             'search' => ['nullable', 'string', 'max:100'],
-            'status' => ['nullable', 'in:added,pending,failed,skipped,' . self::UNASSIGNED],
+            'status' => ['nullable', 'in:added,pending,failed,skipped,' . self::UNASSIGNED . ',' . self::BY_LINK],
             'account_id' => ['nullable', 'integer'],
             'group_id' => ['nullable', 'integer'],
             'presence' => ['nullable', 'in:on_account,not_on_account'],
@@ -40,6 +44,7 @@ final class ContactCatalogController extends Controller
         ]);
 
         $direction = ($data['direction'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
+        $byLink = $this->skipsUsernames();
 
         $query = TelegramScrapedUser::query()
             ->with(['groups:id,title,link', 'contact.account:id,phone,username', 'accountLinks.account:id,phone'])
@@ -59,9 +64,16 @@ final class ContactCatalogController extends Controller
                     }
                 });
             })
-            ->when(($data['status'] ?? null) === self::UNASSIGNED, fn ($q) => $q->whereDoesntHave('contact'))
             ->when(
-                filled($data['status'] ?? null) && $data['status'] !== self::UNASSIGNED,
+                ($data['status'] ?? null) === self::UNASSIGNED,
+                fn ($q) => $q->whereDoesntHave('contact')->when($byLink, fn ($q) => $q->withoutUsername()),
+            )
+            ->when(
+                ($data['status'] ?? null) === self::BY_LINK,
+                fn ($q) => $q->whereDoesntHave('contact')->when($byLink, fn ($q) => $q->withUsername(), fn ($q) => $q->whereKey([])),
+            )
+            ->when(
+                filled($data['status'] ?? null) && ! in_array($data['status'], [self::UNASSIGNED, self::BY_LINK], true),
                 fn ($q) => $q->whereHas('contact', fn ($c) => $c->where('status', $data['status'])),
             )
             ->when(
@@ -95,7 +107,7 @@ final class ContactCatalogController extends Controller
         $page = $query->orderBy('id', $direction)->paginate((int) ($data['per_page'] ?? 20), ['*'], 'page', max(1, $request->integer('page', 1)));
 
         return response()->json([
-            'data' => $page->getCollection()->map(fn (TelegramScrapedUser $user) => $this->row($user, $read))->values(),
+            'data' => $page->getCollection()->map(fn (TelegramScrapedUser $user) => $this->row($user, $read, $byLink))->values(),
             'meta' => [
                 'current_page' => $page->currentPage(),
                 'last_page' => $page->lastPage(),
@@ -104,15 +116,25 @@ final class ContactCatalogController extends Controller
                 'from' => $page->firstItem(),
                 'to' => $page->lastItem(),
             ],
-            'stats' => $this->stats(),
+            'stats' => $this->stats($byLink),
             'options' => $this->options(),
         ]);
     }
 
     /**
+     * Whether the sync leaves people with a public @username in the database.
+     */
+    private function skipsUsernames(): bool
+    {
+        return (bool) app(ContactSyncSettings::class)->current()['skip_usernames'];
+    }
+
+    /**
+     * @param bool $byLink people with a @username are kept in the database only
+     *
      * @return array<string, mixed>
      */
-    private function row(TelegramScrapedUser $user, array $read): array
+    private function row(TelegramScrapedUser $user, array $read, bool $byLink): array
     {
         $contact = $user->contact;
 
@@ -144,7 +166,7 @@ final class ContactCatalogController extends Controller
                 ->values(),
             'holders' => $holders,
             'on_account' => $onAccount,
-            'status' => $contact?->status ?? self::UNASSIGNED,
+            'status' => $contact?->status ?? ($byLink && filled($user->username) ? self::BY_LINK : self::UNASSIGNED),
             'error' => $contact?->error,
             'added_at' => $contact?->added_at,
             'account' => $contact?->account ? [
@@ -187,9 +209,11 @@ final class ContactCatalogController extends Controller
     /**
      * The numbers above the list: people (not bots) and what became of them.
      *
+     * @param bool $byLink people with a @username are kept in the database only
+     *
      * @return array<string, int>
      */
-    private function stats(): array
+    private function stats(bool $byLink): array
     {
         $byStatus = TelegramAccountContact::query()
             ->whereHas('user', fn ($q) => $q->where('is_bot', false))
@@ -204,13 +228,21 @@ final class ContactCatalogController extends Controller
             ->count());
         $held = (int) $byStatus->sum();
 
+        $linked = $byLink ? (int) Cache::remember('contact-catalog:by-link', 30, fn () => TelegramScrapedUser::query()
+            ->where('is_bot', false)
+            ->forContacts()
+            ->whereDoesntHave('contact')
+            ->withUsername()
+            ->count()) : 0;
+
         return [
             'people' => $people,
             'added' => (int) ($byStatus[TelegramAccountContact::STATUS_ADDED] ?? 0),
             'pending' => (int) ($byStatus[TelegramAccountContact::STATUS_PENDING] ?? 0),
             'failed' => (int) ($byStatus[TelegramAccountContact::STATUS_FAILED] ?? 0),
             'skipped' => (int) ($byStatus[TelegramAccountContact::STATUS_SKIPPED] ?? 0),
-            'unassigned' => max(0, $people - $held),
+            'unassigned' => max(0, $people - $held - $linked),
+            'by_link' => $linked,
             'today' => TelegramAccountContact::query()
                 ->where('status', TelegramAccountContact::STATUS_ADDED)
                 ->where('added_at', '>=', now()->startOfDay())

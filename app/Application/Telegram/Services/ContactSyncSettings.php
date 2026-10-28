@@ -21,14 +21,13 @@ final class ContactSyncSettings
      * What the panel may set, with the bounds it is held to.
      */
     public const LIMITS = [
-        'max_accounts' => [1, 200],
         'daily_limit' => [1, 1000],
         'delay_min' => [0, 300],
         'delay_max' => [0, 300],
     ];
 
     /**
-     * @return array{enabled: bool, schedule_at: string, max_accounts: int, daily_limit: int, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
      */
     public function defaults(): array
     {
@@ -37,8 +36,9 @@ final class ContactSyncSettings
         return [
             'enabled' => true,
             'schedule_at' => (string) ($config['schedule_at'] ?? '03:30'),
-            'max_accounts' => (int) ($config['max_accounts'] ?? 20),
-            'daily_limit' => (int) ($config['daily_limit'] ?? 100),
+            'daily_limit' => (int) ($config['daily_limit'] ?? 80),
+            /* People with a public @username stay in the database only: reached by the link. */
+            'skip_usernames' => true,
             'delay_min' => (int) ($config['delay_min'] ?? 3),
             'delay_max' => (int) ($config['delay_max'] ?? 5),
             'nick_base' => '',
@@ -51,7 +51,7 @@ final class ContactSyncSettings
      * The saved values over the defaults, each one made safe again: a hand
      * edited row must not be able to start a run with a negative limit.
      *
-     * @return array{enabled: bool, schedule_at: string, max_accounts: int, daily_limit: int, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
      */
     public function current(): array
     {
@@ -108,7 +108,7 @@ final class ContactSyncSettings
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{enabled: bool, schedule_at: string, max_accounts: int, daily_limit: int, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
      */
     private function normalise(array $input): array
     {
@@ -120,6 +120,7 @@ final class ContactSyncSettings
 
         $values['delay_max'] = max($values['delay_min'], $values['delay_max']);
         $values['enabled'] = filter_var($values['enabled'], FILTER_VALIDATE_BOOLEAN);
+        $values['skip_usernames'] = filter_var($values['skip_usernames'], FILTER_VALIDATE_BOOLEAN);
 
         if (preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $values['schedule_at']) !== 1) {
             $values['schedule_at'] = $this->defaults()['schedule_at'];

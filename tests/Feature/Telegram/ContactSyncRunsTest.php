@@ -65,10 +65,10 @@ final class ContactSyncRunsTest extends TestCase
     public function test_settings_fall_back_to_the_env_values_until_saved(): void
     {
         config()->set('services.telegram.driver_check_account_id', null);
-        config()->set('services.telegram.contact_sync', ['max_accounts' => 7, 'daily_limit' => 40, 'delay_min' => 1, 'delay_max' => 2, 'schedule_at' => '04:10']);
+        config()->set('services.telegram.contact_sync', ['daily_limit' => 40, 'delay_min' => 1, 'delay_max' => 2, 'schedule_at' => '04:10']);
 
         $this->assertSame(
-            ['enabled' => true, 'schedule_at' => '04:10', 'max_accounts' => 7, 'daily_limit' => 40, 'delay_min' => 1, 'delay_max' => 2, 'nick_base' => '', 'excluded_accounts' => []],
+            ['enabled' => true, 'schedule_at' => '04:10', 'daily_limit' => 40, 'skip_usernames' => true, 'delay_min' => 1, 'delay_max' => 2, 'nick_base' => '', 'excluded_accounts' => []],
             $this->settings()->current(),
         );
         $this->assertFalse($this->settings()->isSaved());
@@ -79,7 +79,6 @@ final class ContactSyncRunsTest extends TestCase
         $saved = $this->settings()->save([
             'enabled' => false,
             'schedule_at' => '99:99',
-            'max_accounts' => 9999,
             'daily_limit' => 0,
             'delay_min' => 10,
             'delay_max' => 4,
@@ -88,8 +87,8 @@ final class ContactSyncRunsTest extends TestCase
 
         $this->assertFalse($saved['enabled']);
         $this->assertSame('03:30', $saved['schedule_at'], 'a bad time falls back');
-        $this->assertSame(200, $saved['max_accounts']);
         $this->assertSame(1, $saved['daily_limit']);
+        $this->assertArrayNotHasKey('max_accounts', $saved, 'every available account takes part');
         $this->assertSame([10, 10], [$saved['delay_min'], $saved['delay_max']], 'the upper pause is never below the lower');
         $this->assertSame('Aka Vali', $saved['nick_base']);
 
@@ -117,14 +116,14 @@ final class ContactSyncRunsTest extends TestCase
     {
         $this->expectException(ValidationException::class);
 
-        $this->saveViaPanel(['enabled' => true, 'schedule_at' => '03:30', 'max_accounts' => 5, 'daily_limit' => 50, 'delay_min' => 1, 'delay_max' => 2, 'excluded_accounts' => [999]]);
+        $this->saveViaPanel(['enabled' => true, 'schedule_at' => '03:30', 'daily_limit' => 50, 'delay_min' => 1, 'delay_max' => 2, 'excluded_accounts' => [999]]);
     }
 
     public function test_the_panel_refuses_nonsense(): void
     {
         $this->expectException(ValidationException::class);
 
-        $this->saveViaPanel(['enabled' => true, 'schedule_at' => '3:30', 'max_accounts' => 5, 'daily_limit' => 50, 'delay_min' => 1, 'delay_max' => 2]);
+        $this->saveViaPanel(['enabled' => true, 'schedule_at' => '3:30', 'daily_limit' => 50, 'delay_min' => 1, 'delay_max' => 2]);
     }
 
     public function test_the_daily_run_is_due_at_the_set_minute_only_when_on(): void
@@ -193,7 +192,7 @@ final class ContactSyncRunsTest extends TestCase
         $first = '11111111-1111-4111-8111-111111111111';
         $second = '22222222-2222-4222-8222-222222222222';
 
-        $this->log($first, 'started', '2026-10-15 03:30:00', ['context' => ['trigger' => 'schedule', 'groups' => ['drivers'], 'max_accounts' => 20, 'daily_limit' => 100, 'nick_base' => 'xxx']]);
+        $this->log($first, 'started', '2026-10-15 03:30:00', ['context' => ['trigger' => 'schedule', 'groups' => ['drivers'], 'daily_limit' => 80, 'nick_base' => 'xxx']]);
         $this->log($first, 'members', '2026-10-15 03:31:00', ['account' => 1, 'group' => 1, 'message' => '412 members read']);
         $this->log($first, 'added', '2026-10-15 03:32:00', ['account' => 1, 'group' => 1]);
         $this->log($first, 'added', '2026-10-15 03:33:00', ['account' => 1, 'group' => 1]);

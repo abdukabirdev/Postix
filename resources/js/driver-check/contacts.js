@@ -17,6 +17,7 @@ const STATUS_TONES = {
     failed: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
     skipped: 'bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300',
     unassigned: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
+    by_link: 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-400',
 };
 
 const STATUS_DOTS = {
@@ -25,6 +26,7 @@ const STATUS_DOTS = {
     failed: 'bg-error-500',
     skipped: 'bg-gray-400',
     unassigned: 'bg-warning-500',
+    by_link: 'bg-brand-500',
 };
 
 export function contactsPage(config) {
@@ -65,13 +67,13 @@ export function contactsPage(config) {
         }),
 
         stats: {
-            people: 0, added: 0, pending: 0, failed: 0, skipped: 0, unassigned: 0, today: 0,
+            people: 0, added: 0, pending: 0, failed: 0, skipped: 0, unassigned: 0, by_link: 0, today: 0,
         },
 
         /** What the group and account filters choose from, sent with the list. */
         options: { groups: [], accounts: [] },
 
-        statuses: ['added', 'pending', 'failed', 'skipped', 'unassigned'],
+        statuses: ['added', 'pending', 'failed', 'skipped', 'unassigned', 'by_link'],
 
         init() {
             this.initList();
@@ -124,7 +126,7 @@ export function contactsPage(config) {
             return {
                 dot: 'bg-gray-300 dark:bg-gray-600',
                 label: w.account,
-                title: row.status === 'unassigned' ? w.no_owner : `${w.account}: ${w.account_unknown}`,
+                title: row.status === 'unassigned' || row.status === 'by_link' ? w.no_owner : `${w.account}: ${w.account_unknown}`,
                 state: 'unknown',
             };
         },

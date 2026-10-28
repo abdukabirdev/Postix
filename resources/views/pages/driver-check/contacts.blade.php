@@ -53,7 +53,7 @@
             <x-driver-check.stat-card :label="__('driver_check.contacts.stats.waiting')" icon="clock">
                 <span x-text="number(waiting())">0</span>
                 <x-slot:hint>
-                    <span x-text="@js(__('driver_check.contacts.stats.waiting_hint')).replace(':failed', number(stats.failed))"></span>
+                    <span x-text="@js(__('driver_check.contacts.stats.waiting_hint')).replace(':failed', number(stats.failed)).replace(':by_link', number(stats.by_link))"></span>
                 </x-slot:hint>
             </x-driver-check.stat-card>
         </section>
@@ -73,7 +73,7 @@
                 <x-driver-check.field :label="__('driver_check.contacts.filters.status')">
                     <x-driver-check.select x-model="filters.status" x-on:change="applyFilters()">
                         <option value="">{{ __('driver_check.contacts.filters.status_all') }}</option>
-                        @foreach (['added', 'pending', 'failed', 'skipped', 'unassigned'] as $status)
+                        @foreach (['added', 'pending', 'failed', 'skipped', 'unassigned', 'by_link'] as $status)
                             <option value="{{ $status }}">{{ __('driver_check.contacts.status.' . $status) }}</option>
                         @endforeach
                     </x-driver-check.select>

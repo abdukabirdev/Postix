@@ -96,19 +96,43 @@ final class ContactCatalogTest extends TestCase
         $all = $this->catalog();
 
         $this->assertSame(2, $all['meta']['total'], 'bots are left out unless asked for');
-        $this->assertSame(['people' => 2, 'added' => 1, 'pending' => 0, 'failed' => 0, 'skipped' => 0, 'unassigned' => 1, 'today' => 1], $all['stats']);
+        $this->assertSame(['people' => 2, 'added' => 1, 'pending' => 0, 'failed' => 0, 'skipped' => 0, 'unassigned' => 0, 'by_link' => 1, 'today' => 1], $all['stats']);
 
         $row = collect($all['data'])->firstWhere('telegram_user_id', 10);
         $this->assertSame('added', $row['status']);
         $this->assertSame('+998900000001', $row['account']['phone']);
         $this->assertSame('Drivers', $row['groups'][0]['title']);
 
-        $this->assertSame(['Vali'], collect($this->catalog(['status' => 'unassigned'])['data'])->pluck('name')->all());
+        $this->assertSame('by_link', collect($all['data'])->firstWhere('telegram_user_id', 11)['status'], 'a @username stays in the database');
+        $this->assertSame(['Vali'], collect($this->catalog(['status' => 'by_link'])['data'])->pluck('name')->all());
         $this->assertSame(['Ali'], collect($this->catalog(['status' => 'added'])['data'])->pluck('name')->all());
         $this->assertSame(3, $this->catalog(['bots' => 1])['meta']['total']);
         $this->assertSame(['Vali'], collect($this->catalog(['search' => '@vali'])['data'])->pluck('name')->all());
         $this->assertSame(['Ali'], collect($this->catalog(['search' => '10'])['data'])->pluck('name')->all());
         $this->assertNotNull($bot->id);
+    }
+
+    public function test_only_people_without_a_username_wait_for_a_contact_unless_switched_off(): void
+    {
+        (include database_path('migrations/2026_10_05_100000_create_telegram_settings_table.php'))->up();
+
+        $this->person(30, 'Ali');
+        $this->person(31, 'Vali', ['username' => null]);
+
+        $settings = $this->app->make(\App\Application\Telegram\Services\ContactSyncSettings::class);
+
+        $settings->save(['skip_usernames' => false]);
+        $off = $this->catalog();
+
+        $this->assertSame([0, 2], [$off['stats']['by_link'], $off['stats']['unassigned']], 'switched off: everybody waits');
+        $this->assertSame([], $this->catalog(['status' => 'by_link'])['data']);
+
+        $settings->save(['skip_usernames' => true]);
+        $on = $this->catalog();
+
+        $this->assertSame([1, 1], [$on['stats']['by_link'], $on['stats']['unassigned']]);
+        $this->assertSame(['Vali'], collect($this->catalog(['status' => 'unassigned'])['data'])->pluck('name')->all());
+        $this->assertSame(['Ali'], collect($this->catalog(['status' => 'by_link'])['data'])->pluck('name')->all());
     }
 
     public function test_the_catalog_narrows_by_group_and_by_account_and_offers_both(): void

@@ -59,7 +59,7 @@ final class ContactSyncReportController extends Controller
         $lastStarted = TelegramContactSyncLog::query()->where('event', 'started')->latest('id')->first();
         $lastFinished = TelegramContactSyncLog::query()->where('event', 'finished')->latest('id')->first();
 
-        $running = TelegramProcessLock::isHeldByOtherProcess(TelegramSyncContactsCommand::LOCK_NAME);
+        $running = TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME);
 
         $finishedThatRun = $lastStarted && $lastFinished && $lastFinished->run_id === $lastStarted->run_id;
 
