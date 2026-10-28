@@ -146,6 +146,7 @@
                                                 <th class="px-3 py-2.5 text-right font-semibold">{{ __('driver_check.report.runs.duration') }}</th>
                                                 <th class="px-3 py-2.5 text-right font-semibold">{{ __('driver_check.report.runs.accounts') }}</th>
                                                 <th class="px-3 py-2.5 text-right font-semibold">{{ __('driver_check.report.runs.members') }}</th>
+                                                <th class="px-3 py-2.5 text-right font-semibold">{{ __('driver_check.report.runs.new') }}</th>
                                                 <th class="px-3 py-2.5 text-right font-semibold">{{ __('driver_check.report.runs.added') }}</th>
                                                 <th class="px-3 py-2.5 text-right font-semibold">{{ __('driver_check.report.runs.skipped') }}</th>
                                                 <th class="px-3 py-2.5 text-right font-semibold">{{ __('driver_check.report.runs.failed') }}</th>
@@ -154,7 +155,7 @@
                                         </thead>
 
                                         <tbody class="divide-y divide-gray-100 text-[13px] tabular-nums dark:divide-gray-800">
-                                            <x-driver-check.skeleton-rows :cols="9" />
+                                            <x-driver-check.skeleton-rows :cols="10" />
 
                                             <template x-for="row in rows" :key="row.run_id">
                                                 <tr class="dc-row group cursor-pointer transition-colors hover:bg-gray-25 dark:hover:bg-white/[0.025]" x-on:click="openRun(row)">
@@ -171,6 +172,7 @@
                                                     <td class="px-3 py-3 text-right text-gray-600 dark:text-gray-300" x-text="duration(row.duration_seconds)"></td>
                                                     <td class="px-3 py-3 text-right font-medium text-gray-800 dark:text-gray-100" x-text="number(row.accounts)"></td>
                                                     <td class="px-3 py-3 text-right text-gray-600 dark:text-gray-300" x-text="number(row.members)"></td>
+                                                    <td class="px-3 py-3 text-right font-medium text-success-700 dark:text-success-400" x-text="row.new === null ? dash : number(row.new)"></td>
                                                     <td class="px-3 py-3 text-right font-semibold text-gray-950 dark:text-white" x-text="number(row.added)"></td>
                                                     <td class="px-3 py-3 text-right text-gray-500" x-text="number(row.skipped)"></td>
                                                     <td class="px-3 py-3 text-right" :class="row.failed > 0 ? 'font-semibold text-error-600 dark:text-error-400' : 'text-gray-400'" x-text="number(row.failed)"></td>
@@ -199,8 +201,9 @@
                                             </x-driver-check.badge>
                                         </div>
 
-                                        <dl class="grid grid-cols-4 gap-2 rounded-xl bg-gray-50 p-3 dark:bg-white/[0.02]">
+                                        <dl class="grid grid-cols-5 gap-2 rounded-xl bg-gray-50 p-3 dark:bg-white/[0.02]">
                                             <x-driver-check.kv :label="__('driver_check.report.runs.accounts')"><span class="font-medium tabular-nums" x-text="number(row.accounts)"></span></x-driver-check.kv>
+                                            <x-driver-check.kv :label="__('driver_check.report.runs.new')"><span class="font-medium tabular-nums text-success-700 dark:text-success-400" x-text="row.new === null ? dash : number(row.new)"></span></x-driver-check.kv>
                                             <x-driver-check.kv :label="__('driver_check.report.runs.added')"><span class="font-semibold tabular-nums" x-text="number(row.added)"></span></x-driver-check.kv>
                                             <x-driver-check.kv :label="__('driver_check.report.runs.skipped')"><span class="tabular-nums" x-text="number(row.skipped)"></span></x-driver-check.kv>
                                             <x-driver-check.kv :label="__('driver_check.report.runs.failed')"><span class="tabular-nums" :class="row.failed > 0 && 'font-semibold text-error-600'" x-text="number(row.failed)"></span></x-driver-check.kv>
@@ -337,7 +340,7 @@
             <div class="flex flex-col gap-5">
 
                 {{-- The run at a glance --}}
-                <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div class="grid grid-cols-2 gap-3 sm:grid-cols-5">
                     <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
                         <p class="dc-eyebrow">{{ __('driver_check.report.runs.status') }}</p>
                         <x-driver-check.badge class="mt-1.5" ::class="runClass(detail.run.status)">
@@ -353,9 +356,15 @@
                     </div>
 
                     <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
+                        <p class="dc-eyebrow">{{ __('driver_check.report.runs.new') }}</p>
+                        <p class="mt-1 text-2xl font-semibold tabular-nums text-success-700 dark:text-success-400" x-text="detail.run.new === null ? dash : number(detail.run.new)"></p>
+                        <p class="text-[11.5px] text-gray-400" x-text="t.runs.members + ': ' + number(detail.run.members)"></p>
+                    </div>
+
+                    <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
                         <p class="dc-eyebrow">{{ __('driver_check.report.runs.added') }}</p>
                         <p class="mt-1 text-2xl font-semibold tabular-nums text-gray-950 dark:text-white" x-text="number(detail.run.added)"></p>
-                        <p class="text-[11.5px] text-gray-400" x-text="number(detail.run.skipped) + ' · ' + number(detail.run.members)"></p>
+                        <p class="text-[11.5px] text-gray-400" x-text="t.runs.skipped + ': ' + number(detail.run.skipped)"></p>
                     </div>
 
                     <div class="rounded-lg border border-gray-200 p-3 dark:border-gray-800">
@@ -427,6 +436,7 @@
                                 <tr>
                                     <th class="px-3 py-2 font-semibold">{{ __('driver_check.report.detail.group') }}</th>
                                     <th class="px-3 py-2 text-right font-semibold">{{ __('driver_check.report.detail.members') }}</th>
+                                    <th class="px-3 py-2 text-right font-semibold">{{ __('driver_check.report.runs.new') }}</th>
                                     <th class="px-3 py-2 text-right font-semibold">{{ __('driver_check.report.runs.added') }}</th>
                                     <th class="px-3 py-2 text-right font-semibold">{{ __('driver_check.report.runs.skipped') }}</th>
                                     <th class="px-3 py-2 text-right font-semibold">{{ __('driver_check.report.runs.failed') }}</th>
@@ -437,6 +447,7 @@
                                     <tr>
                                         <td class="px-3 py-2 font-medium text-gray-900 dark:text-white" x-text="group.title"></td>
                                         <td class="px-3 py-2 text-right text-gray-600 dark:text-gray-300" x-text="group.members === null ? dash : number(group.members)"></td>
+                                        <td class="px-3 py-2 text-right font-medium text-success-700 dark:text-success-400" x-text="group.new === null ? dash : number(group.new)"></td>
                                         <td class="px-3 py-2 text-right font-semibold text-gray-950 dark:text-white" x-text="number(group.added)"></td>
                                         <td class="px-3 py-2 text-right text-gray-500" x-text="number(group.skipped)"></td>
                                         <td class="px-3 py-2 text-right" :class="group.failed > 0 ? 'font-semibold text-error-600' : 'text-gray-400'" x-text="number(group.failed)"></td>

@@ -221,7 +221,7 @@ final class ContactSyncRunsTest extends TestCase
             array_map(fn ($a) => [$a['id'], $a['added'], $a['skipped'], $a['failed'], $a['stopped']], $detail['accounts']),
         );
         $this->assertSame('FLOOD_WAIT_300', $detail['accounts'][1]['stopped_reason']);
-        $this->assertSame([['id' => 1, 'title' => 'Drivers', 'members' => 412, 'added' => 2, 'skipped' => 0, 'failed' => 1]], $detail['groups']);
+        $this->assertSame([['id' => 1, 'title' => 'Drivers', 'members' => 412, 'new' => null, 'added' => 2, 'skipped' => 0, 'failed' => 1]], $detail['groups']);
     }
 
     public function test_an_unknown_run_is_not_found(): void

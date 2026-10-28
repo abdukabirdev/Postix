@@ -11,7 +11,8 @@ use Symfony\Component\Process\Process;
 
 /**
  * The Run button of the contact sync page: nohups telegram:sync-contacts
- * so the queue worker is not held for the hour a full run takes.
+ * so the queue worker is not held for the hour a full run takes. The same
+ * for a group's "fetch people" button, with --members-only.
  */
 class StartContactSyncJob implements ShouldQueue
 {
@@ -20,16 +21,20 @@ class StartContactSyncJob implements ShouldQueue
     use Queueable;
     use SerializesModels;
 
-    public function __construct(public readonly ?int $groupId = null) {}
+    public function __construct(
+        public readonly ?int $groupId = null,
+        public readonly bool $membersOnly = false,
+    ) {}
 
     public function handle(): void
     {
         $command = sprintf(
-            'cd %s && nohup %s %s telegram:sync-contacts --trigger=manual%s >> %s 2>&1 &',
+            'cd %s && nohup %s %s telegram:sync-contacts --trigger=manual%s%s >> %s 2>&1 &',
             escapeshellarg(base_path()),
             escapeshellarg(PHP_BINARY),
             escapeshellarg(base_path('artisan')),
             $this->groupId ? ' --group=' . (int) $this->groupId : '',
+            $this->membersOnly ? ' --members-only' : '',
             escapeshellarg(storage_path('logs/contact-sync.log')),
         );
 

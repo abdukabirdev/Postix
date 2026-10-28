@@ -12,6 +12,7 @@ use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramScrapeGroup;
 use danog\MadelineProto\API;
 use danog\MadelineProto\RPCErrorException;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Throwable;
@@ -27,6 +28,12 @@ use Throwable;
  * Why a person lands in one account only: the claim is a row in
  * telegram_account_contacts, unique by scraped_user_id, taken before the
  * contact is added. Two processes racing for the same person cannot both win.
+ *
+ * Who is in a group gets into the database even when every account has
+ * used its contacts for the day: a group not read lately is read by one
+ * account, a couple each, whatever its limit. The people found wait in the
+ * database for an account, and the count of them tells how many numbers
+ * more it would take to save them all.
  */
 final class ContactSyncService
 {
@@ -53,7 +60,22 @@ final class ContactSyncService
     /** People in one page of the members list, Telegram's own maximum. */
     private const MEMBERS_PAGE = 200;
 
+    /** Groups one account reads only into the database in a run: the reading is spread over the accounts. */
+    private const COLLECT_PER_ACCOUNT = 2;
+
+    /** A group not read for this long is read into the database again: the daily run reads each one. */
+    private const COLLECT_EVERY_HOURS = 20;
+
     private string $runId = '';
+
+    /** @var list<int> accounts put on hold in this run: they do nothing more in it */
+    private array $held = [];
+
+    /** @var array<int, true> groups read in this run, by any account */
+    private array $readGroups = [];
+
+    /** @var list<int>|null */
+    private ?array $ownIds = null;
 
     public function __construct(
         private readonly MadelineService $madeline,
@@ -67,11 +89,14 @@ final class ContactSyncService
      * @param string $trigger who started it, kept on the run: "manual" (the
      *                        button, the console) or "schedule" (the daily one)
      *
-     * @return array{accounts: int, added: int, failed: int, members: int}
+     * @return array{accounts: int, added: int, failed: int, members: int, new: int}
      */
     public function run(?int $groupId = null, ?callable $output = null, string $trigger = 'manual'): array
     {
         $this->runId = (string) Str::uuid();
+        $this->held = [];
+        $this->readGroups = [];
+        $this->ownIds = null;
 
         $say = $output ?? static function (string $line): void {};
 
@@ -79,7 +104,7 @@ final class ContactSyncService
         $config = $this->settings->current();
         $dailyLimit = max(0, (int) $config['daily_limit']);
 
-        $totals = ['accounts' => 0, 'added' => 0, 'failed' => 0, 'members' => 0];
+        $totals = ['accounts' => 0, 'added' => 0, 'failed' => 0, 'members' => 0, 'new' => 0];
 
         /* Its own groups only: what Join group keeps for the database is not saved into contacts. */
         $groups = TelegramScrapeGroup::query()
@@ -87,6 +112,18 @@ final class ContactSyncService
             ->where('is_active', true)
             ->when($groupId, fn ($q) => $q->whereKey($groupId))
             ->get();
+
+        /*
+         * The groups to read into the database whatever the limits: the new
+         * ones and those not read lately, the longest unread first. The one
+         * group of a run started for it is read in any case.
+         */
+        $collect = $groups
+            ->filter(fn (TelegramScrapeGroup $group) => $groupId !== null
+                || $group->last_synced_at === null
+                || $group->last_synced_at->lte(now()->subHours(self::COLLECT_EVERY_HOURS)))
+            ->sortBy(fn (TelegramScrapeGroup $group) => $group->last_synced_at?->getTimestamp() ?? 0)
+            ->values();
 
         $this->log('started', 'Sync started', null, null, [
             'trigger' => $trigger,
@@ -106,16 +143,19 @@ final class ContactSyncService
         /* Accounts left out in the panel are taken for used from the start. */
         $usedAccountIds = array_map('intval', (array) $config['excluded_accounts']);
 
-        /* Whether an account has read the groups in this run yet. */
-        $read = false;
-
         /* Every available account takes its turn, however many there are. */
         while (true) {
             /*
              * The groups have to be read to learn who is in them; after
-             * that, stop as soon as nobody is left without an owner.
+             * that, the contacts are done while nobody is left without an
+             * owner - a group read into the database later may bring more.
              */
-            if ($read && ! $this->hasUnclaimed($groups, (bool) $config['skip_usernames'])) {
+            $contactsDone = $groups->every(fn (TelegramScrapeGroup $group) => $group->last_synced_at !== null)
+                && ! $this->hasUnclaimed($groups, (bool) $config['skip_usernames']);
+
+            $collect = $collect->reject(fn (TelegramScrapeGroup $group) => isset($this->readGroups[$group->id]))->values();
+
+            if ($contactsDone && $collect->isEmpty()) {
                 break;
             }
 
@@ -132,8 +172,13 @@ final class ContactSyncService
 
             $usedAccountIds[] = $account->id;
 
-            /* Its contacts for today are added already: not even started. */
-            if ($this->addedToday($account) >= $dailyLimit) {
+            /* Its contacts for today are added already: it only reads groups into the database. */
+            $adds = ! $contactsDone && $this->addedToday($account) < $dailyLimit;
+
+            $reads = $collect->isNotEmpty();
+
+            /* Nothing for it to do: not even started. */
+            if (! $adds && ! $reads) {
                 $this->pool->release($account, ProcessEnum::ContactSync);
 
                 continue;
@@ -153,13 +198,22 @@ final class ContactSyncService
                         ?? new \RuntimeException('Failed to start MadelineProto.');
                 }
 
-                $result = $this->runAccount($api, $account, $groups, $config, $say);
+                if ($adds) {
+                    $result = $this->runAccount($api, $account, $groups, $config, $say);
 
-                $totals['added'] += $result['added'];
-                $totals['failed'] += $result['failed'];
-                $totals['members'] += $result['members'];
+                    $totals['added'] += $result['added'];
+                    $totals['failed'] += $result['failed'];
+                    $totals['members'] += $result['members'];
+                    $totals['new'] += $result['new'];
+                }
 
-                $read = $read || $result['members'] > 0;
+                /* A flood wait on the contacts put it on hold: it reads nothing more. */
+                if ($reads && ! in_array($account->id, $this->held, true)) {
+                    $result = $this->collect($api, $account, $collect, $config, $say);
+
+                    $totals['members'] += $result['members'];
+                    $totals['new'] += $result['new'];
+                }
 
                 $this->pool->registerSuccess($account, ProcessEnum::ContactSync);
             } catch (Throwable $e) {
@@ -197,11 +251,127 @@ final class ContactSyncService
     }
 
     /**
+     * The "fetch people" button of a group: who is in it goes into the
+     * database, nobody into contacts. One account reads it; a flood wait or
+     * a dead session hands it to the next one. A group that cannot be read
+     * (a dead link, a private group) is not tried by every account in turn.
+     *
+     * @param callable(string): void|null $output console echo, optional
+     *
+     * @return array{accounts: int, added: int, failed: int, members: int, new: int}
+     */
+    public function fetchMembers(int $groupId, ?callable $output = null, string $trigger = 'manual'): array
+    {
+        $this->runId = (string) Str::uuid();
+        $this->held = [];
+        $this->readGroups = [];
+        $this->ownIds = null;
+
+        $say = $output ?? static function (string $line): void {};
+
+        $config = $this->settings->current();
+
+        $totals = ['accounts' => 0, 'added' => 0, 'failed' => 0, 'members' => 0, 'new' => 0];
+
+        /* A paused group too: the button is pressed for it. */
+        $group = TelegramScrapeGroup::query()->forContacts()->find($groupId);
+
+        $this->log('started', 'Members fetch started', null, $group?->id, [
+            'trigger' => $trigger,
+            'mode' => 'members',
+            'groups' => $group ? [$group->link] : [],
+        ]);
+
+        if (! $group) {
+            $this->log('finished', 'No such group, nothing to do');
+
+            return $totals;
+        }
+
+        $usedAccountIds = array_map('intval', (array) $config['excluded_accounts']);
+
+        while (! isset($this->readGroups[$group->id])) {
+            $account = $this->pool->claimRandomAvailableAccount(
+                ProcessEnum::ContactSync,
+                $usedAccountIds,
+            );
+
+            if (! $account) {
+                $this->log('skipped', 'No more accounts available', null, $group->id);
+
+                break;
+            }
+
+            $usedAccountIds[] = $account->id;
+
+            $totals['accounts']++;
+
+            $say("Account #{$account->id} {$account->phone}");
+
+            $api = null;
+            $accountFailed = false;
+
+            try {
+                $api = $this->madeline->for($account);
+
+                if (! $api) {
+                    throw $this->madeline->lastError
+                        ?? new \RuntimeException('Failed to start MadelineProto.');
+                }
+
+                $result = $this->collect($api, $account, collect([$group]), $config, $say);
+
+                $totals['members'] += $result['members'];
+                $totals['new'] += $result['new'];
+
+                $this->pool->registerSuccess($account, ProcessEnum::ContactSync);
+            } catch (Throwable $e) {
+                $accountFailed = true;
+
+                if ($this->isAccountError($e) || $this->isFlood($e)) {
+                    $this->hold($account, $e);
+                } else {
+                    $this->pool->registerFailure(
+                        $account,
+                        ProcessEnum::ContactSync,
+                        mb_substr($e->getMessage(), 0, 200),
+                    );
+                }
+
+                $this->log('failed', mb_substr($e->getMessage(), 0, 500), $account->id, $group->id, [
+                    'exception' => $e::class,
+                ]);
+
+                $say("  failed: {$e->getMessage()}");
+            } finally {
+                if ($api) {
+                    try {
+                        $api->stop();
+                    } catch (Throwable) {
+                        // The session is being dropped anyway.
+                    }
+                }
+
+                $this->pool->release($account, ProcessEnum::ContactSync);
+            }
+
+            /* Not read, and not for the account's fault: the next one would fail the same way. */
+            if (! isset($this->readGroups[$group->id]) && ! $accountFailed && ! in_array($account->id, $this->held, true)) {
+                break;
+            }
+        }
+
+        $this->log('finished', 'Members fetch finished', null, $group->id, $totals);
+
+        return $totals;
+    }
+
+    /**
      * @param \Illuminate\Support\Collection<int, TelegramScrapeGroup> $groups
      * @param array<string, mixed>                                      $config
      * @param callable(string): void                                    $say
      *
-     * @return array{added: int, failed: int, members: int}
+     * @return array{added: int, failed: int, members: int, new: int}
      */
     private function runAccount(
         API $api,
@@ -213,14 +383,9 @@ final class ContactSyncService
         $limit = max(0, (int) ($config['daily_limit'] ?? 100));
         $remaining = $limit - $this->addedToday($account);
 
-        $result = ['added' => 0, 'failed' => 0, 'members' => 0];
+        $result = ['added' => 0, 'failed' => 0, 'members' => 0, 'new' => 0];
 
-        /* Our own accounts are never somebody's contact to collect. */
-        $own = TelegramAccount::query()
-            ->whereNotNull('telegram_user_id')
-            ->pluck('telegram_user_id')
-            ->map(fn ($id) => (int) $id)
-            ->all();
+        $own = $this->ownIds();
 
         $existing = null;
         $streak = 0;
@@ -233,6 +398,20 @@ final class ContactSyncService
         $nickNext = $nickBase !== '' ? $this->nickCount($account, $nickBase) : 0;
 
         foreach ($groups as $group) {
+            /* Its contacts for today are added: the groups left are read into the database by collect(). */
+            if ($remaining <= 0) {
+                break;
+            }
+
+            /*
+             * Read before and everybody in it has an owner: nothing in it for
+             * this account. Who joined since comes with the next collect().
+             */
+            if ($group->last_synced_at !== null
+                && ! $this->hasUnclaimed(collect([$group]), (bool) ($config['skip_usernames'] ?? false))) {
+                continue;
+            }
+
             try {
                 $members = $this->readMembers($api, $group, $account, $config);
             } catch (Throwable $e) {
@@ -257,15 +436,14 @@ final class ContactSyncService
 
             $result['members'] += count($members);
 
-            $this->storeMembers($group, $members, $own);
+            $new = $this->storeMembers($group, $members, $own);
 
-            $this->log('members', count($members) . ' members read', $account->id, $group->id);
+            $result['new'] += $new;
+
+            /* What Telegram said is in it beside what it listed: a short list shows here. */
+            $this->log('members', count($members) . ' members read', $account->id, $group->id, ['new' => $new, 'telegram_count' => $group->members_count]);
 
             $say("  {$group->link}: " . count($members) . ' members');
-
-            if ($remaining <= 0) {
-                continue;
-            }
 
             /*
              * People this account already has in its contacts are not added
@@ -398,6 +576,82 @@ final class ContactSyncService
     }
 
     /**
+     * A couple of the groups not read lately, into the database only, by an
+     * account whatever its daily limit: who is in them is known before there
+     * is an account free to save them. A group that cannot be read waits
+     * for the next run; one a flood wait or a dead session stopped goes back
+     * for another account.
+     *
+     * @param Collection<int, TelegramScrapeGroup> $queue  the run's groups still to read, taken from the front
+     * @param array<string, mixed>                 $config
+     * @param callable(string): void               $say
+     *
+     * @return array{members: int, new: int}
+     */
+    private function collect(
+        API $api,
+        TelegramAccount $account,
+        Collection $queue,
+        array $config,
+        callable $say,
+    ): array {
+        $result = ['members' => 0, 'new' => 0];
+        $taken = 0;
+
+        while ($taken < self::COLLECT_PER_ACCOUNT && ($group = $queue->shift()) !== null) {
+            /* Read by this account for its contacts a moment ago. */
+            if (isset($this->readGroups[$group->id])) {
+                continue;
+            }
+
+            $taken++;
+
+            try {
+                $members = $this->readMembers($api, $group, $account, $config);
+            } catch (Throwable $e) {
+                $group->update(['last_error' => mb_substr($e->getMessage(), 0, 500)]);
+
+                $this->log('failed', 'Cannot read group: ' . mb_substr($e->getMessage(), 0, 300), $account->id, $group->id);
+
+                $say("  {$group->link}: {$e->getMessage()}");
+
+                if ($this->isFlood($e) || $this->isAccountError($e)) {
+                    /* Not the group's fault: the next account reads it. */
+                    $queue->push($group);
+                }
+
+                if ($this->isFlood($e)) {
+                    $this->hold($account, $e, $group->id);
+
+                    return $result;
+                }
+
+                if ($this->isAccountError($e)) {
+                    throw $e;
+                }
+
+                continue;
+            }
+
+            $new = $this->storeMembers($group, $members, $this->ownIds());
+
+            $result['members'] += count($members);
+            $result['new'] += $new;
+
+            /* What Telegram said is in it beside what it listed: a short list shows here. */
+            $this->log('members', count($members) . ' members read', $account->id, $group->id, ['new' => $new, 'telegram_count' => $group->members_count]);
+
+            $say("  {$group->link}: " . count($members) . " members, {$new} new in the database");
+
+            if ($queue->isNotEmpty() && $taken < self::COLLECT_PER_ACCOUNT) {
+                $this->pause($config);
+            }
+        }
+
+        return $result;
+    }
+
+    /**
      * Who is in the group: the members list page after page, as Telegram
      * gives it (up to about 10 000 people).
      *
@@ -508,6 +762,8 @@ final class ContactSyncService
             'last_error' => null,
         ]);
 
+        $this->readGroups[$group->id] = true;
+
         return array_values($members);
     }
 
@@ -555,11 +811,15 @@ final class ContactSyncService
      *
      * @param list<array<string, mixed>> $members
      * @param list<int>                  $ownIds
+     *
+     * @return int the people new to the database
      */
-    private function storeMembers(TelegramScrapeGroup $group, array $members, array $ownIds): void
+    private function storeMembers(TelegramScrapeGroup $group, array $members, array $ownIds): int
     {
+        $new = 0;
+
         foreach (array_chunk($members, 200) as $chunk) {
-            DB::transaction(function () use ($chunk, $group, $ownIds): void {
+            DB::transaction(function () use ($chunk, $group, $ownIds, &$new): void {
                 foreach ($chunk as $member) {
                     $id = (int) $member['id'];
 
@@ -578,6 +838,10 @@ final class ContactSyncService
                         ],
                     );
 
+                    if ($user->wasRecentlyCreated) {
+                        $new++;
+                    }
+
                     DB::table('telegram_scrape_group_user')->insertOrIgnore([
                         'group_id' => $group->id,
                         'scraped_user_id' => $user->id,
@@ -586,6 +850,22 @@ final class ContactSyncService
                 }
             });
         }
+
+        return $new;
+    }
+
+    /**
+     * Our own accounts are never somebody's contact to collect.
+     *
+     * @return list<int>
+     */
+    private function ownIds(): array
+    {
+        return $this->ownIds ??= TelegramAccount::query()
+            ->whereNotNull('telegram_user_id')
+            ->pluck('telegram_user_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
     }
 
     /**
@@ -756,6 +1036,8 @@ final class ContactSyncService
         ?string $reason = null,
     ): void {
         $reason ??= $e instanceof RPCErrorException ? $e->rpc : $e::class;
+
+        $this->held[] = $account->id;
 
         $this->pool->disable($account, ProcessEnum::ContactSync, $reason);
 

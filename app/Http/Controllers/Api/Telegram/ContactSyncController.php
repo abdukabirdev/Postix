@@ -106,8 +106,26 @@ final class ContactSyncController extends Controller
                 ->count(),
         ]);
 
+        /* The same "nobody saved them yet", group by group: what each group still has to give. */
+        $waiting = Cache::remember('contact-sync:group-waiting:' . (int) $skipUsernames, 30, fn (): array => TelegramScrapeGroup::query()
+            ->forContacts()
+            ->withCount(['users as waiting_count' => fn ($q) => $q
+                ->where('is_bot', false)
+                ->whereDoesntHave('contact')
+                ->when($skipUsernames, fn ($q) => $q->withoutUsername())])
+            ->get()
+            ->pluck('waiting_count', 'id')
+            ->all());
+
+        $groups->each(fn (TelegramScrapeGroup $group) => $group->setAttribute('waiting_count', (int) ($waiting[$group->id] ?? 0)));
+
+        /* Its people are being fetched into the database: the button waits. */
+        $groups->each(fn (TelegramScrapeGroup $group) => $group->setAttribute('fetching', $this->fetching($group)));
+
         $lastRun = TelegramContactSyncLog::query()
             ->whereIn('event', ['started', 'finished'])
+            /* Not a group's "fetch people": that one is logged with its group. */
+            ->whereNull('group_id')
             ->latest('id')
             ->first();
 
@@ -149,6 +167,34 @@ final class ContactSyncController extends Controller
         return response()->json([
             'message' => __('telegram.contact_sync.messages.run_queued'),
         ]);
+    }
+
+    /**
+     * A group's "fetch people" button: who is in it goes into the database,
+     * nobody into contacts. Beside the sync, beside other groups.
+     */
+    public function fetchMembers(TelegramScrapeGroup $group): JsonResponse
+    {
+        if ($this->fetching($group)) {
+            return response()->json([
+                'message' => __('telegram.contact_sync.messages.fetch_running'),
+            ], 409);
+        }
+
+        Cache::put(TelegramSyncContactsCommand::membersQueuedKey($group->id), true, now()->addMinutes(2));
+
+        StartContactSyncJob::dispatch($group->id, membersOnly: true)
+            ->onQueue('telegram');
+
+        return response()->json([
+            'message' => __('telegram.contact_sync.messages.fetch_queued'),
+        ]);
+    }
+
+    private function fetching(TelegramScrapeGroup $group): bool
+    {
+        return Cache::has(TelegramSyncContactsCommand::membersQueuedKey($group->id))
+            || TelegramProcessLock::isHeld(TelegramSyncContactsCommand::membersLock($group->id));
     }
 
     /**

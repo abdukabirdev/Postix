@@ -184,17 +184,22 @@ export function formatRelative(value) {
     }
 }
 
+/**
+ * The first letter of the first two words that have one. Telegram names are
+ * full of emoji: charAt(0) of one is half of it and showed as "М�", and a
+ * word that is only an emoji has no letter to give.
+ */
 export function initials(name) {
-    if (!name) {
-        return '?';
-    }
-
-    return String(name)
+    const letters = String(name ?? '')
         .trim()
         .split(/\s+/)
+        .map((part) => part.match(/[\p{L}\p{N}]/u)?.[0])
+        .filter(Boolean)
         .slice(0, 2)
-        .map((part) => part.charAt(0).toUpperCase())
+        .map((letter) => letter.toUpperCase())
         .join('');
+
+    return letters || '?';
 }
 
 export function telegramHandle(username) {

@@ -60,16 +60,13 @@ final class ContactSyncRunController extends Controller
             ->groupBy('run_id')
             ->pluck('total', 'run_id');
 
-        $newest = TelegramContactSyncLog::query()->where('event', 'started')->max('id');
-        $running = TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME);
-
         $rows = $page->getCollection()->map(
             fn (TelegramContactSyncLog $start) => $this->summary(
                 $start,
                 $finished->get($start->run_id),
                 $counts->get($start->run_id, collect()),
                 (int) ($accounts[$start->run_id] ?? 0),
-                $running && $start->id === $newest,
+                ! $finished->has($start->run_id) && $this->running($start),
             ),
         )->values();
 
@@ -104,8 +101,7 @@ final class ContactSyncRunController extends Controller
         $counts = $logs->groupBy('event')->map->count()->map(fn (int $n, string $event) => (object) ['event' => $event, 'total' => $n])->values();
 
         $accountIds = $logs->pluck('telegram_account_id')->filter()->unique()->values();
-        $running = TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME)
-            && $start->id === TelegramContactSyncLog::query()->where('event', 'started')->max('id');
+        $running = $finished === null && $this->running($start);
 
         return response()->json(['data' => [
             'run' => $this->summary($start, $finished, $counts, $accountIds->count(), $running),
@@ -119,6 +115,32 @@ final class ContactSyncRunController extends Controller
      *
      * @return array<string, mixed>
      */
+    /**
+     * The run's process holds its lock and no later run of the same kind
+     * began: the sync's own runs, or one group's "fetch people".
+     */
+    private function running(TelegramContactSyncLog $start): bool
+    {
+        $groupId = (($start->context['mode'] ?? null) === 'members') ? (int) $start->group_id : null;
+
+        $lock = $groupId !== null
+            ? TelegramSyncContactsCommand::membersLock($groupId)
+            : TelegramSyncContactsCommand::LOCK_NAME;
+
+        if (! TelegramProcessLock::isHeld($lock)) {
+            return false;
+        }
+
+        return $start->id === TelegramContactSyncLog::query()
+            ->where('event', 'started')
+            ->when(
+                $groupId !== null,
+                fn ($q) => $q->where('group_id', $groupId),
+                fn ($q) => $q->whereNull('group_id'),
+            )
+            ->max('id');
+    }
+
     private function summary(
         TelegramContactSyncLog $start,
         ?TelegramContactSyncLog $finished,
@@ -138,6 +160,8 @@ final class ContactSyncRunController extends Controller
         return [
             'run_id' => $start->run_id,
             'trigger' => $context['trigger'] ?? null,
+            /* "members": a group's people fetched into the database, no contacts saved. */
+            'mode' => $context['mode'] ?? 'contacts',
             'status' => $status,
             'started_at' => $start->created_at,
             'finished_at' => $finished?->created_at,
@@ -145,6 +169,8 @@ final class ContactSyncRunController extends Controller
             'accounts' => $accounts,
             'groups' => count((array) ($context['groups'] ?? [])),
             'members' => (int) ($finished?->context['members'] ?? 0),
+            /* People the run brought into the database; null for runs from before it was counted. */
+            'new' => isset($finished?->context['new']) ? (int) $finished->context['new'] : null,
             'added' => $count('added'),
             'skipped' => $count('skipped'),
             'failed' => $count('failed'),
@@ -215,11 +241,16 @@ final class ContactSyncRunController extends Controller
             ->map(function (int $id) use ($logs, $groups): array {
                 $mine = $logs->where('group_id', $id);
                 $read = $mine->firstWhere('event', 'members');
+                $reads = $mine->where('event', 'members');
 
                 return [
                     'id' => $id,
                     'title' => $groups[$id]->title ?? $groups[$id]->link ?? (string) $id,
                     'members' => $read && preg_match('/^(\d+)/', (string) $read->message, $m) === 1 ? (int) $m[1] : null,
+                    /* New to the database from it; null for runs from before it was counted. */
+                    'new' => $reads->contains(fn ($log) => isset($log->context['new']))
+                        ? (int) $reads->sum(fn ($log) => (int) ($log->context['new'] ?? 0))
+                        : null,
                     'added' => $mine->where('event', 'added')->count(),
                     'skipped' => $mine->where('event', 'skipped')->count(),
                     'failed' => $mine->where('event', 'failed')->count(),

@@ -127,6 +127,11 @@ export function contactSyncPage(config) {
             });
         },
 
+        /** Who is in the group, into the database only: nobody is saved into contacts. */
+        fetchMembers(group) {
+            return this.act(`fetch-${group.id}`, `${this.endpoints.groups}/${group.id}/fetch`, 'POST');
+        },
+
         removeGroup(group) {
             if (!window.confirm(t.groups.confirm_delete)) {
                 return null;
@@ -143,6 +148,20 @@ export function contactSyncPage(config) {
 
         groupName(group) {
             return group?.title || group?.link || EM_DASH;
+        },
+
+        /** How many accounts, at the daily limit each, would save everybody still waiting in one day. */
+        accountsNeeded() {
+            const waiting = Number(this.status?.totals?.unassigned ?? 0);
+            const limit = Number(this.status?.daily_limit ?? 0);
+
+            if (waiting <= 0 || limit <= 0) {
+                return '';
+            }
+
+            return t.totals.accounts_needed
+                .replace(':n', formatNumber(Math.ceil(waiting / limit)))
+                .replace(':limit', formatNumber(limit));
         },
 
         number: formatNumber,

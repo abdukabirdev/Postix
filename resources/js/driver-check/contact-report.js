@@ -262,6 +262,10 @@ export function contactReportPage(config) {
         */
 
         triggerLabel(run) {
+            if (run.mode === 'members') {
+                return t.runs.trigger_members;
+            }
+
             return {
                 schedule: t.runs.trigger_schedule,
                 manual: t.runs.trigger_manual,

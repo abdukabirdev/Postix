@@ -1494,6 +1494,7 @@ return [
             'added' => 'Kontaktga saqlangan',
             'failed' => 'Xato bilan',
             'unassigned' => 'Hali akkauntsiz',
+            'accounts_needed' => 'bir kunda: :n ta akkaunt, :limit tadan',
         ],
         'groups' => [
             'title' => 'Guruhlar',
@@ -1504,6 +1505,15 @@ return [
             'resume' => 'Yoqish',
             'delete' => 'O\'chirish',
             'people' => 'kishi',
+            'waiting' => 'kutmoqda: :n',
+            'waiting_hint' => 'Hali hech kimning kontaktida emas: sinxronizatsiya ularni saqlaydi',
+            'not_waiting' => 'kutmayapti: :n',
+            'not_waiting_hint' => '@username borlar (havola orqali topiladi, bazada qoladi), akkaunt kontaktida borlar, botlar',
+            'in_telegram' => '(Telegramda: :n)',
+            'in_telegram_hint' => 'Guruhni o\'qiganda Telegram shuncha a\'zo borligini aytdi; ro\'yxatni to\'liq bermadi',
+            'fetch' => 'Odamlarni yig\'ish',
+            'fetch_hint' => 'Guruh a\'zolarini bazaga yozish, hech kimni kontaktga qo\'shmasdan',
+            'fetching' => 'Yig\'ilmoqda…',
             'confirm_delete' => 'Guruh o\'chirilsinmi? Topilgan odamlar qoladi.',
         ],
         'accounts' => [
@@ -1542,6 +1552,8 @@ return [
             'bad_link' => 'Guruh havolasi noto\'g\'ri.',
             'group_deleted' => 'Guruh o\'chirildi.',
             'account_enabled' => 'Akkaunt yana ishda.',
+            'fetch_queued' => 'Guruh a\'zolari bazaga yig\'ilmoqda.',
+            'fetch_running' => 'Bu guruh a\'zolari allaqachon yig\'ilmoqda.',
         ],
     ],
 

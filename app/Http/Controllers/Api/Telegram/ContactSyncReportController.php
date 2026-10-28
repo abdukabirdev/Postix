@@ -56,8 +56,9 @@ final class ContactSyncReportController extends Controller
         $today = now()->copy()->setTime($hour, $minute);
         $next = $today->isFuture() ? $today : $today->copy()->addDay();
 
-        $lastStarted = TelegramContactSyncLog::query()->where('event', 'started')->latest('id')->first();
-        $lastFinished = TelegramContactSyncLog::query()->where('event', 'finished')->latest('id')->first();
+        /* The sync's own runs: a group's "fetch people" is logged with its group and is not one. */
+        $lastStarted = TelegramContactSyncLog::query()->where('event', 'started')->whereNull('group_id')->latest('id')->first();
+        $lastFinished = TelegramContactSyncLog::query()->where('event', 'finished')->whereNull('group_id')->latest('id')->first();
 
         $running = TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME);
 

@@ -725,6 +725,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                 Route::post('/groups', 'storeGroup')->name('api.telegram.contact-sync.groups.store');
                 Route::patch('/groups/{group}', 'updateGroup')->name('api.telegram.contact-sync.groups.update');
                 Route::delete('/groups/{group}', 'destroyGroup')->name('api.telegram.contact-sync.groups.destroy');
+                Route::post('/groups/{group}/fetch', 'fetchMembers')->name('api.telegram.contact-sync.groups.fetch');
             });
 
         /*

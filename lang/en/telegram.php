@@ -1506,6 +1506,7 @@ return [
             'added' => 'Saved to contacts',
             'failed' => 'Failed',
             'unassigned' => 'Not assigned yet',
+            'accounts_needed' => 'in one day: :n accounts at :limit each',
         ],
         'groups' => [
             'title' => 'Groups',
@@ -1516,6 +1517,15 @@ return [
             'resume' => 'Resume',
             'delete' => 'Delete',
             'people' => 'people',
+            'waiting' => 'waiting: :n',
+            'waiting_hint' => 'In nobody\'s contacts yet: the sync will save them',
+            'not_waiting' => 'not waiting: :n',
+            'not_waiting_hint' => 'With an @username (reached by the link, kept in the database), already in an account\'s contacts, bots',
+            'in_telegram' => '(in Telegram: :n)',
+            'in_telegram_hint' => 'How many members Telegram named when the group was read; it did not list them all',
+            'fetch' => 'Fetch people',
+            'fetching' => 'Fetching…',
+            'fetch_hint' => 'Read who is in the group into the database, without saving anybody into contacts',
             'confirm_delete' => 'Delete the group? The people found stay.',
         ],
         'accounts' => [
@@ -1554,6 +1564,8 @@ return [
             'bad_link' => 'Invalid group link.',
             'group_deleted' => 'Group deleted.',
             'account_enabled' => 'The account is back in the sync.',
+            'fetch_queued' => 'The group\'s people are being fetched into the database.',
+            'fetch_running' => 'This group\'s people are being fetched already.',
         ],
     ],
 

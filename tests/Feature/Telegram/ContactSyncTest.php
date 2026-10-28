@@ -3,6 +3,8 @@
 namespace Tests\Feature\Telegram;
 
 use App\Application\Telegram\Services\ContactSyncService;
+use App\Http\Controllers\Api\Telegram\ContactSyncController;
+use App\Jobs\Telegram\StartContactSyncJob;
 use App\Models\Telegram\TelegramAccountContact;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramScrapeGroup;
@@ -10,6 +12,7 @@ use danog\MadelineProto\API;
 use danog\MadelineProto\RPCError\FloodWaitError;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use ReflectionClass;
 use ReflectionMethod;
@@ -186,6 +189,101 @@ final class ContactSyncTest extends TestCase
         $this->assertTrue($this->invokeService('hasUnclaimed', [$groups, true]), 'no @username: a contact is the only way');
     }
 
+    public function test_the_people_new_to_the_database_are_counted(): void
+    {
+        $group = TelegramScrapeGroup::create(['link' => 'one']);
+
+        $this->assertSame(2, $this->invokeService('storeMembers', [$group, [['id' => 1], ['id' => 2]], []]));
+        $this->assertSame(1, $this->invokeService('storeMembers', [$group, [['id' => 2], ['id' => 3]], []]), 'one of them was known');
+    }
+
+    public function test_groups_are_read_into_the_database_two_an_account_whatever_the_limit(): void
+    {
+        $queue = collect([
+            TelegramScrapeGroup::create(['link' => 'one']),
+            TelegramScrapeGroup::create(['link' => 'two']),
+            TelegramScrapeGroup::create(['link' => 'three']),
+        ]);
+
+        $api = $this->fakeApi([
+            [
+                'count' => 2,
+                'participants' => [['_' => 'channelParticipant', 'user_id' => 101], ['_' => 'channelParticipant', 'user_id' => 102]],
+                'users' => [['id' => 101, 'first_name' => 'Ali'], ['id' => 102, 'first_name' => 'Vali']],
+            ],
+            [
+                'count' => 2,
+                'participants' => [['_' => 'channelParticipant', 'user_id' => 102], ['_' => 'channelParticipant', 'user_id' => 103]],
+                'users' => [['id' => 102, 'first_name' => 'Vali'], ['id' => 103, 'first_name' => 'Soli']],
+            ],
+        ]);
+
+        $result = $this->invokeService('collect', [
+            $api,
+            $this->account(1),
+            $queue,
+            ['delay_min' => 0, 'delay_max' => 0],
+            static function (string $line): void {},
+        ]);
+
+        $this->assertSame(['members' => 4, 'new' => 3], $result, 'a person in both groups is new once');
+        $this->assertSame(['three'], $queue->pluck('link')->all(), 'the third waits for the next account');
+        $this->assertSame(3, TelegramScrapedUser::query()->count());
+        $this->assertSame(0, TelegramAccountContact::query()->count(), 'reading saves nobody into contacts');
+        $this->assertNotNull(TelegramScrapeGroup::query()->where('link', 'one')->value('last_synced_at'));
+    }
+
+    public function test_an_account_reads_only_the_groups_it_can_still_save_from(): void
+    {
+        /* Who an account holds: somebody held is not for the sync either. And the name a contact is saved under. */
+        (include database_path('migrations/2026_10_17_100000_create_telegram_account_contacts_state_tables.php'))->up();
+        (include database_path('migrations/2026_10_16_100000_add_contact_name_to_telegram_account_contacts_table.php'))->up();
+
+        $done =TelegramScrapeGroup::create(['link' => 'done', 'last_synced_at' => now()->subDay()]);
+        $fresh = TelegramScrapeGroup::create(['link' => 'fresh']);
+
+        /* Everybody of the group read yesterday has an owner already. */
+        $this->invokeService('storeMembers', [$done, [['id' => 701, 'first_name' => 'Ali']], []]);
+        $this->invokeService('claim', [$this->account(2), TelegramScrapedUser::query()->firstOrFail(), false]);
+
+        $api = $this->fakeApi([
+            ['count' => 1, 'participants' => [['_' => 'channelParticipant', 'user_id' => 801]], 'users' => [['id' => 801, 'first_name' => 'Vali']]],
+        ]);
+
+        $config = ['daily_limit' => 5, 'skip_usernames' => false, 'delay_min' => 0, 'delay_max' => 0, 'nick_base' => ''];
+        $say = static function (string $line): void {};
+
+        $result = $this->invokeService('runAccount', [$api, $this->account(1), collect([$done, $fresh]), $config, $say]);
+
+        $this->assertSame([0], $api->channels->offsets, 'only the group never read was read');
+        $this->assertSame([801], $api->contacts->added);
+        $this->assertSame(1, $result['added']);
+
+        /* Its contacts for today are added: it reads nothing more. */
+        $full = $this->fakeApi([]);
+
+        $this->invokeService('runAccount', [$full, $this->account(1), collect([$fresh]), ['daily_limit' => 1] + $config, $say]);
+
+        $this->assertSame([], $full->channels->offsets);
+    }
+
+    public function test_the_fetch_button_starts_a_members_only_read_of_the_group_once(): void
+    {
+        Queue::fake();
+
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $controller = $this->app->make(ContactSyncController::class);
+
+        $this->assertSame(200, $controller->fetchMembers($group)->getStatusCode());
+
+        Queue::assertPushedOn('telegram', StartContactSyncJob::class, fn (StartContactSyncJob $job) => $job->groupId === $group->id && $job->membersOnly);
+
+        $this->assertSame(409, $controller->fetchMembers($group)->getStatusCode(), 'pressed again before the process starts');
+
+        Queue::assertPushed(StartContactSyncJob::class, 1);
+    }
+
     public function test_links_are_normalised(): void
     {
         foreach (['https://t.me/taxi_group', 't.me/taxi_group', '@taxi_group', ' taxi_group '] as $input) {
@@ -235,6 +333,24 @@ final class ContactSyncTest extends TestCase
             public function joinChannel(mixed ...$args): array
             {
                 $this->joins++;
+
+                return [];
+            }
+        };
+
+        $api->contacts = new class
+        {
+            /** @var list<int> */
+            public array $added = [];
+
+            public function getContacts(mixed ...$args): array
+            {
+                return ['contacts' => []];
+            }
+
+            public function addContact(mixed ...$args): array
+            {
+                $this->added[] = $args['id'];
 
                 return [];
             }

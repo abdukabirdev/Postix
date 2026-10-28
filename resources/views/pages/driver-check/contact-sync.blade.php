@@ -52,11 +52,19 @@
 
                 {{-- Totals --}}
                 <section class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                    @foreach (['users', 'added', 'failed', 'unassigned'] as $key)
+                    @foreach (['users', 'added', 'failed'] as $key)
                         <x-driver-check.stat-card :label="__('telegram.contact_sync.totals.' . $key)">
                             <span x-text="number(status.totals.{{ $key }})"></span>
                         </x-driver-check.stat-card>
                     @endforeach
+
+                    {{-- Who is still to save, and how many accounts would save them in one day --}}
+                    <x-driver-check.stat-card :label="__('telegram.contact_sync.totals.unassigned')">
+                        <span x-text="number(status.totals.unassigned)"></span>
+                        <x-slot:hint>
+                            <span x-text="accountsNeeded()"></span>
+                        </x-slot:hint>
+                    </x-driver-check.stat-card>
                 </section>
 
                 {{-- Groups --}}
@@ -81,6 +89,12 @@
                                         <p class="truncate text-sm font-medium text-gray-900 dark:text-white" x-text="groupName(group)"></p>
                                         <p class="text-[12px] text-gray-500 dark:text-gray-400">
                                             <span class="tabular-nums" x-text="number(group.users_count) + ' ' + t.groups.people"></span>
+                                            {{-- How many Telegram says are in it: more than read means the list was cut short --}}
+                                            <span x-show="group.members_count > group.users_count" x-cloak class="tabular-nums" :title="t.groups.in_telegram_hint" x-text="t.groups.in_telegram.replace(':n', number(group.members_count))"></span>
+                                            ·
+                                            <span class="tabular-nums" :class="group.waiting_count > 0 && 'text-warning-700 dark:text-warning-400'" :title="t.groups.waiting_hint" x-text="t.groups.waiting.replace(':n', number(group.waiting_count ?? 0))"></span>
+                                            ·
+                                            <span class="tabular-nums" :title="t.groups.not_waiting_hint" x-text="t.groups.not_waiting.replace(':n', number(Math.max(0, (group.users_count ?? 0) - (group.waiting_count ?? 0))))"></span>
                                             ·
                                             <span x-text="group.last_synced_at ? relative(group.last_synced_at) : ui.never"></span>
                                         </p>
@@ -89,6 +103,17 @@
                                 </div>
 
                                 <div class="flex shrink-0 items-center gap-1.5 pl-[19px] sm:pl-0">
+                                    {{-- Who is in it, into the database only: nobody is saved into contacts --}}
+                                    <x-driver-check.button
+                                        size="sm"
+                                        x-on:click="fetchMembers(group)"
+                                        ::disabled="!!busy || group.fetching"
+                                        :title="__('telegram.contact_sync.groups.fetch_hint')"
+                                    >
+                                        <x-driver-check.icon name="download" class="h-3.5 w-3.5 shrink-0" x-show="!group.fetching" />
+                                        <x-driver-check.icon name="refresh" class="h-3.5 w-3.5 shrink-0 animate-spin" x-show="group.fetching" x-cloak />
+                                        <span x-text="group.fetching ? t.groups.fetching : t.groups.fetch"></span>
+                                    </x-driver-check.button>
                                     <x-driver-check.button size="sm" x-on:click="toggleGroup(group)" ::disabled="!!busy">
                                         <span x-text="group.is_active ? t.groups.pause : t.groups.resume"></span>
                                     </x-driver-check.button>
