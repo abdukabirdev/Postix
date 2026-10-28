@@ -681,9 +681,17 @@ final class GroupJoinService
         $peer = '@' . $group->link;
 
         try {
-            $full = $api->channels->getFullChannel(channel: $peer, floodWaitLimit: 0);
+            /* MadelineProto refuses channels.getFullChannel called directly. */
+            $full = $api->getFullInfo($peer);
 
-            $chat = (array) (($full['chats'] ?? [])[0] ?? []);
+            $chat = (array) ($full['Chat'] ?? []);
+
+            /* The name is a person's or a bot's, not a group's. */
+            if (($chat['_'] ?? null) !== 'channel') {
+                $this->markDead($group, 'NOT_A_GROUP', $account->id);
+
+                return 0;
+            }
 
             if (! empty($chat['broadcast']) && empty($chat['megagroup'])) {
                 $this->decide($group, TelegramScrapeGroup::JOIN_REJECTED, 'channel');
@@ -693,11 +701,11 @@ final class GroupJoinService
                 return 0;
             }
 
-            $members = (int) ($full['full_chat']['participants_count'] ?? $chat['participants_count'] ?? 0);
+            $members = (int) ($full['full']['participants_count'] ?? $chat['participants_count'] ?? 0);
 
             $history = $api->messages->getHistory(peer: $peer, limit: 100, floodWaitLimit: 0);
-        } catch (RPCErrorException $e) {
-            if (in_array($e->rpc, self::GROUP_GONE, true)) {
+        } catch (Throwable $e) {
+            if ($e instanceof RPCErrorException && in_array($e->rpc, self::GROUP_GONE, true)) {
                 $this->markDead($group, $e->rpc, $account->id);
 
                 return 0;
@@ -705,7 +713,7 @@ final class GroupJoinService
 
             if (! self::isAccountTrouble($e)) {
                 /* Not readable now; tried again in an hour or at the next recheck. */
-                $group->update(['last_error' => mb_substr($e->rpc, 0, 500), 'checked_at' => now()]);
+                $group->update(['last_error' => mb_substr($this->reason($e), 0, 500), 'checked_at' => now()]);
             }
 
             throw $e;
