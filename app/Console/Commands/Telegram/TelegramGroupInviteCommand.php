@@ -19,7 +19,9 @@ final class TelegramGroupInviteCommand extends Command
      */
     public const LOCK_NAME = 'group-invite';
 
-    protected $signature = 'telegram:group-invites {--trigger=manual : Who started it: manual or schedule}';
+    protected $signature = 'telegram:group-invites
+        {--trigger=manual : Who started it: manual or schedule}
+        {--check : Only look up the people already sent in their groups, invite nobody}';
 
     protected $description = 'Invite the accounts\' contacts into the chosen groups';
 
@@ -41,7 +43,7 @@ final class TelegramGroupInviteCommand extends Command
         try {
             $trigger = $this->option('trigger') === 'schedule' ? 'schedule' : 'manual';
 
-            $totals = $invites->run(fn (string $line) => $this->line($line), $trigger);
+            $totals = $invites->run(fn (string $line) => $this->line($line), $trigger, (bool) $this->option('check'));
         } catch (Throwable $e) {
             $this->error($e->getMessage());
 
@@ -51,11 +53,14 @@ final class TelegramGroupInviteCommand extends Command
         }
 
         $this->info(sprintf(
-            'Accounts: %d, batches: %d, invited: %d, failed: %d',
+            'Accounts: %d, batches: %d, added: %d, not added: %d, already in: %d, cannot be added: %d, unchecked: %d',
             $totals['accounts'],
             $totals['batches'],
             $totals['invited'],
+            $totals['not_added'],
+            $totals['already'],
             $totals['failed'],
+            $totals['sent'],
         ));
 
         return self::SUCCESS;

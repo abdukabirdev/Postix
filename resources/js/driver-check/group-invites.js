@@ -5,7 +5,8 @@
 |
 | Groups the accounts invite their own contacts into - and people with a
 | @username once those run out - how many at a time and how many times a
-| day, how each account stands after a flood, and who was invited or failed.
+| day, how each account stands after a flood, and where each person ended:
+| added, could be but was not, cannot be (junk), already in, unchecked.
 |
 */
 
@@ -36,7 +37,7 @@ export function groupInvitesPage(config) {
         limits: {},
         groups: [],
         accounts: [],
-        totals: { invited: 0, failed: 0, pending: 0, today: 0, batches_today: 0, by_username: 0, refused: 0 },
+        totals: { invited: 0, not_added: 0, already: 0, sent: 0, failed: 0, pending: 0, today: 0, batches_today: 0, by_username: 0, refused: 0 },
 
         link: '',
         status: '',
@@ -206,6 +207,56 @@ export function groupInvitesPage(config) {
             }
         },
 
+        async check() {
+            if (this.busy || this.running) {
+                return;
+            }
+
+            this.busy = true;
+
+            try {
+                const json = await requestJson(this.endpoints.check, 'POST', {});
+                notify(json.message);
+                this.running = true;
+                this.startPoll();
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = false;
+            }
+        },
+
+        /*
+         * The member count when the last run came to the group and when it
+         * was done; only the first while the run is still in it.
+         */
+        membersLine(group) {
+            const before = group.members_before === null ? '?' : this.number(group.members_before);
+            const after = group.members_after === null ? '…' : this.number(group.members_after);
+
+            return t.groups.members.replace(':before', before).replace(':after', after);
+        },
+
+        membersGrew(group) {
+            return group.members_before === null || group.members_after === null
+                ? null
+                : group.members_after - group.members_before;
+        },
+
+        /*
+         * The retry clears the bucket the list is filtered to, both when it
+         * shows everybody.
+         */
+        retryBucket() {
+            return ['failed', 'not_added'].includes(this.status) ? this.status : null;
+        },
+
+        retryable() {
+            const bucket = this.retryBucket();
+
+            return bucket ? this.totals[bucket] : this.totals.failed + this.totals.not_added;
+        },
+
         async enable(account) {
             try {
                 const json = await requestJson(`${this.endpoints.accounts}/${account.id}/enable`, 'POST', {});
@@ -217,12 +268,14 @@ export function groupInvitesPage(config) {
         },
 
         async retryFailed() {
-            if (!window.confirm(t.results.retry_confirm)) {
+            const bucket = this.retryBucket();
+
+            if (!window.confirm(bucket ? t.results[`retry_confirm_${bucket}`] : t.results.retry_confirm)) {
                 return;
             }
 
             try {
-                const json = await requestJson(this.endpoints.retry, 'POST', {});
+                const json = await requestJson(this.endpoints.retry, 'POST', bucket ? { status: bucket } : {});
                 notify(json.message);
                 await this.load();
                 await this.loadResults(1);
@@ -255,8 +308,17 @@ export function groupInvitesPage(config) {
             return t.results[status] ?? status;
         },
 
+        statusClass(status) {
+            return {
+                invited: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
+                not_added: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
+                failed: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
+            }[status] ?? 'bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-gray-300';
+        },
+
         /*
-         * Telegram's code in words; a group's own @name has its own text.
+         * Telegram's code in words; a group's own @name has its own text, a
+         * check that could not be made says why.
          */
         errorLabel(code, forGroup = false) {
             if (!code) {
@@ -267,6 +329,10 @@ export function groupInvitesPage(config) {
 
             if (wait) {
                 return t.errors.flood_wait.replace(':n', wait[1]);
+            }
+
+            if (code.startsWith('CHECK_') && !t.errors[code]) {
+                return t.errors.check_failed.replace(':reason', this.errorLabel(code.slice(6)));
             }
 
             return (forGroup && t.errors[`${code}_GROUP`]) || t.errors[code] || code;

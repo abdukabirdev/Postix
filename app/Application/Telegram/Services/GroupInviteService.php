@@ -6,6 +6,7 @@ namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\DeadSession;
 use App\Application\Telegram\Support\SessionSleep;
+use App\Application\Telegram\Support\UsernameLookup;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountProcess;
@@ -39,6 +40,20 @@ use Throwable;
  * unique per group, so two accounts never invite the same person and a
  * person is tried once per group.
  *
+ * A call that comes back without an error has not added anybody yet:
+ * Telegram leaves people out without a word (someone who left the group
+ * before, everybody while it holds the account quietly). Each person ends
+ * in one of:
+ *  - invited: Telegram's "added" message names them, or the check
+ *    (channels.getParticipant) finds them joined by the call;
+ *  - not_added: could be added, is not in the group;
+ *  - already: was in the group before the call;
+ *  - failed: cannot be added - Telegram refused because of the person, or
+ *    listed them as missing (a link to their DMs or Premium only);
+ *  - sent: the check could not be made; the next run checks them first.
+ * The group's member count is read when an account comes to it and when
+ * it is done with it.
+ *
  * What Telegram answers decides whose trouble it is:
  *  - the account's. A short FLOOD_WAIT is waited out on the spot; a longer
  *    one rests the account as long as Telegram said, and it comes back by
@@ -64,6 +79,12 @@ final class GroupInviteService
     public const STEP_RESOLVE = 'resolve';
 
     public const STEP_INVITE = 'invite';
+
+    /** Is the person in the group now. */
+    public const STEP_CHECK = 'check';
+
+    /** The person was in the group, not in it now. */
+    public const NOT_IN_GROUP = 'NOT_IN_GROUP';
 
     /** Telegram said how long to wait. */
     public const KIND_WAIT = 'wait';
@@ -91,6 +112,9 @@ final class GroupInviteService
 
     public const KIND_ALREADY = 'already';
 
+    /** The person could be added, not by this call: left the group, a mutual contact may bring them back. */
+    public const KIND_NOT_ADDED = 'not_added';
+
     /** The kinds that stop the account, not the group or the person. */
     private const ACCOUNT_KINDS = [self::KIND_WAIT, self::KIND_SPAM, self::KIND_DEAD, self::KIND_TRANSIENT];
 
@@ -101,7 +125,6 @@ final class GroupInviteService
 
     private const PERSON_REFUSES = [
         'USER_PRIVACY_RESTRICTED',
-        'USER_NOT_MUTUAL_CONTACT',
         'USER_CHANNELS_TOO_MUCH',
         'INPUT_USER_DEACTIVATED',
         'USER_BOT',
@@ -109,6 +132,8 @@ final class GroupInviteService
         'BOT_GROUPS_BLOCKED',
         'PRIVACY_PREMIUM_REQUIRED',
     ];
+
+    private const NOT_ADDED = ['USER_NOT_MUTUAL_CONTACT'];
 
     private const PERSON_HERE = [
         'USER_KICKED',
@@ -178,6 +203,15 @@ final class GroupInviteService
     /** How far back a stop's counters look for the previous stop, days. */
     private const SNAPSHOT_DAYS = 30;
 
+    /** A member who joined this long before the call, or later, joined by it: two clocks never agree. Seconds. */
+    private const JOIN_SLACK = 300;
+
+    /** Between two people looked up in the group, milliseconds. */
+    private const CHECK_PAUSE_MS = [700, 1500];
+
+    /** What the people of a call, or of a check, came to; the keys are the statuses. */
+    private const ZERO = ['invited' => 0, 'not_added' => 0, 'already' => 0, 'sent' => 0, 'failed' => 0];
+
     private string $runId = '';
 
     /** @var array<int, true> accounts that ran into trouble in this run: no success is written for them */
@@ -198,18 +232,34 @@ final class GroupInviteService
     /** @var list<int>|null our own accounts' Telegram ids: never invited */
     private ?array $ownIds = null;
 
+    /** @var array<int, string> groups whose members this run cannot look up, with why */
+    private array $blind = [];
+
+    /**
+     * @var array<string, array{group: TelegramInviteGroup, before: int|null, invited: int, not_added: int, already: int, sent: int, failed: int}>
+     *      accountId:groupId - the member count when the account came to the group, what its calls did there
+     */
+    private array $touched = [];
+
+    /** @var array<int, true> groups whose "before" this run has written */
+    private array $counted = [];
+
     public function __construct(
         private readonly MadelineService $madeline,
         private readonly TelegramAccountProcessService $pool,
         private readonly GroupInviteSettings $settings,
+        private readonly UsernameLookup $usernames,
     ) {}
 
     /**
+     * Every account first checks the people it sent earlier and has not
+     * checked yet, then invites. $checkOnly: the check alone, nobody invited.
+     *
      * @param callable(string): void|null $output
      *
-     * @return array{accounts: int, batches: int, invited: int, failed: int}
+     * @return array{accounts: int, batches: int, invited: int, not_added: int, already: int, sent: int, failed: int}
      */
-    public function run(?callable $output = null, string $trigger = 'manual'): array
+    public function run(?callable $output = null, string $trigger = 'manual', bool $checkOnly = false): array
     {
         $this->runId = (string) Str::uuid();
         $this->troubled = [];
@@ -218,19 +268,23 @@ final class GroupInviteService
         $this->denied = [];
         $this->invitedInto = [];
         $this->ownIds = null;
+        $this->blind = [];
+        $this->touched = [];
+        $this->counted = [];
 
         $say = $output ?? static function (string $line): void {};
 
         $config = $this->settings->current();
-        $totals = ['accounts' => 0, 'batches' => 0, 'invited' => 0, 'failed' => 0];
+        $totals = ['accounts' => 0, 'batches' => 0, ...self::ZERO];
 
         $groups = TelegramInviteGroup::query()
             ->where('is_active', true)
             ->orderBy('id')
             ->get();
 
-        $this->log('started', 'Invite started', null, null, [
+        $this->log('started', $checkOnly ? 'Check started' : 'Invite started', null, null, [
             'trigger' => $trigger,
+            'check_only' => $checkOnly,
             'groups' => $groups->pluck('link')->all(),
             'batch_size' => (int) $config['batch_size'],
             'batches_per_day' => (int) $config['batches_per_day'],
@@ -239,7 +293,7 @@ final class GroupInviteService
             'excluded_accounts' => $config['excluded_accounts'],
         ]);
 
-        if ($groups->isEmpty()) {
+        if ($groups->isEmpty() && ! $checkOnly) {
             $this->log('finished', 'No active groups, nothing to do');
 
             return $totals;
@@ -252,9 +306,14 @@ final class GroupInviteService
         $comeBack = [];
 
         while (true) {
+            /* A check only reads: an account resting from invites may make it. */
             $account = $this->pool->claimRandomAvailableAccount(
                 ProcessEnum::GroupInvite,
-                array_values(array_unique(array_merge($usedAccountIds, $this->busyElsewhere(), $this->restingIds()))),
+                array_values(array_unique(array_merge(
+                    $usedAccountIds,
+                    $this->busyElsewhere(),
+                    $checkOnly ? [] : $this->restingIds(),
+                ))),
             );
 
             if (! $account) {
@@ -282,7 +341,7 @@ final class GroupInviteService
 
             $usedAccountIds[] = $account->id;
 
-            if (! $this->hasWork($account, $groups, $config)) {
+            if (! $this->hasSent($account) && ($checkOnly || ! $this->hasWork($account, $groups, $config))) {
                 $this->pool->release($account, ProcessEnum::GroupInvite);
 
                 continue;
@@ -301,11 +360,10 @@ final class GroupInviteService
                         ?? new RuntimeException('Failed to start MadelineProto.');
                 }
 
-                $result = $this->runAccount($api, $account, $groups, $config, $say);
+                $result = $this->runAccount($api, $account, $groups, $config, $say, $checkOnly);
 
                 $totals['batches'] += $result['calls'];
-                $totals['invited'] += $result['invited'];
-                $totals['failed'] += $result['failed'];
+                self::add($totals, $result);
 
                 if (! isset($this->troubled[$account->id])) {
                     $this->pool->registerSuccess($account, ProcessEnum::GroupInvite);
@@ -373,6 +431,7 @@ final class GroupInviteService
 
         foreach ([
             self::KIND_PERSON => self::PERSON_REFUSES,
+            self::KIND_NOT_ADDED => self::NOT_ADDED,
             self::KIND_PERSON_HERE => self::PERSON_HERE,
             self::KIND_GROUP_GONE => self::GROUP_GONE,
             self::KIND_GROUP_DENIED => self::GROUP_DENIED,
@@ -386,10 +445,8 @@ final class GroupInviteService
             return self::KIND_DEAD;
         }
 
-        for ($current = $e; $current !== null; $current = $current->getPrevious()) {
-            if ($current instanceof PeerNotInDbException) {
-                return self::KIND_PERSON_HERE;
-            }
+        if (self::peerMissing($e)) {
+            return self::KIND_PERSON_HERE;
         }
 
         /* Any other refusal of the request itself: somebody in it, most likely. */
@@ -489,14 +546,16 @@ final class GroupInviteService
     }
 
     /**
-     * The call came back. Anyone Telegram lists as missing failed - their
-     * privacy keeps us out, for every group - the rest of the batch are in.
+     * The call came back. Anyone Telegram lists as missing cannot be added -
+     * their privacy keeps us out, for every group. The rest stand where the
+     * check found them; sent when it found nothing out.
      *
-     * @param array<int, string> $failedByTelegramId telegram user id => error
+     * @param array<int, string>                                    $refused  telegram user id => error
+     * @param array<int, array{status: string, error: string|null}> $verdicts telegram user id => where the person stands
      *
-     * @return array{invited: int, failed: int}
+     * @return array{invited: int, not_added: int, already: int, sent: int, failed: int}
      */
-    public function settle(string $batchKey, array $failedByTelegramId): array
+    public function settle(string $batchKey, array $refused, array $verdicts = []): array
     {
         $pending = TelegramGroupInvite::query()
             ->where('batch_key', $batchKey)
@@ -504,41 +563,7 @@ final class GroupInviteService
             ->with('user:id,telegram_user_id')
             ->get();
 
-        $now = now();
-        $invited = [];
-        $refused = [];
-
-        foreach ($pending as $row) {
-            $error = $failedByTelegramId[(int) $row->user?->telegram_user_id] ?? null;
-
-            if ($error !== null) {
-                $row->update([
-                    'status' => TelegramGroupInvite::STATUS_FAILED,
-                    'error' => mb_substr($error, 0, 120),
-                    'attempted_at' => $now,
-                ]);
-
-                $refused[$error][] = $row->scraped_user_id;
-
-                continue;
-            }
-
-            $row->update([
-                'status' => TelegramGroupInvite::STATUS_INVITED,
-                'error' => null,
-                'attempted_at' => $now,
-            ]);
-
-            $invited[] = $row->scraped_user_id;
-        }
-
-        $this->mark($invited, true);
-
-        foreach ($refused as $error => $ids) {
-            $this->mark($ids, false, (string) $error);
-        }
-
-        return ['invited' => count($invited), 'failed' => count($pending) - count($invited)];
+        return $this->record($pending, $refused, $verdicts, now());
     }
 
     /**
@@ -560,6 +585,7 @@ final class GroupInviteService
                 'status' => TelegramGroupInvite::STATUS_FAILED,
                 'error' => mb_substr($error, 0, 120),
                 'attempted_at' => now(),
+                'checked_at' => now(),
                 'updated_at' => now(),
             ]);
 
@@ -599,7 +625,7 @@ final class GroupInviteService
         return TelegramGroupInvite::query()
             ->where('telegram_account_id', $accountId)
             ->where('via', TelegramGroupInvite::VIA_USERNAME)
-            ->whereIn('status', [TelegramGroupInvite::STATUS_INVITED, TelegramGroupInvite::STATUS_FAILED])
+            ->whereIn('status', TelegramGroupInvite::SETTLED)
             ->where('attempted_at', '>=', now()->startOfDay())
             ->count();
     }
@@ -679,9 +705,11 @@ final class GroupInviteService
         $run = $this->workSince($account->id, $from);
         $day = $this->workSince($account->id, now()->startOfDay());
 
+        /* Left out without a word (NOT_IN_GROUP) counts too: that is how a quiet hold shows. */
         $errors = TelegramGroupInvite::query()
             ->where('telegram_account_id', $account->id)
-            ->where('status', TelegramGroupInvite::STATUS_FAILED)
+            ->whereIn('status', [TelegramGroupInvite::STATUS_FAILED, TelegramGroupInvite::STATUS_NOT_ADDED])
+            ->whereNotNull('error')
             ->where('attempted_at', '>', $from)
             ->selectRaw('error, COUNT(*) as total')
             ->groupBy('error')
@@ -699,6 +727,8 @@ final class GroupInviteService
             'minutes' => $run['first'] !== null ? intdiv(now()->timestamp - $run['first']->timestamp, 60) : 0,
             'calls' => $run['calls'],
             'invited' => $run['invited'],
+            'not_added' => $run['not_added'],
+            'already' => $run['already'],
             'failed' => $run['failed'],
             'username_calls' => $run['username_calls'],
             'lookups' => $run['lookups'],
@@ -706,6 +736,7 @@ final class GroupInviteService
             'wait_seconds' => $run['wait_seconds'],
             'calls_today' => $day['calls'],
             'invited_today' => $day['invited'],
+            'not_added_today' => $day['not_added'],
             'failed_today' => $day['failed'],
             'lookups_today' => $day['lookups'],
             'errors' => $errors,
@@ -736,7 +767,11 @@ final class GroupInviteService
     }
 
     /**
-     * @return array{calls: int, invited: int, failed: int}
+     * The people this account sent earlier and has not checked yet first,
+     * then the invites. The member counts of the groups it worked in are
+     * read once more at the end.
+     *
+     * @return array{calls: int, invited: int, not_added: int, already: int, sent: int, failed: int}
      */
     private function runAccount(
         API $api,
@@ -744,9 +779,17 @@ final class GroupInviteService
         Collection $groups,
         array $config,
         callable $say,
+        bool $checkOnly = false,
     ): array {
-        $result = ['calls' => 0, 'invited' => 0, 'failed' => 0];
+        $result = ['calls' => 0, ...self::ZERO];
         $empty = 0;
+
+        $checked = $this->checkSent($api, $account, $config, $say);
+        self::add($result, $checked);
+
+        if ($checked['stop'] || $checkOnly) {
+            return $result;
+        }
 
         while (true) {
             if ($this->callsToday($account->id) >= $this->dailyCap($account, $config)) {
@@ -767,8 +810,7 @@ final class GroupInviteService
             $done = $this->work($api, $account, $group, $via, $people, $config, $say);
 
             $result['calls'] += $done['calls'];
-            $result['invited'] += $done['invited'];
-            $result['failed'] += $done['failed'];
+            self::add($result, $done);
 
             if ($done['stop']) {
                 break;
@@ -797,6 +839,8 @@ final class GroupInviteService
                 $this->pause($config);
             }
         }
+
+        $this->countAfter($api, $account, $say);
 
         return $result;
     }
@@ -847,14 +891,14 @@ final class GroupInviteService
     }
 
     /**
-     * One claimed batch: join, look the @usernames up, invite. A call
-     * refused because of somebody in it is split in halves until that one
-     * is found.
+     * One claimed batch: join, look the @usernames up, invite, check who
+     * is in. A call refused because of somebody in it is split in halves
+     * until that one is found.
      *
      * @param Collection<int, TelegramScrapedUser> $people
      * @param array<string, mixed>                 $config
      *
-     * @return array{calls: int, invited: int, failed: int, stop: bool}
+     * @return array{calls: int, invited: int, not_added: int, already: int, sent: int, failed: int, stop: bool}
      */
     private function work(
         API $api,
@@ -865,7 +909,7 @@ final class GroupInviteService
         array $config,
         callable $say,
     ): array {
-        $done = ['calls' => 0, 'invited' => 0, 'failed' => 0, 'stop' => false];
+        $done = ['calls' => 0, ...self::ZERO, 'stop' => false];
 
         try {
             $this->ensureJoined($api, $group, $account, $say);
@@ -889,6 +933,8 @@ final class GroupInviteService
             return $done;
         }
 
+        $this->countBefore($api, $account, $group);
+
         if ($via === TelegramGroupInvite::VIA_USERNAME) {
             [$people, $done['stop']] = $this->resolve($api, $account, $group, $people, $config, $say, $done);
         }
@@ -910,6 +956,7 @@ final class GroupInviteService
             }
 
             $key = $this->rekey($group, $part);
+            $sentAt = now()->timestamp;
 
             try {
                 $context = ['step' => self::STEP_INVITE, 'via' => $via, 'size' => $part->count()];
@@ -949,32 +996,346 @@ final class GroupInviteService
                     $half = (int) ceil($part->count() / 2);
                     array_unshift($parts, $part->slice(0, $half)->values(), $part->slice($half)->values());
 
-                    $this->logCall($account, $group, $key, $via, $part->count(), ['invited' => 0, 'failed' => 0], "{$code}, split");
+                    $this->logCall($account, $group, $key, $via, $part->count(), self::ZERO, "{$code}, split");
 
                     continue;
                 }
 
-                $settled = $kind === self::KIND_ALREADY
-                    ? $this->settle($key, [])
-                    : ['invited' => 0, 'failed' => $this->failBatch($key, $code, $kind === self::KIND_PERSON)];
+                $settled = match ($kind) {
+                    self::KIND_ALREADY => $this->settle($key, [], self::verdicts($part, TelegramGroupInvite::STATUS_ALREADY)),
+                    self::KIND_NOT_ADDED => $this->settle($key, [], self::verdicts($part, TelegramGroupInvite::STATUS_NOT_ADDED, $code)),
+                    default => [...self::ZERO, 'failed' => $this->failBatch($key, $code, $kind === self::KIND_PERSON)],
+                };
 
                 $this->logCall($account, $group, $key, $via, 1, $settled, $code);
-                $this->tally($done, $group, $settled);
+                $this->tally($done, $account, $group, $settled);
 
                 continue;
             }
 
             $done['calls']++;
 
-            $settled = $this->settle($key, $this->missingIds($response));
+            $refused = $this->missingIds($response);
+            $added = $this->addedIds($response);
 
-            $this->logCall($account, $group, $key, $via, $part->count(), $settled);
-            $this->tally($done, $group, $settled);
+            [$verdicts, $trouble] = $this->verify(
+                $api,
+                $account,
+                $group,
+                $part->reject(fn (TelegramScrapedUser $user) => isset($refused[(int) $user->telegram_user_id])),
+                $added,
+                $sentAt,
+                $config,
+                $say,
+            );
 
-            $say("  {$group->link}: {$settled['invited']} invited, {$settled['failed']} failed" . ($via === TelegramGroupInvite::VIA_USERNAME ? ' (@username)' : ''));
+            $settled = $this->settle($key, $refused, $verdicts);
+
+            $this->logCall($account, $group, $key, $via, $part->count(), $settled, null, [
+                /* How many Telegram's own "added" message named; the rest were looked up. */
+                'named' => count(array_intersect_key($added, array_flip($part->map(fn (TelegramScrapedUser $user) => (int) $user->telegram_user_id)->all()))),
+            ]);
+            $this->tally($done, $account, $group, $settled);
+
+            $say("  {$group->link}: " . self::summary($settled) . ($via === TelegramGroupInvite::VIA_USERNAME ? ' (@username)' : ''));
+
+            if ($trouble !== null) {
+                $kind = self::classify($trouble, self::STEP_CHECK);
+
+                $this->releasePeople($group, collect($parts)->flatten(1));
+                $this->accountTrouble($account, $trouble, $kind, $config, $group->id, ['step' => self::STEP_CHECK, 'via' => $via, 'size' => $part->count()]);
+                $say('  check: ' . self::code($trouble) . ', the account stops');
+                $done['stop'] = true;
+
+                return $done;
+            }
         }
 
         return $done;
+    }
+
+    /**
+     * Where each person stands after a call, or after a call made earlier:
+     * in the group by it, in it before, or not in it. Whoever Telegram's own
+     * "added" message names is in; everybody else is looked up in the group
+     * one by one. Someone who cannot be looked up gets no verdict and stays
+     * sent, for a later check.
+     *
+     * @param Collection<int, TelegramScrapedUser> $people
+     * @param array<int, true>                     $added telegram ids Telegram's message names
+     * @param int|array<int, int>                  $since when the call was made: one time for all, or by telegram id
+     * @param array<string, mixed>                 $config
+     *
+     * @return array{0: array<int, array{status: string, error: string|null}>, 1: Throwable|null} by telegram id; the account's own trouble that broke the check off
+     */
+    private function verify(
+        API $api,
+        TelegramAccount $account,
+        TelegramInviteGroup $group,
+        Collection $people,
+        array $added,
+        int|array $since,
+        array $config,
+        callable $say,
+    ): array {
+        $verdicts = [];
+        $looked = 0;
+        $context = ['step' => self::STEP_CHECK, 'size' => $people->count()];
+
+        foreach ($people as $person) {
+            $id = (int) $person->telegram_user_id;
+
+            if (isset($added[$id])) {
+                $verdicts[$id] = self::verdict(TelegramGroupInvite::STATUS_INVITED);
+
+                continue;
+            }
+
+            if (isset($this->blind[$group->id])) {
+                $verdicts[$id] = self::verdict(TelegramGroupInvite::STATUS_SENT, $this->blind[$group->id]);
+
+                continue;
+            }
+
+            if ($looked++ > 0) {
+                $this->checkPause($config);
+            }
+
+            try {
+                $verdicts[$id] = $this->presence($api, $account, $group, $id, is_array($since) ? ($since[$id] ?? 0) : $since, $say, $context);
+            } catch (Throwable $e) {
+                $kind = self::classify($e, self::STEP_CHECK);
+
+                if (in_array($kind, self::ACCOUNT_KINDS, true)) {
+                    return [$verdicts, $e];
+                }
+
+                $code = 'CHECK_' . (self::peerMissing($e) ? 'PEER_ID_INVALID' : self::code($e));
+
+                /* The group shows its members to its admins only: nobody in it can be looked up. */
+                if ($kind === self::KIND_GROUP_DENIED || $kind === self::KIND_GROUP_GONE) {
+                    $this->blind[$group->id] = $code;
+                }
+
+                $verdicts[$id] = self::verdict(TelegramGroupInvite::STATUS_SENT, $code);
+            }
+        }
+
+        return [$verdicts, null];
+    }
+
+    /**
+     * Is the person in the group, and since when.
+     *
+     * @param array<string, mixed> $context
+     *
+     * @return array{status: string, error: string|null}
+     */
+    private function presence(
+        API $api,
+        TelegramAccount $account,
+        TelegramInviteGroup $group,
+        int $userId,
+        int $since,
+        callable $say,
+        array $context,
+    ): array {
+        try {
+            $answer = $this->patiently(fn () => $api->channels->getParticipant(
+                channel: $this->peer($group),
+                participant: $userId,
+                floodWaitLimit: 0,
+            ), $say, $account, $group, $context);
+        } catch (Throwable $e) {
+            if (self::rpcError($e)?->rpc === 'USER_NOT_PARTICIPANT') {
+                return self::verdict(TelegramGroupInvite::STATUS_NOT_ADDED, self::NOT_IN_GROUP);
+            }
+
+            throw $e;
+        }
+
+        $member = is_array($answer) && is_array($answer['participant'] ?? null) ? $answer['participant'] : [];
+        $type = $member['_'] ?? null;
+
+        return match (true) {
+            $type === null => self::verdict(TelegramGroupInvite::STATUS_SENT, 'CHECK_NO_ANSWER'),
+            $type === 'channelParticipantLeft',
+            $type === 'channelParticipantBanned' && ! empty($member['left']) => self::verdict(TelegramGroupInvite::STATUS_NOT_ADDED, self::NOT_IN_GROUP),
+            isset($member['date']) && (int) $member['date'] >= $since - self::JOIN_SLACK => self::verdict(TelegramGroupInvite::STATUS_INVITED),
+            default => self::verdict(TelegramGroupInvite::STATUS_ALREADY),
+        };
+    }
+
+    /**
+     * People this account sent earlier whose check broke off, or who were
+     * sent before checks were made: each is looked up in the group now.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return array{invited: int, not_added: int, already: int, sent: int, failed: int, stop: bool}
+     */
+    private function checkSent(API $api, TelegramAccount $account, array $config, callable $say): array
+    {
+        $done = [...self::ZERO, 'stop' => false];
+
+        $byGroup = TelegramGroupInvite::query()
+            ->where('telegram_account_id', $account->id)
+            ->where('status', TelegramGroupInvite::STATUS_SENT)
+            ->with(['user', 'group'])
+            ->orderBy('id')
+            ->get()
+            ->filter(fn (TelegramGroupInvite $row) => $row->user !== null && $row->group !== null)
+            ->groupBy('invite_group_id');
+
+        foreach ($byGroup as $rows) {
+            /** @var TelegramInviteGroup $group */
+            $group = $rows->first()->group;
+
+            if (isset($this->blocked[$group->id]) || isset($this->denied[$account->id . ':' . $group->id])) {
+                continue;
+            }
+
+            try {
+                $this->ensureJoined($api, $group, $account, $say);
+            } catch (Throwable $e) {
+                if ($this->joinTrouble($account, $group, $e, $config, $say)) {
+                    $done['stop'] = true;
+
+                    return $done;
+                }
+
+                continue;
+            }
+
+            [$verdicts, $trouble] = $this->verify(
+                $api,
+                $account,
+                $group,
+                $rows->pluck('user')->values(),
+                [],
+                $rows->mapWithKeys(fn (TelegramGroupInvite $row) => [
+                    (int) $row->user->telegram_user_id => (int) $row->attempted_at?->timestamp,
+                ])->all(),
+                $config,
+                $say,
+            );
+
+            $settled = $this->record($rows, [], $verdicts, null);
+            self::add($done, $settled);
+
+            $this->log(TelegramGroupInviteLog::EVENT_CHECK, self::summary($settled), $account->id, $group->id, [
+                'size' => $rows->count(),
+                ...$settled,
+            ]);
+            $say("  {$group->link}: checked {$rows->count()}: " . self::summary($settled));
+
+            if ($trouble !== null) {
+                $this->accountTrouble($account, $trouble, self::classify($trouble, self::STEP_CHECK), $config, $group->id, [
+                    'step' => self::STEP_CHECK,
+                    'size' => $rows->count(),
+                ]);
+                $say('  check: ' . self::code($trouble) . ', the account stops');
+                $done['stop'] = true;
+
+                return $done;
+            }
+        }
+
+        return $done;
+    }
+
+    private function hasSent(TelegramAccount $account): bool
+    {
+        return TelegramGroupInvite::query()
+            ->where('telegram_account_id', $account->id)
+            ->where('status', TelegramGroupInvite::STATUS_SENT)
+            ->exists();
+    }
+
+    /**
+     * The group's member count when this account first comes to it in the
+     * run. The run's first one is the group's "before".
+     */
+    private function countBefore(API $api, TelegramAccount $account, TelegramInviteGroup $group): void
+    {
+        $key = $account->id . ':' . $group->id;
+
+        if (isset($this->touched[$key])) {
+            return;
+        }
+
+        $members = $this->members($api, $group);
+
+        $this->touched[$key] = ['group' => $group, 'before' => $members, ...self::ZERO];
+
+        if (! isset($this->counted[$group->id])) {
+            $this->counted[$group->id] = true;
+
+            $group->update([
+                'members_before' => $members,
+                'members_after' => null,
+                'members_checked_at' => $members !== null ? now() : $group->members_checked_at,
+            ]);
+        }
+    }
+
+    /**
+     * The account is done: the member count of every group it worked in,
+     * now, next to what it was when it came and what its calls did there.
+     */
+    private function countAfter(API $api, TelegramAccount $account, callable $say): void
+    {
+        foreach ($this->touched as $key => $state) {
+            if (! str_starts_with($key, $account->id . ':')) {
+                continue;
+            }
+
+            unset($this->touched[$key]);
+
+            $group = $state['group'];
+            $before = $state['before'];
+            $after = $this->members($api, $group);
+
+            $this->log(
+                TelegramGroupInviteLog::EVENT_MEMBERS,
+                'Members ' . ($before ?? '?') . ' -> ' . ($after ?? '?') . ': ' . self::summary($state),
+                $account->id,
+                $group->id,
+                [
+                    'before' => $before,
+                    'after' => $after,
+                    'grew' => $before !== null && $after !== null ? $after - $before : null,
+                    ...array_intersect_key($state, self::ZERO),
+                ],
+            );
+
+            $say("  {$group->link}: members " . ($before ?? '?') . ' -> ' . ($after ?? '?'));
+
+            if ($after !== null) {
+                $group->update(['members_after' => $after, 'members_checked_at' => now()]);
+            }
+        }
+    }
+
+    /**
+     * How many people are in the group now; null when the account may not
+     * see it. Not getFullInfo: MadelineProto keeps that for an hour.
+     */
+    private function members(API $api, TelegramInviteGroup $group): ?int
+    {
+        try {
+            $page = $api->channels->getParticipants(
+                channel: $this->peer($group),
+                filter: ['_' => 'channelParticipantsRecent'],
+                offset: 0,
+                limit: 1,
+                floodWaitLimit: 0,
+            );
+        } catch (Throwable) {
+            return null;
+        }
+
+        return is_array($page) && isset($page['count']) ? (int) $page['count'] : null;
     }
 
     /**
@@ -983,7 +1344,7 @@ final class GroupInviteService
      *
      * @param Collection<int, TelegramScrapedUser>                $people
      * @param array<string, mixed>                                $config
-     * @param array{calls: int, invited: int, failed: int, stop: bool} $done
+     * @param array<string, int|bool>                             $done
      *
      * @return array{0: Collection<int, TelegramScrapedUser>, 1: bool} the ones found, and whether the account stops after inviting them
      */
@@ -1006,10 +1367,13 @@ final class GroupInviteService
             }
 
             try {
-                $resolved = $this->patiently(fn () => $api->contacts->resolveUsername(
-                    username: ltrim((string) $person->username, '@'),
-                    floodWaitLimit: 0,
-                ), $say, $account, $group, $context);
+                $user = $this->patiently(
+                    fn () => $this->usernames->user($api, (string) $person->username),
+                    $say,
+                    $account,
+                    $group,
+                    $context,
+                );
             } catch (Throwable $e) {
                 $kind = self::classify($e, self::STEP_RESOLVE);
 
@@ -1031,13 +1395,12 @@ final class GroupInviteService
                     return [$found, true];
                 }
 
-                $this->failPerson($group, $person, self::code($e), $kind === self::KIND_PERSON);
+                /* Nobody has the name now: MadelineProto says it as a peer it does not know. */
+                $this->failPerson($group, $person, self::peerMissing($e) ? 'USERNAME_NOT_OCCUPIED' : self::code($e), $kind === self::KIND_PERSON);
                 $done['failed']++;
 
                 continue;
             }
-
-            $user = self::resolvedUser($resolved);
 
             $reason = match (true) {
                 $user === null || (int) ($user['id'] ?? 0) !== (int) $person->telegram_user_id => 'USERNAME_OWNER_CHANGED',
@@ -1431,13 +1794,15 @@ final class GroupInviteService
      * The invite calls, the lookups and the short flood waits of an account
      * since a moment.
      *
-     * @return array{calls: int, invited: int, failed: int, username_calls: int, lookups: int, waits: int, wait_seconds: int, first: Carbon|null}
+     * @return array{calls: int, invited: int, not_added: int, already: int, failed: int, username_calls: int, lookups: int, waits: int, wait_seconds: int, first: Carbon|null}
      */
     private function workSince(int $accountId, Carbon $from): array
     {
         $work = [
             'calls' => 0,
             'invited' => 0,
+            'not_added' => 0,
+            'already' => 0,
             'failed' => 0,
             'username_calls' => 0,
             'lookups' => 0,
@@ -1464,6 +1829,8 @@ final class GroupInviteService
 
                 $work['calls']++;
                 $work['invited'] += (int) ($context['invited'] ?? 0);
+                $work['not_added'] += (int) ($context['not_added'] ?? 0);
+                $work['already'] += (int) ($context['already'] ?? 0);
                 $work['failed'] += (int) ($context['failed'] ?? 0);
                 $work['first'] ??= $log->created_at;
 
@@ -1475,7 +1842,7 @@ final class GroupInviteService
         $work['lookups'] = TelegramGroupInvite::query()
             ->where('telegram_account_id', $accountId)
             ->where('via', TelegramGroupInvite::VIA_USERNAME)
-            ->whereIn('status', [TelegramGroupInvite::STATUS_INVITED, TelegramGroupInvite::STATUS_FAILED])
+            ->whereIn('status', TelegramGroupInvite::SETTLED)
             ->where('attempted_at', '>', $from)
             ->count();
 
@@ -1542,6 +1909,7 @@ final class GroupInviteService
                 'status' => TelegramGroupInvite::STATUS_FAILED,
                 'error' => mb_substr($error, 0, 120),
                 'attempted_at' => now(),
+                'checked_at' => now(),
                 'updated_at' => now(),
             ]);
 
@@ -1585,13 +1953,16 @@ final class GroupInviteService
     }
 
     /**
-     * @param array{calls: int, invited: int, failed: int, stop: bool} $done
-     * @param array{invited: int, failed: int}                         $settled
+     * @param array<string, int|bool> $done
+     * @param array<string, int>      $settled
      */
-    private function tally(array &$done, TelegramInviteGroup $group, array $settled): void
+    private function tally(array &$done, TelegramAccount $account, TelegramInviteGroup $group, array $settled): void
     {
-        $done['invited'] += $settled['invited'];
-        $done['failed'] += $settled['failed'];
+        self::add($done, $settled);
+
+        if (isset($this->touched[$key = $account->id . ':' . $group->id])) {
+            self::add($this->touched[$key], $settled);
+        }
 
         if ($settled['invited'] > 0) {
             $this->invitedInto[$group->id] = true;
@@ -1603,7 +1974,8 @@ final class GroupInviteService
     }
 
     /**
-     * @param array{invited: int, failed: int} $settled
+     * @param array<string, int>   $settled
+     * @param array<string, mixed> $extra
      */
     private function logCall(
         TelegramAccount $account,
@@ -1613,17 +1985,140 @@ final class GroupInviteService
         int $size,
         array $settled,
         ?string $error = null,
+        array $extra = [],
     ): void {
-        $message = "{$settled['invited']} invited, {$settled['failed']} failed" . ($error !== null ? " ({$error})" : '');
+        $message = self::summary($settled) . ($error !== null ? " ({$error})" : '');
 
         $this->log(TelegramGroupInviteLog::EVENT_CALL, $message, $account->id, $group->id, [
             'batch_key' => $batchKey,
             'via' => $via,
             'size' => $size,
-            'invited' => $settled['invited'],
-            'failed' => $settled['failed'],
+            ...array_intersect_key($settled, self::ZERO),
             'error' => $error,
+            ...$extra,
         ]);
+    }
+
+    /**
+     * Writes where each person of the rows stands. $attempt is the time of
+     * the call; null when an earlier call is only being checked.
+     *
+     * @param Collection<int, TelegramGroupInvite>                  $rows
+     * @param array<int, string>                                    $refused  telegram user id => error
+     * @param array<int, array{status: string, error: string|null}> $verdicts telegram user id => where the person stands
+     *
+     * @return array{invited: int, not_added: int, already: int, sent: int, failed: int}
+     */
+    private function record(Collection $rows, array $refused, array $verdicts, ?Carbon $attempt): array
+    {
+        $now = now();
+        $counts = self::ZERO;
+        $invited = [];
+        $refusedBy = [];
+
+        foreach ($rows as $row) {
+            $id = (int) $row->user?->telegram_user_id;
+
+            $verdict = isset($refused[$id])
+                ? self::verdict(TelegramGroupInvite::STATUS_FAILED, $refused[$id])
+                : ($verdicts[$id] ?? self::verdict(TelegramGroupInvite::STATUS_SENT));
+
+            $row->update([
+                'status' => $verdict['status'],
+                'error' => $verdict['error'] !== null ? mb_substr($verdict['error'], 0, 120) : null,
+                'checked_at' => $verdict['status'] !== TelegramGroupInvite::STATUS_SENT ? $now : null,
+                ...($attempt !== null ? ['attempted_at' => $attempt] : []),
+            ]);
+
+            $counts[$verdict['status']]++;
+
+            if ($verdict['status'] === TelegramGroupInvite::STATUS_INVITED) {
+                $invited[] = $row->scraped_user_id;
+            }
+
+            if (isset($refused[$id])) {
+                $refusedBy[$refused[$id]][] = $row->scraped_user_id;
+            }
+        }
+
+        $this->mark($invited, true);
+
+        foreach ($refusedBy as $error => $ids) {
+            $this->mark($ids, false, (string) $error);
+        }
+
+        return $counts;
+    }
+
+    /**
+     * @return array{status: string, error: string|null}
+     */
+    private static function verdict(string $status, ?string $error = null): array
+    {
+        return ['status' => $status, 'error' => $error];
+    }
+
+    /**
+     * The same verdict for everybody of a call.
+     *
+     * @param Collection<int, TelegramScrapedUser> $people
+     *
+     * @return array<int, array{status: string, error: string|null}>
+     */
+    private static function verdicts(Collection $people, string $status, ?string $error = null): array
+    {
+        return $people
+            ->mapWithKeys(fn (TelegramScrapedUser $user) => [(int) $user->telegram_user_id => self::verdict($status, $error)])
+            ->all();
+    }
+
+    /**
+     * Adds what people came to into a running count.
+     *
+     * @param array<string, mixed> $into
+     * @param array<string, mixed> $from
+     */
+    private static function add(array &$into, array $from): void
+    {
+        foreach (array_keys(self::ZERO) as $key) {
+            $into[$key] = (int) ($into[$key] ?? 0) + (int) ($from[$key] ?? 0);
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $counts
+     */
+    private static function summary(array $counts): string
+    {
+        $line = sprintf(
+            '%d added, %d not added, %d cannot be added',
+            $counts['invited'] ?? 0,
+            $counts['not_added'] ?? 0,
+            $counts['failed'] ?? 0,
+        );
+
+        if (($counts['already'] ?? 0) > 0) {
+            $line .= ", {$counts['already']} already in";
+        }
+
+        if (($counts['sent'] ?? 0) > 0) {
+            $line .= ", {$counts['sent']} unchecked";
+        }
+
+        return $line;
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     */
+    private function checkPause(array $config): void
+    {
+        /* No pause between calls set on the panel: none between the checks either. */
+        if ((int) ($config['delay_max'] ?? 0) <= 0) {
+            return;
+        }
+
+        usleep(random_int(...self::CHECK_PAUSE_MS) * 1000);
     }
 
     private function peer(TelegramInviteGroup $group): int|string
@@ -1660,30 +2155,53 @@ final class GroupInviteService
     }
 
     /**
-     * The user a contacts.resolveUsername answer points at, if it is a user.
+     * The people Telegram's own "added" service message names: they are in
+     * the group by this call, nothing has to be looked up.
      *
-     * @return array<string, mixed>|null
+     * @return array<int, true>
      */
-    private static function resolvedUser(mixed $resolved): ?array
+    private function addedIds(mixed $result): array
     {
-        if (! is_array($resolved)) {
-            return null;
+        if (! is_array($result)) {
+            return [];
         }
 
-        $peer = $resolved['peer'] ?? null;
-        $id = is_array($peer) ? (int) ($peer['user_id'] ?? 0) : (int) $peer;
+        /* messages.invitedUsers wraps the Updates; an older layer answers with the Updates itself. */
+        $box = $result['updates'] ?? [];
+        $list = is_array($box) && isset($box['_'])
+            ? ($box['updates'] ?? (isset($box['update']) ? [$box['update']] : []))
+            : $box;
 
-        if ($id <= 0) {
-            return null;
-        }
+        $added = [];
 
-        foreach ((array) ($resolved['users'] ?? []) as $user) {
-            if (is_array($user) && (int) ($user['id'] ?? 0) === $id) {
-                return $user;
+        foreach ((array) $list as $update) {
+            $action = is_array($update) ? ($update['message']['action'] ?? null) : null;
+
+            if (! is_array($action) || ($action['_'] ?? null) !== 'messageActionChatAddUser') {
+                continue;
+            }
+
+            foreach ((array) ($action['users'] ?? []) as $id) {
+                $added[(int) $id] = true;
             }
         }
 
-        return null;
+        return $added;
+    }
+
+    /**
+     * MadelineProto does not know the peer: a name nobody has, a person the
+     * session never met.
+     */
+    private static function peerMissing(Throwable $e): bool
+    {
+        for ($current = $e; $current !== null; $current = $current->getPrevious()) {
+            if ($current instanceof PeerNotInDbException) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function releaseStale(TelegramInviteGroup $group): void

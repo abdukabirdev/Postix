@@ -21,9 +21,33 @@ class TelegramGroupInvite extends Model
 {
     public const STATUS_PENDING = 'pending';
 
+    /** The call went through without an error; whether the person is in the group is not known yet. */
+    public const STATUS_SENT = 'sent';
+
+    /** In the group: Telegram's "added" message names them, or the check found them joined by the call. */
     public const STATUS_INVITED = 'invited';
 
+    /**
+     * Could be added, is not in the group: Telegram took the call and left
+     * them out without a word (left the group before, the account held
+     * quietly), or only a mutual contact may bring them back.
+     */
+    public const STATUS_NOT_ADDED = 'not_added';
+
+    /** Was in the group before the call. */
+    public const STATUS_ALREADY = 'already';
+
+    /** Cannot be added: Telegram refused because of the person (privacy, a link to their DMs or Premium only, a deleted account ...). */
     public const STATUS_FAILED = 'failed';
+
+    /** Every status a try ends in. */
+    public const SETTLED = [
+        self::STATUS_SENT,
+        self::STATUS_INVITED,
+        self::STATUS_NOT_ADDED,
+        self::STATUS_ALREADY,
+        self::STATUS_FAILED,
+    ];
 
     /** The account's own contact: its session already knows the person. */
     public const VIA_CONTACT = 'contact';
@@ -40,12 +64,14 @@ class TelegramGroupInvite extends Model
         'error',
         'batch_key',
         'attempted_at',
+        'checked_at',
     ];
 
     protected function casts(): array
     {
         return [
             'attempted_at' => 'datetime',
+            'checked_at' => 'datetime',
         ];
     }
 

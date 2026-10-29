@@ -20,6 +20,12 @@ class TelegramGroupInviteLog extends Model
     /** A short FLOOD_WAIT waited out on the spot. */
     public const EVENT_WAIT = 'wait';
 
+    /** People sent earlier, looked up in the group: who is in it and who is not. */
+    public const EVENT_CHECK = 'check';
+
+    /** An account is done with a group: its member count before and after, next to what the calls did. */
+    public const EVENT_MEMBERS = 'members';
+
     /**
      * The account was stopped: a flood wait or a PEER_FLOOD (flood), nobody
      * added call after call (rest), a dead or frozen session (disabled).

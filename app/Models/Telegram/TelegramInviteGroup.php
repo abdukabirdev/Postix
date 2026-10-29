@@ -23,6 +23,9 @@ class TelegramInviteGroup extends Model
         'title',
         'link',
         'telegram_chat_id',
+        'members_before',
+        'members_after',
+        'members_checked_at',
         'is_active',
         'last_error',
     ];
@@ -32,6 +35,9 @@ class TelegramInviteGroup extends Model
         return [
             'is_active' => 'boolean',
             'telegram_chat_id' => 'integer',
+            'members_before' => 'integer',
+            'members_after' => 'integer',
+            'members_checked_at' => 'datetime',
         ];
     }
 

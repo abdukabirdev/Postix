@@ -10,6 +10,7 @@
             show: @js(route('api.telegram.group-invites.show')),
             settings: @js(route('api.telegram.group-invites.settings')),
             run: @js(route('api.telegram.group-invites.run')),
+            check: @js(route('api.telegram.group-invites.check')),
             results: @js(route('api.telegram.group-invites.results')),
             retry: @js(route('api.telegram.group-invites.retry')),
             groups: @js(url('/api/telegram/group-invites/groups')),
@@ -36,6 +37,17 @@
                     <x-driver-check.icon name="refresh" class="h-4 w-4" ::class="loading && 'animate-spin'" />
                 </x-driver-check.button>
 
+                <x-driver-check.button
+                    icon="check-circle"
+                    x-show="totals.sent > 0"
+                    x-cloak
+                    x-on:click="check()"
+                    ::disabled="busy || running"
+                    :title="__('driver_check.invites.check_hint')"
+                >
+                    {{ __('driver_check.invites.check') }}
+                </x-driver-check.button>
+
                 <x-driver-check.button variant="primary" icon="play" x-on:click="run()" ::disabled="busy || running">
                     <span x-text="running ? t.running : t.run"></span>
                 </x-driver-check.button>
@@ -46,24 +58,31 @@
 
         <div class="flex flex-col gap-5">
 
+            {{-- The three that matter first: added, could be but were not, cannot be (junk). --}}
             <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
                 <x-driver-check.stat-card :label="__('driver_check.invites.totals.invited')">
-                    <span x-text="number(totals.invited)"></span>
+                    <span class="text-success-600 dark:text-success-400" x-text="number(totals.invited)"></span>
+                    <x-slot:hint>
+                        <span x-text="t.totals.invited_hint.replace(':today', number(totals.today)).replace(':username', number(totals.by_username))"></span>
+                    </x-slot:hint>
+                </x-driver-check.stat-card>
+                <x-driver-check.stat-card :label="__('driver_check.invites.totals.not_added')" :hint="__('driver_check.invites.totals.not_added_hint')">
+                    <span class="text-warning-600 dark:text-warning-400" x-text="number(totals.not_added)"></span>
                 </x-driver-check.stat-card>
                 <x-driver-check.stat-card :label="__('driver_check.invites.totals.failed')">
-                    <span x-text="number(totals.failed)"></span>
+                    <span class="text-error-600 dark:text-error-400" x-text="number(totals.failed)"></span>
+                    <x-slot:hint>
+                        <span x-text="t.totals.failed_hint.replace(':n', number(totals.refused))"></span>
+                    </x-slot:hint>
                 </x-driver-check.stat-card>
-                <x-driver-check.stat-card :label="__('driver_check.invites.totals.today')">
-                    <span x-text="number(totals.today)"></span>
+                <x-driver-check.stat-card :label="__('driver_check.invites.totals.already')" :hint="__('driver_check.invites.totals.already_hint')">
+                    <span x-text="number(totals.already)"></span>
+                </x-driver-check.stat-card>
+                <x-driver-check.stat-card :label="__('driver_check.invites.totals.sent')" :hint="__('driver_check.invites.totals.sent_hint')">
+                    <span x-text="number(totals.sent)"></span>
                 </x-driver-check.stat-card>
                 <x-driver-check.stat-card :label="__('driver_check.invites.totals.batches')">
                     <span x-text="number(totals.batches_today)"></span>
-                </x-driver-check.stat-card>
-                <x-driver-check.stat-card :label="__('driver_check.invites.totals.by_username')">
-                    <span x-text="number(totals.by_username)"></span>
-                </x-driver-check.stat-card>
-                <x-driver-check.stat-card :label="__('driver_check.invites.totals.refused')">
-                    <span x-text="number(totals.refused)"></span>
                 </x-driver-check.stat-card>
             </section>
 
@@ -103,9 +122,31 @@
                                     <p class="truncate text-[13px] font-semibold text-gray-950 dark:text-white" x-text="group.title || group.link"></p>
                                     <p class="truncate text-[12px] text-gray-500" x-text="group.link"></p>
                                     <p class="mt-1 text-[12px] tabular-nums text-gray-500">
-                                        <span x-text="t.groups.invited.replace(':n', number(group.invited))"></span>
+                                        <span class="text-success-600 dark:text-success-400" x-text="t.groups.invited.replace(':n', number(group.invited))"></span>
                                         <span class="px-1">·</span>
-                                        <span x-text="t.groups.failed.replace(':n', number(group.failed))"></span>
+                                        <span class="text-warning-600 dark:text-warning-400" x-text="t.groups.not_added.replace(':n', number(group.not_added))"></span>
+                                        <span class="px-1">·</span>
+                                        <span class="text-error-600 dark:text-error-400" x-text="t.groups.failed.replace(':n', number(group.failed))"></span>
+                                        <template x-if="group.already > 0">
+                                            <span><span class="px-1">·</span><span x-text="t.groups.already.replace(':n', number(group.already))"></span></span>
+                                        </template>
+                                        <template x-if="group.sent > 0">
+                                            <span><span class="px-1">·</span><span x-text="t.groups.sent.replace(':n', number(group.sent))"></span></span>
+                                        </template>
+                                    </p>
+                                    <p
+                                        x-show="group.members_before !== null || group.members_after !== null"
+                                        x-cloak
+                                        class="mt-0.5 text-[12px] tabular-nums text-gray-500"
+                                        :title="t.groups.members_hint"
+                                    >
+                                        <span x-text="membersLine(group)"></span>
+                                        <span
+                                            x-show="membersGrew(group) !== null"
+                                            class="ml-1 font-semibold"
+                                            :class="membersGrew(group) > 0 ? 'text-success-600 dark:text-success-400' : 'text-gray-400'"
+                                            x-text="'(' + (membersGrew(group) > 0 ? '+' : '') + number(membersGrew(group)) + ')'"
+                                        ></span>
                                     </p>
                                     <p x-show="group.last_error" x-cloak class="mt-1 text-[12px] text-error-600 dark:text-error-400" x-text="errorLabel(group.last_error, true)" :title="group.last_error"></p>
                                 </div>
@@ -198,15 +239,16 @@
                 <p x-show="accounts.length === 0" x-cloak class="px-4 py-8 text-center text-[13px] text-gray-500">{{ __('driver_check.invites.accounts.empty') }}</p>
 
                 <div class="overflow-x-auto">
-                    <table class="w-full min-w-[760px] text-left text-[13px]">
+                    <table class="w-full min-w-[860px] text-left text-[13px]">
                         <thead class="text-[11px] uppercase tracking-wide text-gray-400">
                             <tr>
                                 <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.accounts.account') }}</th>
                                 <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.accounts.contacts') }}</th>
                                 <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.accounts.batches') }}</th>
                                 <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.accounts.usernames') }}</th>
-                                <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.totals.invited') }}</th>
-                                <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.totals.failed') }}</th>
+                                <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.accounts.invited') }}</th>
+                                <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.accounts.not_added') }}</th>
+                                <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.accounts.failed') }}</th>
                                 <th class="px-4 py-2 font-medium"></th>
                             </tr>
                         </thead>
@@ -224,7 +266,11 @@
                                         <p x-show="account.cap_lowered" x-cloak class="text-[11px] text-gray-400" x-text="t.accounts.cap_lowered"></p>
                                     </td>
                                     <td class="px-4 py-2.5 tabular-nums" x-text="number(account.usernames_today) + ' / ' + number(settings?.use_usernames ? settings.usernames_per_day : 0)"></td>
-                                    <td class="px-4 py-2.5 tabular-nums" x-text="number(account.invited)"></td>
+                                    <td class="px-4 py-2.5 tabular-nums">
+                                        <span x-text="number(account.invited)"></span>
+                                        <p x-show="account.sent > 0" x-cloak class="text-[11px] text-gray-400" x-text="t.groups.sent.replace(':n', number(account.sent))"></p>
+                                    </td>
+                                    <td class="px-4 py-2.5 tabular-nums" x-text="number(account.not_added)"></td>
                                     <td class="px-4 py-2.5 tabular-nums" x-text="number(account.failed)"></td>
                                     <td class="px-4 py-2.5 text-right">
                                         <button
@@ -263,11 +309,11 @@
                         </select>
                         <select class="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[13px] dark:border-gray-700 dark:bg-transparent dark:text-white" x-model="status" x-on:change="loadResults(1)">
                             <option value="">{{ __('driver_check.invites.results.all') }}</option>
-                            <option value="invited">{{ __('driver_check.invites.results.invited') }}</option>
-                            <option value="failed">{{ __('driver_check.invites.results.failed') }}</option>
-                            <option value="pending">{{ __('driver_check.invites.results.pending') }}</option>
+                            @foreach (['invited', 'not_added', 'failed', 'already', 'sent', 'pending'] as $option)
+                                <option value="{{ $option }}">{{ __("driver_check.invites.results.filters.{$option}") }}</option>
+                            @endforeach
                         </select>
-                        <x-driver-check.button size="sm" x-show="totals.failed > 0" x-cloak x-on:click="retryFailed()">
+                        <x-driver-check.button size="sm" x-show="retryable() > 0" x-cloak x-on:click="retryFailed()">
                             {{ __('driver_check.invites.results.retry') }}
                         </x-driver-check.button>
                     </div>
@@ -286,14 +332,20 @@
                                     <span x-show="row.group" x-text="' · ' + (row.group?.title || '')"></span>
                                     <span x-text="' · ' + (row.via === 'username' ? t.results.via_username : t.results.via_contact)"></span>
                                 </p>
-                                <p x-show="row.error" x-cloak class="mt-0.5 text-[12px] text-error-600 dark:text-error-400" :title="row.error">
+                                <p
+                                    x-show="row.error"
+                                    x-cloak
+                                    class="mt-0.5 text-[12px]"
+                                    :class="row.status === 'failed' ? 'text-error-600 dark:text-error-400' : (row.status === 'not_added' ? 'text-warning-600 dark:text-warning-400' : 'text-gray-500')"
+                                    :title="row.error"
+                                >
                                     <span x-text="errorLabel(row.error)"></span>
                                     <span x-show="row.user?.can_add_to_group === false" x-text="' · ' + t.results.refused"></span>
                                 </p>
                             </div>
                             <span
                                 class="shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold"
-                                :class="row.status === 'invited' ? 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400' : (row.status === 'failed' ? 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400' : 'bg-gray-100 text-gray-600 dark:bg-white/10 dark:text-gray-300')"
+                                :class="statusClass(row.status)"
                                 x-text="statusLabel(row.status)"
                             ></span>
                         </li>

@@ -805,6 +805,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                 Route::get('/', 'show')->name('api.telegram.group-invites.show');
                 Route::put('/settings', 'updateSettings')->name('api.telegram.group-invites.settings');
                 Route::post('/run', 'run')->name('api.telegram.group-invites.run');
+                Route::post('/check', 'check')->name('api.telegram.group-invites.check');
                 Route::get('/results', 'results')->name('api.telegram.group-invites.results');
                 Route::post('/retry-failed', 'retryFailed')->name('api.telegram.group-invites.retry');
                 Route::post('/groups', 'storeGroup')->name('api.telegram.group-invites.groups.store');

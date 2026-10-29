@@ -5,6 +5,7 @@ namespace Tests\Feature\Telegram;
 use App\Application\Telegram\Services\GroupInviteService;
 use App\Application\Telegram\Services\GroupInviteSettings;
 use App\Application\Telegram\Services\MadelineService;
+use App\Application\Telegram\Support\UsernameLookup;
 use ArrayObject;
 use danog\MadelineProto\API;
 use Mockery;
@@ -36,6 +37,9 @@ use Tests\TestCase;
 final class GroupInviteTest extends TestCase
 {
     private GroupInviteService $service;
+
+    /** @var ArrayObject<int, int> every person looked up in the group */
+    private ArrayObject $checks;
 
     protected function setUp(): void
     {
@@ -76,6 +80,7 @@ final class GroupInviteTest extends TestCase
         (include database_path('migrations/2026_10_17_100000_create_telegram_account_contacts_state_tables.php'))->up();
         (include database_path('migrations/2026_10_29_120000_create_telegram_group_invite_tables.php'))->up();
         (include database_path('migrations/2026_10_29_140000_add_invite_flags_to_telegram_tables.php'))->up();
+        (include database_path('migrations/2026_10_29_160000_check_telegram_group_invites.php'))->up();
 
         DB::table('telegram_accounts')->insert([
             ['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001, 'session_path' => '/sessions/1'],
@@ -144,9 +149,13 @@ final class GroupInviteTest extends TestCase
         $this->assertCount(0, $this->service->candidates($account, $group, 20));
         $this->assertCount(0, $this->service->claim($account, $group, collect([$first]), (string) Str::uuid()));
 
-        $this->assertSame(['invited' => 1, 'failed' => 1], $this->service->settle($batch, [202 => 'missing_invitee']));
+        $this->assertSame(
+            ['invited' => 1, 'not_added' => 0, 'already' => 0, 'sent' => 0, 'failed' => 1],
+            $this->service->settle($batch, [202 => 'missing_invitee'], [201 => ['status' => TelegramGroupInvite::STATUS_INVITED, 'error' => null]]),
+        );
 
         $this->assertSame(TelegramGroupInvite::STATUS_INVITED, $this->inviteOf($first)->status);
+        $this->assertNotNull($this->inviteOf($first)->checked_at);
         $this->assertSame('missing_invitee', $this->inviteOf($second)->error);
 
         $this->assertTrue($first->fresh()->can_add_to_group);
@@ -254,6 +263,8 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(GroupInviteService::KIND_PERSON, GroupInviteService::classify($rpc('USER_PRIVACY_RESTRICTED', 403)));
         $this->assertSame(GroupInviteService::KIND_PERSON_HERE, GroupInviteService::classify($rpc('USER_KICKED')));
         $this->assertSame(GroupInviteService::KIND_ALREADY, GroupInviteService::classify($rpc('USER_ALREADY_PARTICIPANT')));
+        /* Left the group: not junk, only not by this call. */
+        $this->assertSame(GroupInviteService::KIND_NOT_ADDED, GroupInviteService::classify($rpc('USER_NOT_MUTUAL_CONTACT')));
 
         $this->assertSame(GroupInviteService::KIND_SPAM, GroupInviteService::classify($rpc('PEER_FLOOD')));
         $this->assertSame(GroupInviteService::KIND_WAIT, GroupInviteService::classify(new RateLimitError('FLOOD_WAIT_30', 30, 420, '')));
@@ -328,14 +339,16 @@ final class GroupInviteTest extends TestCase
                 throw RPCErrorException::make('USER_CHANNELS_TOO_MUCH', 400, '');
             }
 
-            return ['missing_invitees' => []];
+            return $this->added($users);
         });
 
         $totals = $this->service->run();
 
         /* 4 refused, 2 in, 2 refused, 1 refused, 1 in. */
         $this->assertSame([[501, 502, 503, 504], [501, 502], [503, 504], [503], [504]], $calls->getArrayCopy());
-        $this->assertSame(['accounts' => 1, 'batches' => 5, 'invited' => 3, 'failed' => 1], $totals);
+        $this->assertSame(['accounts' => 1, 'batches' => 5, 'invited' => 3, 'not_added' => 0, 'already' => 0, 'sent' => 0, 'failed' => 1], $totals);
+        /* Telegram's own message named everybody added: nobody had to be looked up. */
+        $this->assertCount(0, $this->checks);
         $this->assertSame(5, $this->service->callsToday(1));
 
         $this->assertSame(
@@ -354,11 +367,11 @@ final class GroupInviteTest extends TestCase
         $this->person(602, 'Beta', false, 'beta');
 
         $calls = $this->fakeTelegram(
-            invite: fn (array $users) => ['missing_invitees' => []],
+            invite: fn (array $users) => $this->added($users),
             resolve: fn (string $username) => match ($username) {
-                'alpha' => ['peer' => 601, 'users' => [['_' => 'user', 'id' => 601]]],
+                'alpha' => ['_' => 'user', 'id' => 601],
                 /* The name is somebody else's by now. */
-                'beta' => ['peer' => 999, 'users' => [['_' => 'user', 'id' => 999]]],
+                'beta' => ['_' => 'user', 'id' => 999],
             },
         );
 
@@ -398,7 +411,7 @@ final class GroupInviteTest extends TestCase
         $this->assertGreaterThan(now()->addHours(23)->timestamp, strtotime($meta['rest_until']));
 
         /* Resting, it is not taken by the next run. */
-        $this->assertSame(['accounts' => 0, 'batches' => 0, 'invited' => 0, 'failed' => 0], $this->service->run());
+        $this->assertSame(['accounts' => 0, 'batches' => 0, 'invited' => 0, 'not_added' => 0, 'already' => 0, 'sent' => 0, 'failed' => 0], $this->service->run());
     }
 
     public function test_a_stop_keeps_what_the_account_did_before_it(): void
@@ -410,12 +423,12 @@ final class GroupInviteTest extends TestCase
         }
 
         $tries = 0;
-        $this->fakeTelegram(invite: function () use (&$tries) {
+        $this->fakeTelegram(invite: function (array $users) use (&$tries) {
             if (++$tries === 3) {
                 throw RPCErrorException::make('PEER_FLOOD', 400, '');
             }
 
-            return ['missing_invitees' => []];
+            return $this->added($users);
         });
 
         $settings = $this->app->make(GroupInviteSettings::class);
@@ -439,12 +452,12 @@ final class GroupInviteTest extends TestCase
         $this->hold(1, $this->person(801, 'One'));
 
         $tries = 0;
-        $calls = $this->fakeTelegram(invite: function () use (&$tries) {
+        $calls = $this->fakeTelegram(invite: function (array $users) use (&$tries) {
             if (++$tries === 1) {
                 throw new RateLimitError('FLOOD_WAIT_1', 1, 420, '');
             }
 
-            return ['missing_invitees' => []];
+            return $this->added($users);
         });
 
         $totals = $this->service->run();
@@ -452,6 +465,176 @@ final class GroupInviteTest extends TestCase
         $this->assertCount(2, $calls);
         $this->assertSame(1, $totals['invited']);
         $this->assertArrayNotHasKey('rest_until', $this->service->meta(TelegramAccount::query()->find(1)));
+    }
+
+    public function test_a_clean_answer_is_not_trusted_each_person_is_looked_up(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach ([1101 => 'Named', 1102 => 'Private', 1103 => 'Dropped', 1104 => 'Member', 1105 => 'Joined'] as $id => $name) {
+            $this->hold(1, $this->person($id, $name));
+        }
+
+        $calls = $this->fakeTelegram(
+            invite: fn (array $users) => [
+                ...$this->added([1101]),
+                'missing_invitees' => [['_' => 'missingInvitee', 'user_id' => 1102, 'premium_would_allow_invite' => false]],
+            ],
+            member: fn (int $id) => match ($id) {
+                /* Telegram said nothing and left them out. */
+                1103 => throw RPCErrorException::make('USER_NOT_PARTICIPANT', 400, ''),
+                1104 => ['participant' => ['_' => 'channelParticipant', 'user_id' => $id, 'date' => now()->subDays(30)->timestamp]],
+                /* In by the call, though no "added" message named them. */
+                1105 => ['participant' => ['_' => 'channelParticipant', 'user_id' => $id, 'date' => now()->timestamp]],
+            },
+        );
+
+        $totals = $this->service->run();
+
+        $this->assertCount(1, $calls);
+        $this->assertSame(['invited' => 2, 'not_added' => 1, 'already' => 1, 'sent' => 0, 'failed' => 1], array_intersect_key($totals, array_flip(['invited', 'not_added', 'already', 'sent', 'failed'])));
+
+        /* Neither the one the message named nor the one Telegram listed as missing is looked up. */
+        $this->assertSame([1103, 1104, 1105], $this->checks->getArrayCopy());
+
+        $this->assertSame([
+            1101 => [TelegramGroupInvite::STATUS_INVITED, null],
+            1102 => [TelegramGroupInvite::STATUS_FAILED, 'missing_invitee'],
+            1103 => [TelegramGroupInvite::STATUS_NOT_ADDED, GroupInviteService::NOT_IN_GROUP],
+            1104 => [TelegramGroupInvite::STATUS_ALREADY, null],
+            1105 => [TelegramGroupInvite::STATUS_INVITED, null],
+        ], TelegramGroupInvite::query()->with('user')->get()
+            ->mapWithKeys(fn ($row) => [$row->user->telegram_user_id => [$row->status, $row->error]])
+            ->sortKeys()
+            ->all());
+
+        /* Junk is refused everywhere; the dropped one could still be added elsewhere. */
+        $this->assertFalse(TelegramScrapedUser::query()->where('telegram_user_id', 1102)->value('can_add_to_group'));
+        $this->assertNull(TelegramScrapedUser::query()->where('telegram_user_id', 1103)->value('can_add_to_group'));
+
+        /* The member count before and after: the message added one. */
+        $group->refresh();
+        $this->assertSame([100, 101], [$group->members_before, $group->members_after]);
+
+        $members = TelegramGroupInviteLog::query()->where('event', TelegramGroupInviteLog::EVENT_MEMBERS)->sole();
+        $this->assertSame([100, 101, 1, 2, 1], [
+            $members->context['before'],
+            $members->context['after'],
+            $members->context['grew'],
+            $members->context['invited'],
+            $members->context['not_added'],
+        ]);
+    }
+
+    public function test_calls_that_add_nobody_rest_the_account_until_tomorrow(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach (range(1201, 1206) as $id) {
+            $this->hold(1, $this->person($id, "P{$id}"));
+        }
+
+        /* Held quietly: every call "succeeds", nobody gets in. */
+        $calls = $this->fakeTelegram(invite: fn () => ['missing_invitees' => []]);
+
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'batch_size' => 1]);
+
+        $totals = $this->service->run();
+
+        $this->assertCount(5, $calls);
+        $this->assertSame([0, 5], [$totals['invited'], $totals['not_added']]);
+        $this->assertSame(5, TelegramGroupInvite::query()->where('status', TelegramGroupInvite::STATUS_NOT_ADDED)->count());
+        $this->assertSame('NOBODY_ADDED', $this->service->meta(TelegramAccount::query()->find(1))['rest_reason']);
+    }
+
+    public function test_left_the_group_is_not_added_here_and_not_refused_elsewhere(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $left = $this->person(1301, 'Left'));
+        $this->hold(1, $member = $this->person(1302, 'Member'));
+
+        $this->fakeTelegram(invite: function (array $users) {
+            if (count($users) > 1) {
+                throw RPCErrorException::make('USER_NOT_MUTUAL_CONTACT', 400, '');
+            }
+
+            throw RPCErrorException::make($users === [1301] ? 'USER_NOT_MUTUAL_CONTACT' : 'USER_ALREADY_PARTICIPANT', 400, '');
+        });
+
+        $this->service->run();
+
+        $this->assertSame([TelegramGroupInvite::STATUS_NOT_ADDED, 'USER_NOT_MUTUAL_CONTACT'], [$this->inviteOf($left)->status, $this->inviteOf($left)->error]);
+        $this->assertNull($left->fresh()->can_add_to_group);
+        $this->assertSame(TelegramGroupInvite::STATUS_ALREADY, $this->inviteOf($member)->status);
+    }
+
+    public function test_people_sent_earlier_are_checked_and_nobody_is_invited(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $sentAt = now()->subHours(2);
+
+        foreach ([1401, 1402, 1403, 1404] as $id) {
+            TelegramGroupInvite::query()->create([
+                'invite_group_id' => $group->id,
+                'scraped_user_id' => $this->person($id, "P{$id}")->id,
+                'telegram_account_id' => 1,
+                'status' => TelegramGroupInvite::STATUS_SENT,
+                'attempted_at' => $sentAt,
+            ]);
+        }
+
+        /* An untried contact: a check invites nobody. */
+        $this->hold(1, $this->person(1405, 'Untried'));
+
+        $calls = $this->fakeTelegram(
+            invite: fn (array $users) => $this->added($users),
+            member: fn (int $id) => match ($id) {
+                1401 => ['participant' => ['_' => 'channelParticipant', 'user_id' => $id, 'date' => $sentAt->timestamp + 5]],
+                1402 => throw RPCErrorException::make('USER_NOT_PARTICIPANT', 400, ''),
+                1403 => ['participant' => ['_' => 'channelParticipant', 'user_id' => $id, 'date' => now()->subDays(10)->timestamp]],
+                1404 => ['participant' => ['_' => 'channelParticipantLeft', 'peer' => $id]],
+            },
+        );
+
+        $this->service->run(checkOnly: true);
+
+        $this->assertCount(0, $calls);
+        $this->assertSame([1401, 1402, 1403, 1404], $this->checks->getArrayCopy());
+        $this->assertSame(
+            [1401 => 'invited', 1402 => 'not_added', 1403 => 'already', 1404 => 'not_added'],
+            TelegramGroupInvite::query()->with('user')->where('status', '!=', TelegramGroupInvite::STATUS_PENDING)->get()
+                ->mapWithKeys(fn ($row) => [$row->user->telegram_user_id => $row->status])
+                ->sortKeys()
+                ->all(),
+        );
+        $this->assertSame(1, TelegramGroupInviteLog::query()->where('event', TelegramGroupInviteLog::EVENT_CHECK)->count());
+        /* The time of the call stays the call's. */
+        $this->assertSame($sentAt->timestamp, TelegramGroupInvite::query()->whereHas('user', fn ($q) => $q->where('telegram_user_id', 1401))->first()->attempted_at->timestamp);
+    }
+
+    public function test_a_group_that_shows_its_members_to_admins_only_leaves_people_unchecked(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach ([1501, 1502, 1503] as $id) {
+            $this->hold(1, $this->person($id, "P{$id}"));
+        }
+
+        $this->fakeTelegram(
+            invite: fn () => ['missing_invitees' => []],
+            member: fn () => throw RPCErrorException::make('CHAT_ADMIN_REQUIRED', 400, ''),
+        );
+
+        $totals = $this->service->run();
+
+        /* Looked up once; the others are not tried in this run. */
+        $this->assertCount(1, $this->checks);
+        $this->assertSame(3, $totals['sent']);
+        $this->assertSame(
+            ['CHECK_CHAT_ADMIN_REQUIRED'],
+            TelegramGroupInvite::query()->where('status', TelegramGroupInvite::STATUS_SENT)->distinct()->pluck('error')->all(),
+        );
     }
 
     public function test_the_page_shows_how_each_account_stands_and_resume_clears_it(): void
@@ -518,21 +701,52 @@ final class GroupInviteTest extends TestCase
     }
 
     /**
-     * A session stand-in: the class is final, but its namespaces are plain
-     * properties. Joining always works; the invite and the lookups answer
-     * as the test says. No pauses between calls.
+     * What Telegram answers when it added these people: the "added" service
+     * message names them.
      *
-     * @return ArrayObject<int, list<int>> the users of every invite call
+     * @param list<int> $ids
+     *
+     * @return array<string, mixed>
      */
-    private function fakeTelegram(callable $invite, ?callable $resolve = null): ArrayObject
+    private function added(array $ids): array
+    {
+        return [
+            '_' => 'messages.invitedUsers',
+            'updates' => [
+                '_' => 'updates',
+                'updates' => [[
+                    '_' => 'updateNewChannelMessage',
+                    'message' => [
+                        '_' => 'messageService',
+                        'action' => ['_' => 'messageActionChatAddUser', 'users' => $ids],
+                    ],
+                ]],
+            ],
+            'missing_invitees' => [],
+        ];
+    }
+
+    /**
+     * A session stand-in: the class is final, but its namespaces are plain
+     * properties. Joining always works; the invite, the @username lookups
+     * and the member checks answer as the test says - nobody is a member
+     * unless $member says so. The group has 100 members, and every one the
+     * "added" message names. No pauses between calls.
+     *
+     * @return ArrayObject<int, list<int>> the users of every invite call; $this->checks holds every person looked up
+     */
+    private function fakeTelegram(callable $invite, ?callable $resolve = null, ?callable $member = null): ArrayObject
     {
         $calls = new ArrayObject;
+        $this->checks = new ArrayObject;
 
         $api = (new ReflectionClass(API::class))->newInstanceWithoutConstructor();
 
-        $api->channels = new class($invite, $calls)
+        $api->channels = new class($invite, $calls, $this->checks, $member)
         {
-            public function __construct(private $invite, private ArrayObject $calls) {}
+            private int $members = 100;
+
+            public function __construct(private $invite, private ArrayObject $calls, private ArrayObject $checks, private $member) {}
 
             public function joinChannel(mixed ...$args): array
             {
@@ -543,19 +757,41 @@ final class GroupInviteTest extends TestCase
             {
                 $this->calls[] = $args['users'];
 
-                return ($this->invite)($args['users']);
+                $answer = ($this->invite)($args['users']);
+
+                foreach ((array) ($answer['updates']['updates'] ?? []) as $update) {
+                    $this->members += count((array) ($update['message']['action']['users'] ?? []));
+                }
+
+                return $answer;
+            }
+
+            public function getParticipant(mixed ...$args): mixed
+            {
+                $this->checks[] = $args['participant'];
+
+                if ($this->member === null) {
+                    throw RPCErrorException::make('USER_NOT_PARTICIPANT', 400, '');
+                }
+
+                return ($this->member)($args['participant']);
+            }
+
+            public function getParticipants(mixed ...$args): array
+            {
+                return ['count' => $this->members, 'participants' => []];
             }
         };
 
-        $api->contacts = new class($resolve)
+        $this->app->instance(UsernameLookup::class, new class($resolve) extends UsernameLookup
         {
             public function __construct(private $resolve) {}
 
-            public function resolveUsername(mixed ...$args): mixed
+            public function user(API $api, string $username): ?array
             {
-                return ($this->resolve)($args['username']);
+                return ($this->resolve)($username);
             }
-        };
+        });
 
         $madeline = Mockery::mock(MadelineService::class);
         $madeline->shouldReceive('for')->andReturn($api);

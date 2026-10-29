@@ -49,8 +49,15 @@ final class GroupInviteController extends Controller
                     'is_active' => $group->is_active,
                     'last_error' => $group->last_error,
                     'invited' => (int) ($counts[TelegramGroupInvite::STATUS_INVITED] ?? 0),
+                    'not_added' => (int) ($counts[TelegramGroupInvite::STATUS_NOT_ADDED] ?? 0),
+                    'already' => (int) ($counts[TelegramGroupInvite::STATUS_ALREADY] ?? 0),
+                    'sent' => (int) ($counts[TelegramGroupInvite::STATUS_SENT] ?? 0),
                     'failed' => (int) ($counts[TelegramGroupInvite::STATUS_FAILED] ?? 0),
                     'pending' => (int) ($counts[TelegramGroupInvite::STATUS_PENDING] ?? 0),
+                    /* The member count when the last run came to the group and when it was done with it. */
+                    'members_before' => $group->members_before,
+                    'members_after' => $group->members_after,
+                    'members_checked_at' => $group->members_checked_at,
                 ];
             });
 
@@ -66,7 +73,7 @@ final class GroupInviteController extends Controller
 
         $usernamesToday = TelegramGroupInvite::query()
             ->where('via', TelegramGroupInvite::VIA_USERNAME)
-            ->whereIn('status', [TelegramGroupInvite::STATUS_INVITED, TelegramGroupInvite::STATUS_FAILED])
+            ->whereIn('status', TelegramGroupInvite::SETTLED)
             ->where('attempted_at', '>=', $today)
             ->selectRaw('telegram_account_id, COUNT(*) as total')
             ->groupBy('telegram_account_id')
@@ -104,6 +111,8 @@ final class GroupInviteController extends Controller
                     'cap_lowered' => isset($meta['cap']) && (int) $meta['cap'] < $limit,
                     'usernames_today' => (int) ($usernamesToday[$account->id] ?? 0),
                     'invited' => (int) ($counts[TelegramGroupInvite::STATUS_INVITED] ?? 0),
+                    'not_added' => (int) ($counts[TelegramGroupInvite::STATUS_NOT_ADDED] ?? 0),
+                    'sent' => (int) ($counts[TelegramGroupInvite::STATUS_SENT] ?? 0),
                     'failed' => (int) ($counts[TelegramGroupInvite::STATUS_FAILED] ?? 0),
                     'held' => $state !== null && ! $state->is_available,
                     'held_reason' => $state !== null && ! $state->is_available ? $state->disabled_reason : null,
@@ -114,7 +123,14 @@ final class GroupInviteController extends Controller
             });
 
         $totals = [
+            /* In the group: Telegram named them or the check found them. */
             'invited' => (int) $groups->sum('invited'),
+            /* Could be added, are not in the group. */
+            'not_added' => (int) $groups->sum('not_added'),
+            'already' => (int) $groups->sum('already'),
+            /* The call went through, not checked yet. */
+            'sent' => (int) $groups->sum('sent'),
+            /* Cannot be added. */
             'failed' => (int) $groups->sum('failed'),
             'pending' => (int) $groups->sum('pending'),
             'today' => TelegramGroupInvite::query()
@@ -183,6 +199,24 @@ final class GroupInviteController extends Controller
 
         return response()->json([
             'message' => __('driver_check.invites.messages.run_queued'),
+        ]);
+    }
+
+    /**
+     * Look the people already sent up in their groups, nobody invited.
+     */
+    public function check(): JsonResponse
+    {
+        if (TelegramProcessLock::isHeld(TelegramGroupInviteCommand::LOCK_NAME)) {
+            return response()->json([
+                'message' => __('driver_check.invites.messages.already_running'),
+            ], 409);
+        }
+
+        StartGroupInviteJob::dispatch(check: true)->onQueue('telegram');
+
+        return response()->json([
+            'message' => __('driver_check.invites.messages.check_queued'),
         ]);
     }
 
@@ -256,17 +290,22 @@ final class GroupInviteController extends Controller
     }
 
     /**
-     * Forget the failures so the next run tries those people again, those
-     * Telegram refused for everybody included. Who was invited stays invited.
+     * Forget the failures so the next run tries those people again: the ones
+     * that cannot be added (those Telegram refused for everybody included),
+     * the ones that could be but are not in the group, or both. Who was
+     * invited stays invited.
      */
     public function retryFailed(Request $request): JsonResponse
     {
         $data = $request->validate([
             'group_id' => ['nullable', 'integer', 'exists:telegram_invite_groups,id'],
+            'status' => ['nullable', 'in:failed,not_added'],
         ]);
 
         $failed = TelegramGroupInvite::query()
-            ->where('status', TelegramGroupInvite::STATUS_FAILED)
+            ->whereIn('status', filled($data['status'] ?? null)
+                ? [$data['status']]
+                : [TelegramGroupInvite::STATUS_FAILED, TelegramGroupInvite::STATUS_NOT_ADDED])
             ->when(filled($data['group_id'] ?? null), fn ($q) => $q->where('invite_group_id', (int) $data['group_id']));
 
         TelegramScrapedUser::query()
@@ -285,7 +324,7 @@ final class GroupInviteController extends Controller
     public function results(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'status' => ['nullable', 'in:invited,failed,pending'],
+            'status' => ['nullable', 'in:invited,not_added,already,sent,failed,pending'],
             'via' => ['nullable', 'in:contact,username'],
             'group_id' => ['nullable', 'integer'],
             'account_id' => ['nullable', 'integer'],
@@ -328,6 +367,7 @@ final class GroupInviteController extends Controller
                 'via' => $row->via,
                 'error' => $row->error,
                 'attempted_at' => $row->attempted_at,
+                'checked_at' => $row->checked_at,
                 'user' => $row->user ? [
                     'id' => $row->user->id,
                     'telegram_user_id' => $row->user->telegram_user_id,
