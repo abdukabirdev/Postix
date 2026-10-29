@@ -89,12 +89,8 @@
                                         <p class="truncate text-sm font-medium text-gray-900 dark:text-white" x-text="groupName(group)"></p>
                                         <p class="text-[12px] text-gray-500 dark:text-gray-400">
                                             <span class="tabular-nums" x-text="number(group.users_count) + ' ' + t.groups.people"></span>
-                                            {{-- How many Telegram says are in it: more than read means the list was cut short --}}
-                                            <span x-show="group.members_count > group.users_count" x-cloak class="tabular-nums" :title="t.groups.in_telegram_hint" x-text="t.groups.in_telegram.replace(':n', number(group.members_count))"></span>
                                             ·
-                                            <span class="tabular-nums" :class="group.waiting_count > 0 && 'text-warning-700 dark:text-warning-400'" :title="t.groups.waiting_hint" x-text="t.groups.waiting.replace(':n', number(group.waiting_count ?? 0))"></span>
-                                            ·
-                                            <span class="tabular-nums" :title="t.groups.not_waiting_hint" x-text="t.groups.not_waiting.replace(':n', number(Math.max(0, (group.users_count ?? 0) - (group.waiting_count ?? 0))))"></span>
+                                            <span class="tabular-nums" :class="group.waiting_count > 0 && 'text-warning-700 dark:text-warning-400'" x-text="t.groups.waiting.replace(':n', number(group.waiting_count ?? 0))"></span>
                                             ·
                                             <span x-text="group.last_synced_at ? relative(group.last_synced_at) : ui.never"></span>
                                         </p>
