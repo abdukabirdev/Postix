@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\AccountContactsService;
+use App\Application\Telegram\Services\GroupInviteService;
 use App\Application\Telegram\Services\GroupInviteSettings;
 use App\Console\Commands\Telegram\TelegramGroupInviteCommand;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
@@ -16,6 +17,7 @@ use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramGroupInviteLog;
 use App\Models\Telegram\TelegramInviteGroup;
 use App\Models\Telegram\TelegramScrapedUser;
+use App\Models\Telegram\TelegramSetting;
 use App\Telegram\TelegramProcessLock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -146,8 +148,11 @@ final class GroupInviteController extends Controller
             'refused' => TelegramScrapedUser::query()->where('can_add_to_group', false)->count(),
         ];
 
+        $running = TelegramProcessLock::isHeld(TelegramGroupInviteCommand::LOCK_NAME);
+
         return response()->json([
-            'running' => TelegramProcessLock::isHeld(TelegramGroupInviteCommand::LOCK_NAME),
+            'running' => $running,
+            'now' => self::now($running),
             'settings' => $config,
             'saved' => $this->settings->isSaved(),
             'limits' => GroupInviteSettings::LIMITS,
@@ -217,6 +222,95 @@ final class GroupInviteController extends Controller
 
         return response()->json([
             'message' => __('driver_check.invites.messages.check_queued'),
+        ]);
+    }
+
+    /**
+     * Ask the run to stop: it finishes the step in hand, gives back the
+     * people it has taken and ends. The run may be another OS user's
+     * process, so it is asked, not killed.
+     */
+    public function stop(): JsonResponse
+    {
+        if (! TelegramProcessLock::isHeld(TelegramGroupInviteCommand::LOCK_NAME)) {
+            return response()->json([
+                'message' => __('driver_check.invites.messages.not_running'),
+            ], 409);
+        }
+
+        $now = (array) TelegramSetting::get(GroupInviteService::NOW_KEY, []);
+        $runId = is_string($now['run_id'] ?? null) && ($now['finished_at'] ?? null) === null ? $now['run_id'] : null;
+
+        GroupInviteService::requestStop($runId);
+
+        TelegramGroupInviteLog::query()->create([
+            'run_id' => $runId ?? '',
+            'event' => TelegramGroupInviteLog::EVENT_STOP,
+            'message' => 'Stop asked from the panel',
+            'context' => ['user_id' => auth()->id()],
+        ]);
+
+        return response()->json([
+            'message' => __('driver_check.invites.messages.stop_queued'),
+        ]);
+    }
+
+    /**
+     * One run's log, newest line first, with the last runs to pick from.
+     * Without a run id: the latest run.
+     */
+    public function logs(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'run_id' => ['nullable', 'string', 'max:36'],
+            'limit' => ['nullable', 'integer', 'min:20', 'max:500'],
+        ]);
+
+        $starts = TelegramGroupInviteLog::query()
+            ->where('event', 'started')
+            ->latest('id')
+            ->limit(20)
+            ->get(['id', 'run_id', 'context', 'created_at']);
+
+        $finished = TelegramGroupInviteLog::query()
+            ->where('event', 'finished')
+            ->whereIn('run_id', $starts->pluck('run_id'))
+            ->get(['run_id', 'context', 'created_at'])
+            ->keyBy('run_id');
+
+        $runs = $starts->map(fn (TelegramGroupInviteLog $start) => [
+            'run_id' => $start->run_id,
+            'started_at' => $start->created_at,
+            'finished_at' => $finished->get($start->run_id)?->created_at,
+            'check_only' => (bool) ($start->context['check_only'] ?? false),
+            'trigger' => $start->context['trigger'] ?? 'manual',
+            'stopped' => (bool) ($finished->get($start->run_id)?->context['stopped'] ?? false),
+            'totals' => $finished->get($start->run_id)?->context,
+        ])->values();
+
+        $runId = $data['run_id'] ?? $starts->first()?->run_id;
+
+        $lines = $runId === null ? collect() : TelegramGroupInviteLog::query()
+            ->where('run_id', $runId)
+            ->with(['account:id,phone', 'group:id,title,link'])
+            ->latest('id')
+            ->limit((int) ($data['limit'] ?? 300))
+            ->get()
+            ->map(fn (TelegramGroupInviteLog $line) => [
+                'id' => $line->id,
+                'event' => $line->event,
+                'message' => $line->message,
+                'context' => $line->context,
+                'created_at' => $line->created_at,
+                'account' => $line->account?->phone,
+                'group' => $line->group ? ($line->group->title ?: $line->group->link) : null,
+            ])
+            ->values();
+
+        return response()->json([
+            'run_id' => $runId,
+            'runs' => $runs,
+            'lines' => $lines,
         ]);
     }
 
@@ -392,6 +486,33 @@ final class GroupInviteController extends Controller
                 'total' => $page->total(),
             ],
         ]);
+    }
+
+    /**
+     * What the run is doing now, as it last wrote it; or how the last one
+     * ended. silent_for: seconds since it last said anything - a live run
+     * says something at least every few seconds, so minutes of silence is a
+     * run that hangs.
+     *
+     * @return array<string, mixed>|null
+     */
+    private static function now(bool $running): ?array
+    {
+        $now = TelegramSetting::get(GroupInviteService::NOW_KEY);
+
+        if (! is_array($now) || ! isset($now['run_id'])) {
+            return null;
+        }
+
+        $heartbeat = is_string($now['heartbeat_at'] ?? null) ? strtotime($now['heartbeat_at']) : false;
+        $asked = TelegramSetting::get(GroupInviteService::STOP_KEY);
+
+        return [
+            ...$now,
+            'running' => $running && ($now['finished_at'] ?? null) === null,
+            'silent_for' => $heartbeat !== false ? max(0, now()->timestamp - $heartbeat) : null,
+            'stop_asked' => $running && $asked !== null && ($asked === '*' || $asked === $now['run_id']),
+        ];
     }
 
     /**

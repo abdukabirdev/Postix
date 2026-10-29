@@ -42,13 +42,27 @@ export function groupInvitesPage(config) {
         link: '',
         status: '',
         groupId: '',
+        search: '',
         results: [],
         meta: { current_page: 1, last_page: 1, total: 0 },
 
+        /* What the run is doing now (or how the last one ended), and when the page heard it. */
+        now: null,
+        fetchedAt: Date.now(),
+        tick: Date.now(),
+
+        logRuns: [],
+        logRunId: '',
+        logRunPicked: false,
+        logLines: [],
+        logFilter: 'all',
+
         poll: null,
+        ticker: null,
 
         init() {
             this.load();
+            this.loadLogs();
             this.loadResults();
         },
 
@@ -66,7 +80,18 @@ export function groupInvitesPage(config) {
 
             try {
                 const json = await requestJson(this.endpoints.show);
+                const wasRunning = this.running;
                 this.running = !!json.running;
+                this.now = json.now ?? null;
+                this.fetchedAt = Date.now();
+                this.tick = this.fetchedAt;
+
+                /* Just ended: the last lines and results once more. */
+                if (wasRunning && !this.running) {
+                    this.loadLogs();
+                    this.loadResults(1);
+                }
+
                 this.groups = json.groups ?? [];
                 this.accounts = json.accounts ?? [];
                 this.totals = json.totals ?? this.totals;
@@ -199,6 +224,7 @@ export function groupInvitesPage(config) {
                 const json = await requestJson(this.endpoints.run, 'POST', {});
                 notify(json.message);
                 this.running = true;
+                this.logRunPicked = false;
                 this.startPoll();
             } catch (error) {
                 notify(error?.message || t.load_failed, false);
@@ -218,12 +244,364 @@ export function groupInvitesPage(config) {
                 const json = await requestJson(this.endpoints.check, 'POST', {});
                 notify(json.message);
                 this.running = true;
+                this.logRunPicked = false;
                 this.startPoll();
             } catch (error) {
                 notify(error?.message || t.load_failed, false);
             } finally {
                 this.busy = false;
             }
+        },
+
+        async stop() {
+            if (this.busy || !this.running || !window.confirm(t.stop_confirm)) {
+                return;
+            }
+
+            this.busy = true;
+
+            try {
+                const json = await requestJson(this.endpoints.stop, 'POST', {});
+                notify(json.message);
+                await this.load();
+                await this.loadLogs();
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = false;
+            }
+        },
+
+        /*
+        |--------------------------------------------------------------
+        | Now: the step, where, how far, until when, how long it runs
+        |--------------------------------------------------------------
+        */
+
+        modeLabel(now) {
+            return now?.check_only ? t.now.mode_check : t.now.mode_invite;
+        },
+
+        doingLabel() {
+            /* The lock is held, the run has not written anything yet. */
+            if (!this.now?.running) {
+                return t.now.doing.starting;
+            }
+
+            const step = this.now.step || {};
+
+            return (t.now.doing[this.now.doing] ?? this.now.doing ?? '')
+                .replace(':done', this.number(step.done ?? 0))
+                .replace(':size', this.number(step.size ?? 0));
+        },
+
+        whereLabel() {
+            return this.now?.running ? [this.now.account, this.now.group].filter(Boolean).join(' · ') : '';
+        },
+
+        /* Seconds until the step's "until", counted down by the page's own clock. */
+        secondsLeft() {
+            const until = this.now?.running ? this.now.step?.until : null;
+
+            if (!until) {
+                return null;
+            }
+
+            return Math.max(0, Math.round((new Date(until).getTime() - this.tick) / 1000));
+        },
+
+        untilLabel() {
+            const left = this.secondsLeft();
+
+            return left === null ? '' : t.now.left.replace(':time', this.duration(left));
+        },
+
+        progress() {
+            const step = this.now?.running ? this.now.step || {} : {};
+
+            return step.size > 0 ? Math.min(100, Math.round((100 * (step.done ?? 0)) / step.size)) : null;
+        },
+
+        /* Seconds since the run last wrote what it does. */
+        silentFor() {
+            if (this.now?.silent_for === null || this.now?.silent_for === undefined) {
+                return null;
+            }
+
+            return this.now.silent_for + Math.round((this.tick - this.fetchedAt) / 1000);
+        },
+
+        /* Three minutes without a word outside a known wait: it hangs. */
+        silent() {
+            const silent = this.silentFor();
+
+            return this.running && this.now?.running && silent !== null && silent > 180 && !(this.secondsLeft() > 0);
+        },
+
+        silentLabel() {
+            return t.now.silent
+                .replace(':time', this.duration(this.silentFor() ?? 0))
+                .replace(':pid', this.now?.pid ?? '?');
+        },
+
+        clockLine() {
+            if (!this.now?.running) {
+                return '';
+            }
+
+            const parts = [t.now.running_for.replace(':time', this.duration(this.secondsSince(this.now.started_at)))];
+            const silent = this.silentFor();
+
+            if (silent !== null) {
+                parts.push(t.now.heartbeat.replace(':time', this.duration(silent)));
+            }
+
+            if (this.now.pid) {
+                parts.push(`PID ${this.now.pid}`);
+            }
+
+            return parts.join(' · ');
+        },
+
+        lastRunLabel() {
+            if (!this.now) {
+                return t.now.never;
+            }
+
+            const parts = [t.now.last.replace(':start', this.time(this.now.started_at)), this.modeLabel(this.now)];
+
+            if (this.now.finished_at) {
+                const took = Math.max(0, Math.round((new Date(this.now.finished_at) - new Date(this.now.started_at)) / 1000));
+                parts.push(t.now.took.replace(':time', this.duration(took)));
+            } else {
+                parts.push(t.now.broken);
+            }
+
+            if (this.now.stopped) {
+                parts.push(t.now.last_stopped);
+            }
+
+            if (this.now.totals) {
+                parts.push(this.summaryText(this.now.totals));
+            }
+
+            return parts.join(' · ');
+        },
+
+        /*
+        |--------------------------------------------------------------
+        | The run log, in words
+        |--------------------------------------------------------------
+        */
+
+        async loadLogs() {
+            const params = new URLSearchParams();
+
+            if (this.logRunPicked && this.logRunId) {
+                params.set('run_id', this.logRunId);
+            }
+
+            try {
+                const json = await requestJson(`${this.endpoints.logs}?${params}`);
+                this.logRuns = json.runs ?? [];
+                this.logLines = json.lines ?? [];
+                this.logRunId = json.run_id ?? '';
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            }
+        },
+
+        logFilters() {
+            return Object.entries(t.log.filters).map(([value, label]) => ({ value, label }));
+        },
+
+        setLogFilter(value) {
+            this.logFilter = value;
+        },
+
+        shownLines() {
+            if (this.logFilter === 'work') {
+                return this.logLines.filter((line) => ['batch', 'check', 'members'].includes(line.event));
+            }
+
+            if (this.logFilter === 'problems') {
+                return this.logLines.filter((line) => ['bad', 'warn'].includes(this.lineTone(line)));
+            }
+
+            return this.logLines;
+        },
+
+        runLabel(run) {
+            const mode = run.check_only ? t.now.mode_check : t.now.mode_invite;
+            let label = t.log.run.replace(':date', this.time(run.started_at)).replace(':mode', mode);
+
+            if (!run.finished_at && run.run_id === this.logRuns[0]?.run_id && this.running) {
+                label += ` · ${t.log.run_running}`;
+            } else if (run.stopped) {
+                label += ` · ${t.log.run_stopped}`;
+            }
+
+            return label;
+        },
+
+        /* added 3 · not added 10 · cannot 2 ... - only what is not zero. */
+        summaryText(counts) {
+            const parts = ['invited', 'not_added', 'failed', 'already', 'sent']
+                .filter((key) => Number(counts?.[key] ?? 0) > 0)
+                .map((key) => t.log.summary[key].replace(':n', this.number(counts[key])));
+
+            return parts.length ? parts.join(' · ') : t.log.summary.nothing;
+        },
+
+        lineText(line) {
+            const c = line.context || {};
+            const e = t.log.events;
+            const trigger = c.trigger === 'schedule' ? t.now.trigger_schedule : t.now.trigger_manual;
+
+            switch (line.event) {
+                case 'started':
+                    return (c.check_only ? e.started_check : e.started).replace(':trigger', trigger);
+                case 'finished':
+                    if (c.reason === 'no_groups') {
+                        return e.no_groups;
+                    }
+
+                    return (c.stopped ? e.finished_stopped : e.finished).replace(':summary', this.summaryText(c));
+                case 'skipped':
+                    if (c.reason === 'no_accounts') {
+                        return e.no_accounts;
+                    }
+
+                    if (c.reason === 'denied') {
+                        return e.denied.replace(':reason', this.errorLabel(c.rpc));
+                    }
+
+                    if (c.reason === 'group_off') {
+                        return e.group_off.replace(':reason', this.errorLabel(c.rpc, true));
+                    }
+
+                    if (c.reason === 'group_left') {
+                        return e.group_left.replace(':n', c.accounts ?? '?').replace(':reason', this.errorLabel(c.rpc));
+                    }
+
+                    return line.message;
+                case 'batch': {
+                    const error = c.error ? String(c.error) : null;
+
+                    if (error && error.endsWith(', split')) {
+                        return e.batch_split.replace(':size', c.size ?? '?').replace(':error', this.errorLabel(error.replace(', split', '')));
+                    }
+
+                    const text = e.batch.replace(':size', c.size ?? '?').replace(':summary', this.summaryText(c));
+
+                    return error ? `${text} · ${this.errorLabel(error)}` : text;
+                }
+                case 'check':
+                    return e.check
+                        .replace(':done', this.number(c.done ?? c.size ?? 0))
+                        .replace(':of', this.number(c.of ?? c.size ?? 0))
+                        .replace(':summary', this.summaryText(c));
+                case 'members': {
+                    const grew = c.grew === null || c.grew === undefined ? '' : ` (${c.grew > 0 ? '+' : ''}${c.grew})`;
+
+                    return e.members.replace(':before', c.before ?? '?').replace(':after', c.after ?? '?') + grew;
+                }
+                case 'wait':
+                    return e.wait.replace(':n', c.seconds ?? '?');
+                case 'flood':
+                    return e.flood.replace(':time', this.time(c.until)).replace(':reason', this.errorLabel(c.rpc));
+                case 'rest':
+                    return e.rest.replace(':time', this.time(c.until));
+                case 'disabled':
+                    return e.disabled.replace(':reason', this.errorLabel(c.rpc || line.message));
+                case 'failed':
+                    return e.failed.replace(':reason', line.message);
+                case 'stop':
+                    return e.stop;
+                default:
+                    return line.message;
+            }
+        },
+
+        lineTone(line) {
+            const c = line.context || {};
+
+            switch (line.event) {
+                case 'failed':
+                case 'disabled':
+                    return 'bad';
+                case 'skipped':
+                    return c.reason === 'group_off' ? 'bad' : 'warn';
+                case 'flood':
+                case 'rest':
+                case 'wait':
+                case 'stop':
+                    return 'warn';
+                case 'batch':
+                case 'check':
+                    if (Number(c.invited ?? 0) > 0) {
+                        return 'ok';
+                    }
+
+                    return Number(c.not_added ?? 0) > 0 || (line.event === 'batch' && c.error) ? 'warn' : 'muted';
+                case 'members':
+                    return Number(c.grew ?? 0) > 0 ? 'ok' : 'muted';
+                case 'finished':
+                    return c.stopped ? 'warn' : 'ok';
+                default:
+                    return 'muted';
+            }
+        },
+
+        toneClass(tone) {
+            return {
+                ok: 'text-success-500',
+                warn: 'text-warning-500',
+                bad: 'text-error-500',
+            }[tone] ?? 'text-gray-300 dark:text-gray-600';
+        },
+
+        /*
+        |--------------------------------------------------------------
+        | Time
+        |--------------------------------------------------------------
+        */
+
+        secondsSince(iso) {
+            const at = new Date(iso).getTime();
+
+            return Number.isNaN(at) ? 0 : Math.max(0, Math.round((this.tick - at) / 1000));
+        },
+
+        /* 45 s, 12 min, 1 h 5 min */
+        duration(seconds) {
+            const u = t.now.units;
+            const s = Math.max(0, Math.round(Number(seconds) || 0));
+
+            if (s < 60) {
+                return `${s} ${u.s}`;
+            }
+
+            if (s < 3600) {
+                return `${Math.floor(s / 60)} ${u.m}`;
+            }
+
+            const m = Math.floor((s % 3600) / 60);
+
+            return `${Math.floor(s / 3600)} ${u.h}` + (m ? ` ${m} ${u.m}` : '');
+        },
+
+        /* HH:MM:SS for a log line. */
+        clock(iso) {
+            const date = new Date(iso);
+
+            if (Number.isNaN(date.getTime())) {
+                return '';
+            }
+
+            const pad = (n) => String(n).padStart(2, '0');
+
+            return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
         },
 
         /*
@@ -293,6 +671,10 @@ export function groupInvitesPage(config) {
 
             if (this.groupId) {
                 params.set('group_id', this.groupId);
+            }
+
+            if (this.search.trim() !== '') {
+                params.set('search', this.search.trim());
             }
 
             try {
@@ -382,17 +764,28 @@ export function groupInvitesPage(config) {
 
             this.poll = setInterval(() => {
                 this.load();
+                this.loadLogs();
 
                 if ((this.meta.current_page || 1) === 1) {
                     this.loadResults(1);
                 }
-            }, 8000);
+            }, 4000);
+
+            /* The countdowns and "running for" move every second between polls. */
+            this.ticker = setInterval(() => {
+                this.tick = Date.now();
+            }, 1000);
         },
 
         stopPoll() {
             if (this.poll) {
                 clearInterval(this.poll);
                 this.poll = null;
+            }
+
+            if (this.ticker) {
+                clearInterval(this.ticker);
+                this.ticker = null;
             }
         },
     };

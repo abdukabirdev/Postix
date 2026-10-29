@@ -19,6 +19,7 @@ use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramGroupInviteLog;
 use App\Models\Telegram\TelegramInviteGroup;
 use App\Models\Telegram\TelegramScrapedUser;
+use App\Models\Telegram\TelegramSetting;
 use danog\MadelineProto\RPCError\RateLimitError;
 use danog\MadelineProto\RPCErrorException;
 use Illuminate\Database\Schema\Blueprint;
@@ -635,6 +636,115 @@ final class GroupInviteTest extends TestCase
             ['CHECK_CHAT_ADMIN_REQUIRED'],
             TelegramGroupInvite::query()->where('status', TelegramGroupInvite::STATUS_SENT)->distinct()->pluck('error')->all(),
         );
+    }
+
+    public function test_a_stop_from_the_panel_ends_the_run_and_gives_the_people_back(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach ([1601, 1602, 1603] as $id) {
+            $this->hold(1, $this->person($id, "P{$id}"));
+        }
+
+        /* An old stop is not this run's. */
+        GroupInviteService::requestStop('*');
+
+        $calls = $this->fakeTelegram(invite: function (array $users) {
+            /* "Stop" pressed while the first call is out; the run looks a few seconds later. */
+            GroupInviteService::requestStop('*');
+            $this->travel(3)->seconds();
+
+            return $this->added($users);
+        });
+
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'batch_size' => 1]);
+
+        $totals = $this->service->run();
+
+        $this->assertCount(1, $calls);
+        $this->assertSame(1, $totals['invited']);
+        /* Nobody else is held: the next run takes them. */
+        $this->assertSame(1, TelegramGroupInvite::query()->count());
+
+        $finished = TelegramGroupInviteLog::query()->where('event', 'finished')->sole();
+        $this->assertTrue($finished->context['stopped']);
+
+        $now = TelegramSetting::get(GroupInviteService::NOW_KEY);
+        $this->assertSame(['finished', true, 1], [$now['doing'], $now['stopped'], $now['totals']['invited']]);
+        $this->assertNotNull($now['finished_at']);
+    }
+
+    public function test_the_run_says_what_it_does_and_checks_people_a_part_at_a_time(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach (range(1701, 1725) as $id) {
+            TelegramGroupInvite::query()->create([
+                'invite_group_id' => $group->id,
+                'scraped_user_id' => $this->person($id, "P{$id}")->id,
+                'telegram_account_id' => 1,
+                'status' => TelegramGroupInvite::STATUS_SENT,
+                'attempted_at' => now()->subHour(),
+            ]);
+        }
+
+        $seen = [];
+
+        $this->fakeTelegram(
+            invite: fn (array $users) => $this->added($users),
+            member: function (int $id) use (&$seen) {
+                /* While the check goes on, the page can read how far it is. */
+                $seen[] = TelegramSetting::get(GroupInviteService::NOW_KEY);
+
+                throw RPCErrorException::make('USER_NOT_PARTICIPANT', 400, '');
+            },
+        );
+
+        $this->service->run(checkOnly: true);
+
+        $this->assertSame(['checking_sent', 0, 25, '+998900000001', 'Drivers'], [
+            $seen[0]['doing'],
+            $seen[0]['step']['done'],
+            $seen[0]['step']['size'],
+            $seen[0]['account'],
+            $seen[0]['group'],
+        ]);
+        $this->assertSame(24, end($seen)['step']['done']);
+
+        /* Written 20, then 5: each part shows on the page as soon as it is checked. */
+        $this->assertSame(
+            [[20, 20, 25], [5, 25, 25]],
+            TelegramGroupInviteLog::query()->where('event', TelegramGroupInviteLog::EVENT_CHECK)->orderBy('id')->get()
+                ->map(fn ($log) => [$log->context['size'], $log->context['done'], $log->context['of']])
+                ->all(),
+        );
+    }
+
+    public function test_the_log_of_the_latest_run_is_read_with_the_runs_to_pick_from(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(1801, 'One'));
+
+        $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+
+        $this->service->run();
+        $this->service->run(checkOnly: true);
+
+        $json = $this->app->make(GroupInviteController::class)->logs(request())->getData(true);
+
+        $this->assertCount(2, $json['runs']);
+        $this->assertTrue($json['runs'][0]['check_only']);
+        $this->assertSame($json['runs'][0]['run_id'], $json['run_id']);
+        $this->assertSame(['finished', 'skipped', 'started'], array_column($json['lines'], 'event'));
+
+        $first = $this->app->make(GroupInviteController::class)
+            ->logs(request()->merge(['run_id' => $json['runs'][1]['run_id']]))
+            ->getData(true);
+
+        $batch = collect($first['lines'])->firstWhere('event', TelegramGroupInviteLog::EVENT_CALL);
+        /* The join told the group's title. */
+        $this->assertSame(['+998900000001', 'Drivers', 1], [$batch['account'], $batch['group'], $batch['context']['invited']]);
     }
 
     public function test_the_page_shows_how_each_account_stands_and_resume_clears_it(): void

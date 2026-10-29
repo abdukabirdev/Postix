@@ -14,6 +14,7 @@ use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramGroupInviteLog;
 use App\Models\Telegram\TelegramInviteGroup;
 use App\Models\Telegram\TelegramScrapedUser;
+use App\Models\Telegram\TelegramSetting;
 use danog\MadelineProto\API;
 use danog\MadelineProto\PeerNotInDbException;
 use danog\MadelineProto\RPCError\RateLimitError;
@@ -212,6 +213,23 @@ final class GroupInviteService
     /** What the people of a call, or of a check, came to; the keys are the statuses. */
     private const ZERO = ['invited' => 0, 'not_added' => 0, 'already' => 0, 'sent' => 0, 'failed' => 0];
 
+    /** People sent earlier are checked and written this many at a time: the page sees the check go on. */
+    private const CHECK_CHUNK = 20;
+
+    /**
+     * What the run is doing right now, for the page: the step, the account,
+     * the group, how far, until when, what it came to so far, when it last
+     * said so. A TelegramSetting: the run and the page are different
+     * processes, and different OS users.
+     */
+    public const NOW_KEY = 'group_invite.now';
+
+    /** The run id the panel asked to stop ("*": whichever runs). */
+    public const STOP_KEY = 'group_invite.stop';
+
+    /** A stop asked from the panel is looked for at most this often, seconds. */
+    private const STOP_POLL = 2;
+
     private string $runId = '';
 
     /** @var array<int, true> accounts that ran into trouble in this run: no success is written for them */
@@ -244,6 +262,13 @@ final class GroupInviteService
     /** @var array<int, true> groups whose "before" this run has written */
     private array $counted = [];
 
+    /** @var array<string, mixed> the run as the page sees it (NOW_KEY) */
+    private array $now = [];
+
+    private bool $stopping = false;
+
+    private int $stopLookedAt = 0;
+
     public function __construct(
         private readonly MadelineService $madeline,
         private readonly TelegramAccountProcessService $pool,
@@ -271,11 +296,30 @@ final class GroupInviteService
         $this->blind = [];
         $this->touched = [];
         $this->counted = [];
+        $this->stopping = false;
+        $this->stopLookedAt = 0;
 
         $say = $output ?? static function (string $line): void {};
 
         $config = $this->settings->current();
         $totals = ['accounts' => 0, 'batches' => 0, ...self::ZERO];
+
+        /* A stop asked of an earlier run is not this one's. */
+        TelegramSetting::set(self::STOP_KEY, null);
+
+        $this->now = [
+            'run_id' => $this->runId,
+            'pid' => getmypid(),
+            'check_only' => $checkOnly,
+            'trigger' => $trigger,
+            'started_at' => now()->toIso8601String(),
+            'finished_at' => null,
+            'account_id' => null,
+            'account' => null,
+            'group' => null,
+            'totals' => $totals,
+        ];
+        $this->doing('starting');
 
         $groups = TelegramInviteGroup::query()
             ->where('is_active', true)
@@ -285,6 +329,7 @@ final class GroupInviteService
         $this->log('started', $checkOnly ? 'Check started' : 'Invite started', null, null, [
             'trigger' => $trigger,
             'check_only' => $checkOnly,
+            'pid' => getmypid(),
             'groups' => $groups->pluck('link')->all(),
             'batch_size' => (int) $config['batch_size'],
             'batches_per_day' => (int) $config['batches_per_day'],
@@ -294,7 +339,8 @@ final class GroupInviteService
         ]);
 
         if ($groups->isEmpty() && ! $checkOnly) {
-            $this->log('finished', 'No active groups, nothing to do');
+            $this->log('finished', 'No active groups, nothing to do', null, null, ['reason' => 'no_groups', ...$totals]);
+            $this->finish();
 
             return $totals;
         }
@@ -305,7 +351,9 @@ final class GroupInviteService
         /** @var array<int, int> account id => when its short flood wait is over */
         $comeBack = [];
 
-        while (true) {
+        while (! $this->stopping()) {
+            $this->now = [...$this->now, 'account_id' => null, 'account' => null, 'group' => null];
+
             /* A check only reads: an account resting from invites may make it. */
             $account = $this->pool->claimRandomAvailableAccount(
                 ProcessEnum::GroupInvite,
@@ -318,7 +366,7 @@ final class GroupInviteService
 
             if (! $account) {
                 if ($comeBack === []) {
-                    $this->log('skipped', 'No more accounts available');
+                    $this->log('skipped', 'No more accounts available', null, null, ['reason' => 'no_accounts']);
 
                     break;
                 }
@@ -331,7 +379,7 @@ final class GroupInviteService
 
                 if ($left > 0) {
                     $say("Waiting {$left}s for account #{$id}");
-                    sleep($left);
+                    $this->snooze($left, 'waiting_account', ['waiting_for' => $id]);
                 }
 
                 $usedAccountIds = array_values(array_diff($usedAccountIds, [$id]));
@@ -349,6 +397,9 @@ final class GroupInviteService
 
             $totals['accounts']++;
             $say("Account #{$account->id} {$account->phone}");
+
+            $this->now = [...$this->now, 'account_id' => $account->id, 'account' => $account->phone];
+            $this->doing('connecting');
 
             $api = null;
 
@@ -388,9 +439,119 @@ final class GroupInviteService
             }
         }
 
-        $this->log('finished', 'Invite finished', null, null, $totals);
+        $this->log(
+            'finished',
+            $this->stopping ? 'Stopped from the panel' : ($checkOnly ? 'Check finished' : 'Invite finished'),
+            null,
+            null,
+            [...$totals, 'stopped' => $this->stopping],
+        );
+        $this->finish();
 
         return $totals;
+    }
+
+    /**
+     * Asked from the panel: the run finishes the step in hand, gives back
+     * the people it has taken and ends. Nothing for the page to kill: the
+     * run may be another OS user's process.
+     */
+    public static function requestStop(?string $runId): void
+    {
+        TelegramSetting::set(self::STOP_KEY, $runId ?? '*');
+    }
+
+    /**
+     * The panel asked this run to stop. Looked up every few seconds at most.
+     */
+    private function stopping(): bool
+    {
+        if ($this->stopping) {
+            return true;
+        }
+
+        if (now()->timestamp - $this->stopLookedAt < self::STOP_POLL) {
+            return false;
+        }
+
+        $this->stopLookedAt = now()->timestamp;
+
+        $asked = TelegramSetting::get(self::STOP_KEY);
+
+        if ($asked !== null && ($asked === '*' || $asked === $this->runId)) {
+            $this->stopping = true;
+            $this->doing('stopping');
+        }
+
+        return $this->stopping;
+    }
+
+    /**
+     * What the run is doing now, for the page. $step: how far (done, size),
+     * until when, anything the step needs to be told.
+     *
+     * @param array<string, mixed> $step
+     */
+    private function doing(string $what, array $step = []): void
+    {
+        if ($this->now === []) {
+            return;
+        }
+
+        try {
+            TelegramSetting::set(self::NOW_KEY, [
+                ...$this->now,
+                'doing' => $this->stopping && $what !== 'finished' ? 'stopping' : $what,
+                'step' => $step,
+                'heartbeat_at' => now()->toIso8601String(),
+            ]);
+        } catch (Throwable) {
+            // The page shows an older state; the work goes on.
+        }
+    }
+
+    /**
+     * What the people came to so far in this run, for the page.
+     *
+     * @param array<string, int> $counts
+     */
+    private function live(array $counts, int $calls = 0): void
+    {
+        if ($this->now === []) {
+            return;
+        }
+
+        $totals = (array) ($this->now['totals'] ?? []);
+        self::add($totals, $counts);
+        $totals['batches'] = (int) ($totals['batches'] ?? 0) + $calls;
+
+        $this->now['totals'] = $totals;
+    }
+
+    private function finish(): void
+    {
+        $this->now = [...$this->now, 'finished_at' => now()->toIso8601String(), 'stopped' => $this->stopping];
+        $this->doing('finished');
+    }
+
+    /**
+     * Sleeps in one-second steps, so a stop from the panel is not slept through.
+     *
+     * @param array<string, mixed> $step
+     */
+    private function snooze(int $seconds, string $what, array $step = []): void
+    {
+        if ($seconds <= 0) {
+            return;
+        }
+
+        $until = time() + $seconds;
+
+        $this->doing($what, [...$step, 'until' => Carbon::createFromTimestamp($until)->toIso8601String()]);
+
+        while (time() < $until && ! $this->stopping()) {
+            sleep(1);
+        }
     }
 
     /**
@@ -593,6 +754,8 @@ final class GroupInviteService
             $this->mark($ids, false, $error);
         }
 
+        $this->live(['failed' => $failed]);
+
         return $failed;
     }
 
@@ -787,11 +950,11 @@ final class GroupInviteService
         $checked = $this->checkSent($api, $account, $config, $say);
         self::add($result, $checked);
 
-        if ($checked['stop'] || $checkOnly) {
+        if ($checked['stop'] || $checkOnly || $this->stopping()) {
             return $result;
         }
 
-        while (true) {
+        while (! $this->stopping()) {
             if ($this->callsToday($account->id) >= $this->dailyCap($account, $config)) {
                 $this->cleanDay($account);
                 $say('  daily cap reached');
@@ -933,6 +1096,8 @@ final class GroupInviteService
             return $done;
         }
 
+        $this->now['group'] = $group->title ?: $group->link;
+
         $this->countBefore($api, $account, $group);
 
         if ($via === TelegramGroupInvite::VIA_USERNAME) {
@@ -943,6 +1108,13 @@ final class GroupInviteService
         $parts = $people->isEmpty() ? [] : [$people->values()];
 
         while ($parts !== []) {
+            if ($this->stopping()) {
+                $this->releasePeople($group, collect($parts)->flatten(1));
+                $done['stop'] = true;
+
+                return $done;
+            }
+
             $part = array_shift($parts);
 
             if ($done['calls'] > 0) {
@@ -957,6 +1129,8 @@ final class GroupInviteService
 
             $key = $this->rekey($group, $part);
             $sentAt = now()->timestamp;
+
+            $this->doing('inviting', ['size' => $part->count(), 'via' => $via]);
 
             try {
                 $context = ['step' => self::STEP_INVITE, 'via' => $via, 'size' => $part->count()];
@@ -1062,9 +1236,10 @@ final class GroupInviteService
      * sent, for a later check.
      *
      * @param Collection<int, TelegramScrapedUser> $people
-     * @param array<int, true>                     $added telegram ids Telegram's message names
-     * @param int|array<int, int>                  $since when the call was made: one time for all, or by telegram id
+     * @param array<int, true>                     $added    telegram ids Telegram's message names
+     * @param int|array<int, int>                  $since    when the call was made: one time for all, or by telegram id
      * @param array<string, mixed>                 $config
+     * @param array{0: int, 1: int}|null           $progress for the page: people of the whole check before these, and all of them
      *
      * @return array{0: array<int, array{status: string, error: string|null}>, 1: Throwable|null} by telegram id; the account's own trouble that broke the check off
      */
@@ -1077,12 +1252,15 @@ final class GroupInviteService
         int|array $since,
         array $config,
         callable $say,
+        string $doing = 'checking',
+        ?array $progress = null,
     ): array {
         $verdicts = [];
         $looked = 0;
         $context = ['step' => self::STEP_CHECK, 'size' => $people->count()];
+        [$before, $all] = $progress ?? [0, $people->count()];
 
-        foreach ($people as $person) {
+        foreach ($people->values() as $i => $person) {
             $id = (int) $person->telegram_user_id;
 
             if (isset($added[$id])) {
@@ -1096,6 +1274,13 @@ final class GroupInviteService
 
                 continue;
             }
+
+            /* Stopped: nobody more is looked up, they stay sent for the next run. Those named above still count. */
+            if ($this->stopping()) {
+                continue;
+            }
+
+            $this->doing($doing, ['done' => $before + $i, 'size' => $all]);
 
             if ($looked++ > 0) {
                 $this->checkPause($config);
@@ -1195,6 +1380,8 @@ final class GroupInviteService
                 continue;
             }
 
+            $this->now['group'] = $group->title ?: $group->link;
+
             try {
                 $this->ensureJoined($api, $group, $account, $say);
             } catch (Throwable $e) {
@@ -1207,37 +1394,58 @@ final class GroupInviteService
                 continue;
             }
 
-            [$verdicts, $trouble] = $this->verify(
-                $api,
-                $account,
-                $group,
-                $rows->pluck('user')->values(),
-                [],
-                $rows->mapWithKeys(fn (TelegramGroupInvite $row) => [
-                    (int) $row->user->telegram_user_id => (int) $row->attempted_at?->timestamp,
-                ])->all(),
-                $config,
-                $say,
-            );
+            /* The join may have told the group's title. */
+            $this->now['group'] = $group->title ?: $group->link;
 
-            $settled = $this->record($rows, [], $verdicts, null);
-            self::add($done, $settled);
+            $all = $rows->count();
+            $before = 0;
 
-            $this->log(TelegramGroupInviteLog::EVENT_CHECK, self::summary($settled), $account->id, $group->id, [
-                'size' => $rows->count(),
-                ...$settled,
-            ]);
-            $say("  {$group->link}: checked {$rows->count()}: " . self::summary($settled));
+            /* A few at a time: each part is written down and shows on the page as soon as it is checked. */
+            foreach ($rows->chunk(self::CHECK_CHUNK) as $part) {
+                if ($this->stopping()) {
+                    $done['stop'] = true;
 
-            if ($trouble !== null) {
-                $this->accountTrouble($account, $trouble, self::classify($trouble, self::STEP_CHECK), $config, $group->id, [
-                    'step' => self::STEP_CHECK,
-                    'size' => $rows->count(),
+                    return $done;
+                }
+
+                [$verdicts, $trouble] = $this->verify(
+                    $api,
+                    $account,
+                    $group,
+                    $part->pluck('user')->values(),
+                    [],
+                    $part->mapWithKeys(fn (TelegramGroupInvite $row) => [
+                        (int) $row->user->telegram_user_id => (int) $row->attempted_at?->timestamp,
+                    ])->all(),
+                    $config,
+                    $say,
+                    'checking_sent',
+                    [$before, $all],
+                );
+
+                $before += $part->count();
+
+                $settled = $this->record($part, [], $verdicts, null);
+                self::add($done, $settled);
+
+                $this->log(TelegramGroupInviteLog::EVENT_CHECK, self::summary($settled), $account->id, $group->id, [
+                    'size' => $part->count(),
+                    'done' => $before,
+                    'of' => $all,
+                    ...$settled,
                 ]);
-                $say('  check: ' . self::code($trouble) . ', the account stops');
-                $done['stop'] = true;
+                $say("  {$group->link}: checked {$before}/{$all}: " . self::summary($settled));
 
-                return $done;
+                if ($trouble !== null) {
+                    $this->accountTrouble($account, $trouble, self::classify($trouble, self::STEP_CHECK), $config, $group->id, [
+                        'step' => self::STEP_CHECK,
+                        'size' => $part->count(),
+                    ]);
+                    $say('  check: ' . self::code($trouble) . ', the account stops');
+                    $done['stop'] = true;
+
+                    return $done;
+                }
             }
         }
 
@@ -1263,6 +1471,8 @@ final class GroupInviteService
         if (isset($this->touched[$key])) {
             return;
         }
+
+        $this->doing('counting');
 
         $members = $this->members($api, $group);
 
@@ -1294,6 +1504,10 @@ final class GroupInviteService
 
             $group = $state['group'];
             $before = $state['before'];
+
+            $this->now['group'] = $group->title ?: $group->link;
+            $this->doing('counting');
+
             $after = $this->members($api, $group);
 
             $this->log(
@@ -1363,8 +1577,17 @@ final class GroupInviteService
 
         foreach ($people as $i => $person) {
             if ($i > 0) {
-                sleep(random_int(...self::RESOLVE_PAUSE));
+                $this->snooze(random_int(...self::RESOLVE_PAUSE), 'resolving', ['done' => $i, 'size' => $people->count()]);
             }
+
+            /* Stopped: nobody of this batch is invited, all of them go back. */
+            if ($this->stopping()) {
+                $this->releasePeople($group, $found->merge($people->slice($i)));
+
+                return [collect(), true];
+            }
+
+            $this->doing('resolving', ['done' => $i, 'size' => $people->count()]);
 
             try {
                 $user = $this->patiently(
@@ -1454,7 +1677,7 @@ final class GroupInviteService
 
                 $seconds += random_int(2, 5);
                 $say('  ' . self::code($e) . ": waits {$seconds}s");
-                sleep($seconds);
+                $this->snooze($seconds, 'flood_wait', ['seconds' => $seconds, 'for' => $context['step'] ?? null]);
             }
         }
     }
@@ -1571,6 +1794,8 @@ final class GroupInviteService
             return;
         }
 
+        $this->doing('joining');
+
         $context = ['step' => self::STEP_JOIN];
 
         try {
@@ -1671,7 +1896,7 @@ final class GroupInviteService
 
         $group->update(['is_active' => false, 'last_error' => mb_substr($code, 0, 500)]);
 
-        $this->log('skipped', "{$code}: the group is switched off", $accountId, $group->id);
+        $this->log('skipped', "{$code}: the group is switched off", $accountId, $group->id, ['reason' => 'group_off', 'rpc' => $code]);
     }
 
     /**
@@ -1682,7 +1907,7 @@ final class GroupInviteService
     {
         $this->denied[$account->id . ':' . $group->id] = true;
 
-        $this->log('skipped', "{$code}: this account cannot invite here", $account->id, $group->id);
+        $this->log('skipped', "{$code}: this account cannot invite here", $account->id, $group->id, ['reason' => 'denied', 'rpc' => $code]);
 
         $accounts = count(array_filter(
             array_keys($this->denied),
@@ -1694,7 +1919,11 @@ final class GroupInviteService
 
             $group->update(['last_error' => mb_substr($code, 0, 500)]);
 
-            $this->log('skipped', "{$code}: {$accounts} accounts cannot invite here, left for this run", null, $group->id);
+            $this->log('skipped', "{$code}: {$accounts} accounts cannot invite here, left for this run", null, $group->id, [
+                'reason' => 'group_left',
+                'rpc' => $code,
+                'accounts' => $accounts,
+            ]);
         }
     }
 
@@ -1916,6 +2145,8 @@ final class GroupInviteService
         if ($refusesEverybody) {
             $this->mark([$person->id], false, $error);
         }
+
+        $this->live(['failed' => 1]);
     }
 
     /**
@@ -1989,6 +2220,8 @@ final class GroupInviteService
     ): void {
         $message = self::summary($settled) . ($error !== null ? " ({$error})" : '');
 
+        $this->live([], 1);
+
         $this->log(TelegramGroupInviteLog::EVENT_CALL, $message, $account->id, $group->id, [
             'batch_key' => $batchKey,
             'via' => $via,
@@ -2046,6 +2279,8 @@ final class GroupInviteService
         foreach ($refusedBy as $error => $ids) {
             $this->mark($ids, false, (string) $error);
         }
+
+        $this->live($counts);
 
         return $counts;
     }
@@ -2222,7 +2457,7 @@ final class GroupInviteService
         $max = max($min, (int) ($config['delay_max'] ?? 20));
 
         if ($max > 0) {
-            sleep(random_int($min, $max));
+            $this->snooze(random_int($min, $max), 'pause');
         }
     }
 

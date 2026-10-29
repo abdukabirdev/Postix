@@ -26,6 +26,9 @@ class TelegramGroupInviteLog extends Model
     /** An account is done with a group: its member count before and after, next to what the calls did. */
     public const EVENT_MEMBERS = 'members';
 
+    /** "Stop" pressed on the page. */
+    public const EVENT_STOP = 'stop';
+
     /**
      * The account was stopped: a flood wait or a PEER_FLOOD (flood), nobody
      * added call after call (rest), a dead or frozen session (disabled).

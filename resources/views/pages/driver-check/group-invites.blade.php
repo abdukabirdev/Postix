@@ -11,6 +11,8 @@
             settings: @js(route('api.telegram.group-invites.settings')),
             run: @js(route('api.telegram.group-invites.run')),
             check: @js(route('api.telegram.group-invites.check')),
+            stop: @js(route('api.telegram.group-invites.stop')),
+            logs: @js(route('api.telegram.group-invites.logs')),
             results: @js(route('api.telegram.group-invites.results')),
             retry: @js(route('api.telegram.group-invites.retry')),
             groups: @js(url('/api/telegram/group-invites/groups')),
@@ -29,7 +31,7 @@
             <x-slot:actions>
                 <x-driver-check.button
                     size="icon"
-                    x-on:click="load(); loadResults()"
+                    x-on:click="load(); loadLogs(); loadResults()"
                     ::disabled="loading"
                     :title="__('telegram.ui.refresh')"
                     :aria-label="__('telegram.ui.refresh')"
@@ -39,17 +41,21 @@
 
                 <x-driver-check.button
                     icon="check-circle"
-                    x-show="totals.sent > 0"
+                    x-show="!running && totals.sent > 0"
                     x-cloak
                     x-on:click="check()"
-                    ::disabled="busy || running"
+                    ::disabled="busy"
                     :title="__('driver_check.invites.check_hint')"
                 >
                     {{ __('driver_check.invites.check') }}
                 </x-driver-check.button>
 
-                <x-driver-check.button variant="primary" icon="play" x-on:click="run()" ::disabled="busy || running">
-                    <span x-text="running ? t.running : t.run"></span>
+                <x-driver-check.button variant="primary" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy">
+                    {{ __('driver_check.invites.run') }}
+                </x-driver-check.button>
+
+                <x-driver-check.button variant="danger" icon="stop" x-show="running" x-cloak x-on:click="stop()" ::disabled="busy || now?.stop_asked">
+                    <span x-text="now?.stop_asked ? t.now.doing.stopping : t.stop"></span>
                 </x-driver-check.button>
             </x-slot:actions>
         </x-driver-check.page-header>
@@ -57,6 +63,43 @@
         <x-driver-check.error-alert :title="__('driver_check.invites.load_failed')" retry="load()" />
 
         <div class="flex flex-col gap-5">
+
+            {{-- What the run is doing this very moment, or how the last one ended. --}}
+            <x-driver-check.surface class="overflow-hidden">
+                <div class="px-4 py-3.5">
+                    <div class="flex items-center gap-2">
+                        <span class="dc-dot" :class="running ? 'animate-pulse text-success-500' : 'text-gray-300 dark:text-gray-600'"></span>
+                        <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.now.title') }}</h2>
+                        <span x-show="running && now" x-cloak class="rounded-md bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 dark:bg-white/10 dark:text-gray-300" x-text="modeLabel(now)"></span>
+                    </div>
+
+                    <template x-if="running">
+                        <div class="mt-2.5">
+                            <p class="text-[15px] font-semibold text-gray-950 dark:text-white" x-text="doingLabel()"></p>
+                            <p class="mt-0.5 text-[12.5px] text-gray-500">
+                                <span x-text="whereLabel()"></span>
+                                <span x-show="untilLabel()" x-text="(whereLabel() ? ' · ' : '') + untilLabel()"></span>
+                            </p>
+
+                            <div x-show="progress() !== null" x-cloak class="mt-2.5 h-1.5 w-full max-w-md overflow-hidden rounded-full bg-gray-100 dark:bg-white/10">
+                                <div class="h-full rounded-full bg-brand-500 transition-all duration-500" :style="`width: ${progress() ?? 0}%`"></div>
+                            </div>
+
+                            <p class="mt-2 text-[12px] tabular-nums text-gray-400" x-text="clockLine()"></p>
+
+                            <p x-show="now?.stop_asked" x-cloak class="mt-2 text-[12.5px] font-medium text-warning-600 dark:text-warning-400" x-text="t.now.stopping"></p>
+                            <p x-show="silent()" x-cloak class="mt-2 text-[12.5px] font-medium text-error-600 dark:text-error-400" x-text="silentLabel()"></p>
+
+                            <p x-show="now?.totals" x-cloak class="mt-2 text-[12.5px] tabular-nums text-gray-600 dark:text-gray-300">
+                                <span class="text-gray-400" x-text="t.now.so_far + ': '"></span>
+                                <span x-text="summaryText(now?.totals || {}) + ' · ' + t.now.batches.replace(':n', number(now?.totals?.batches || 0))"></span>
+                            </p>
+                        </div>
+                    </template>
+
+                    <p x-show="!running" class="mt-2 text-[13px] text-gray-500" x-text="lastRunLabel()"></p>
+                </div>
+            </x-driver-check.surface>
 
             {{-- The three that matter first: added, could be but were not, cannot be (junk). --}}
             <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
@@ -85,6 +128,45 @@
                     <span x-text="number(totals.batches_today)"></span>
                 </x-driver-check.stat-card>
             </section>
+
+            {{-- One run's log, newest first, in words; any of the last runs can be picked. --}}
+            <x-driver-check.surface class="overflow-hidden">
+                <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+                    <div class="flex items-center gap-2">
+                        <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.log.title') }}</h2>
+                        <span x-show="running && !logRunPicked" x-cloak class="text-[11.5px] text-gray-400" x-text="t.log.live"></span>
+                    </div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <x-driver-check.chips items="logFilters()" selected="logFilter" action="setLogFilter" />
+                        <select
+                            class="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[13px] dark:border-gray-700 dark:bg-transparent dark:text-white"
+                            x-show="logRuns.length > 0"
+                            x-cloak
+                            x-model="logRunId"
+                            x-on:change="logRunPicked = logRunId !== (logRuns[0]?.run_id ?? ''); loadLogs()"
+                        >
+                            <template x-for="run in logRuns" :key="run.run_id">
+                                <option :value="run.run_id" x-text="runLabel(run)"></option>
+                            </template>
+                        </select>
+                    </div>
+                </div>
+
+                <p x-show="shownLines().length === 0" x-cloak class="px-4 py-8 text-center text-[13px] text-gray-500">{{ __('driver_check.invites.log.empty') }}</p>
+
+                <ul class="max-h-[420px] divide-y divide-gray-100 overflow-y-auto dark:divide-gray-800">
+                    <template x-for="line in shownLines()" :key="line.id">
+                        <li class="flex items-start gap-3 px-4 py-2">
+                            <span class="mt-0.5 w-[62px] shrink-0 text-[12px] tabular-nums text-gray-400" x-text="clock(line.created_at)"></span>
+                            <span class="dc-dot mt-1.5 shrink-0" :class="toneClass(lineTone(line))"></span>
+                            <div class="min-w-0 flex-1">
+                                <p class="text-[13px] text-gray-900 dark:text-gray-100" x-text="lineText(line)"></p>
+                                <p x-show="line.account || line.group" class="truncate text-[11.5px] text-gray-400" x-text="[line.account, line.group].filter(Boolean).join(' · ')"></p>
+                            </div>
+                        </li>
+                    </template>
+                </ul>
+            </x-driver-check.surface>
 
             <div class="grid items-start gap-5 xl:grid-cols-2">
 
@@ -301,6 +383,12 @@
                 <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
                     <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.results.title') }}</h2>
                     <div class="flex flex-wrap items-center gap-2">
+                        <x-driver-check.input
+                            class="!w-56"
+                            x-model="search"
+                            x-on:input.debounce.400ms="loadResults(1)"
+                            placeholder="{{ __('driver_check.invites.results.search') }}"
+                        />
                         <select class="rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-[13px] dark:border-gray-700 dark:bg-transparent dark:text-white" x-model="groupId" x-on:change="loadResults(1)" x-show="groups.length > 1" x-cloak>
                             <option value="">{{ __('driver_check.invites.results.all_groups') }}</option>
                             <template x-for="group in groups" :key="group.id">
@@ -331,6 +419,7 @@
                                     <span x-show="row.account" x-text="(row.user?.username ? ' · ' : '') + (row.account?.phone || '')"></span>
                                     <span x-show="row.group" x-text="' · ' + (row.group?.title || '')"></span>
                                     <span x-text="' · ' + (row.via === 'username' ? t.results.via_username : t.results.via_contact)"></span>
+                                    <span x-show="row.checked_at" x-text="' · ' + t.results.checked_at.replace(':time', time(row.checked_at))"></span>
                                 </p>
                                 <p
                                     x-show="row.error"
