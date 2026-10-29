@@ -21,6 +21,16 @@ Schedule::command('telegram:sync-contacts --trigger=schedule')
     ->runInBackground()
     ->withoutOverlapping();
 
+// The accounts invite their own contacts into the groups of the panel.
+// The time, the batch and the daily cap live there; the scheduler only asks
+// whether this minute is the one. Accounts already open in another process
+// are left alone.
+Schedule::command('telegram:group-invites --trigger=schedule')
+    ->everyMinute()
+    ->when(fn () => app(\App\Application\Telegram\Services\GroupInviteSettings::class)->dueNow())
+    ->runInBackground()
+    ->withoutOverlapping();
+
 // The Join group watchdog: one worker per account marked in the panel, each
 // finding the groups of our topic and joining them by itself. Asked every
 // minute while it is on, so it is back by itself after a reboot or a crash

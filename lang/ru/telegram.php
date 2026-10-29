@@ -1374,6 +1374,7 @@ return [
                 'send_message' => 'Рассылка',
                 'driver_check' => 'Проверка водителей',
                 'group_join' => 'Вступление в группы',
+                'group_invite' => 'Добавление в группы',
             ],
             'states' => [
                 'ready' => 'Готов',

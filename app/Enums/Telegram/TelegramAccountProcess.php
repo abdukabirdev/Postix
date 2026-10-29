@@ -9,4 +9,5 @@ enum TelegramAccountProcess: string
     case DriverCheck = 'driver_check';
     case ContactSync = 'contact_sync';
     case GroupJoin = 'group_join';
+    case GroupInvite = 'group_invite';
 }

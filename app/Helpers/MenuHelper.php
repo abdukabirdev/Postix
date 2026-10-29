@@ -223,6 +223,16 @@ class MenuHelper
                 ],
             ],
             [
+                'title' => __('driver_check.sections.invites'),
+                'items' => [
+                    [
+                        'icon' => 'users',
+                        'name' => __('driver_check.menu.group_invites'),
+                        'path' => '/driver-check/group-invites',
+                    ],
+                ],
+            ],
+            [
                 'title' => __('driver_check.sections.monitoring'),
                 'items' => [
                     [

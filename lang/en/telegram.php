@@ -1373,6 +1373,7 @@ return [
                 'send_message' => 'Mailing',
                 'driver_check' => 'Driver check',
                 'group_join' => 'Group join',
+                'group_invite' => 'Add to groups',
             ],
             'states' => [
                 'ready' => 'Ready',

@@ -1361,6 +1361,7 @@ return [
                 'send_message' => 'Xabar yuborish',
                 'driver_check' => 'Haydovchilarni tekshirish',
                 'group_join' => 'Guruhlarga qo\'shilish',
+                'group_invite' => 'Guruhlarga qo\'shish',
             ],
             'states' => [
                 'ready' => 'Tayyor',

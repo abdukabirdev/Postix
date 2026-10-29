@@ -26,6 +26,9 @@ class TelegramScrapedUser extends Model
         'last_name',
         'phone',
         'is_bot',
+        'can_add_to_group',
+        'add_to_group_error',
+        'add_to_group_checked_at',
     ];
 
     protected function casts(): array
@@ -33,6 +36,8 @@ class TelegramScrapedUser extends Model
         return [
             'telegram_user_id' => 'integer',
             'is_bot' => 'boolean',
+            'can_add_to_group' => 'boolean',
+            'add_to_group_checked_at' => 'datetime',
         ];
     }
 
@@ -72,6 +77,15 @@ class TelegramScrapedUser extends Model
     public function scopeWithoutUsername(Builder $query): Builder
     {
         return $query->where(fn ($q) => $q->whereNull('username')->orWhere('username', ''));
+    }
+
+    /**
+     * People a group invite may still try: Telegram has not refused them
+     * because of themselves (privacy, a deleted account, too many groups).
+     */
+    public function scopeAddableToGroup(Builder $query): Builder
+    {
+        return $query->where(fn ($q) => $q->whereNull('can_add_to_group')->orWhere('can_add_to_group', true));
     }
 
     public function groups(): BelongsToMany

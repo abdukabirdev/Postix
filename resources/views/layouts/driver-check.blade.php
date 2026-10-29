@@ -30,6 +30,7 @@
         '/driver-check/contact-report' => 'chart',
         '/driver-check/contact-settings' => 'sliders-h',
         '/driver-check/contact-accounts' => 'phone',
+        '/driver-check/group-invites' => 'users',
         '/driver-check/group-join' => 'pulse',
         '/driver-check/group-join/joined' => 'check-circle',
         '/driver-check/group-join/queue' => 'clock',

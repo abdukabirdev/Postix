@@ -171,6 +171,13 @@ final class DriverCheckController extends Controller
         );
     }
 
+    public function groupInvites()
+    {
+        return view(
+            'pages.driver-check.group-invites'
+        );
+    }
+
     public function groupJoin()
     {
         return view(
