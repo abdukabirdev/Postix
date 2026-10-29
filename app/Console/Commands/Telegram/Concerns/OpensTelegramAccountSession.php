@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands\Telegram\Concerns;
 
+use App\Application\Telegram\Support\SessionSleep;
 use App\Models\Telegram\TelegramAccount;
 use danog\MadelineProto\API;
 use danog\MadelineProto\Logger;
@@ -44,7 +45,8 @@ trait OpensTelegramAccountSession
     }
 
     /**
-     * The login went through: remember who the session belongs to.
+     * The login went through: remember who the session belongs to, and put
+     * it to sleep until some work needs it (see SessionSleep).
      */
     protected function markAuthorized(TelegramAccount $account, API $madeline): void
     {
@@ -59,5 +61,7 @@ trait OpensTelegramAccountSession
             'password_hint' => null,
             'last_error' => null,
         ]);
+
+        SessionSleep::put($madeline, ['account_id' => $account->id]);
     }
 }

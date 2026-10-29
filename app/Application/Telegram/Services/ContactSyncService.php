@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Application\Telegram\Services;
 
+use App\Application\Telegram\Support\SessionSleep;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountContact;
@@ -233,13 +234,7 @@ final class ContactSyncService
 
                 $say("  failed: {$e->getMessage()}");
             } finally {
-                if ($api) {
-                    try {
-                        $api->stop();
-                    } catch (Throwable) {
-                        // The session is being dropped anyway.
-                    }
-                }
+                SessionSleep::put($api, ['account_id' => $account->id]);
 
                 $this->pool->release($account, ProcessEnum::ContactSync);
             }
@@ -344,13 +339,7 @@ final class ContactSyncService
 
                 $say("  failed: {$e->getMessage()}");
             } finally {
-                if ($api) {
-                    try {
-                        $api->stop();
-                    } catch (Throwable) {
-                        // The session is being dropped anyway.
-                    }
-                }
+                SessionSleep::put($api, ['account_id' => $account->id]);
 
                 $this->pool->release($account, ProcessEnum::ContactSync);
             }

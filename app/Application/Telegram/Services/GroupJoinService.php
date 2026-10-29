@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\DeadSession;
+use App\Application\Telegram\Support\SessionSleep;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramJoinKeyword;
@@ -119,6 +120,9 @@ final class GroupJoinService
     /** @var list<int>|null our own accounts' Telegram ids: never stored as people */
     private ?array $ownIds = null;
 
+    /** The account's session opened by the last burst: put to sleep when the worker ends. */
+    private ?API $awake = null;
+
     public function __construct(
         private readonly MadelineService $madeline,
         private readonly TelegramAccountProcessService $pool,
@@ -206,6 +210,9 @@ final class GroupJoinService
 
             $this->wait(random_int(3, 8));
         }
+
+        SessionSleep::put($this->awake, ['account_id' => $account->id]);
+        $this->awake = null;
 
         $this->doing($account, 'stopped');
 
@@ -1256,21 +1263,23 @@ final class GroupJoinService
     */
 
     /**
-     * Open the account, do the work, close it whatever happened.
+     * Open the account and do the work. The session stays awake between
+     * bursts - they come seconds apart - and goes to sleep when the worker
+     * ends (see work()).
      *
      * @param array<string, mixed> $config
      * @param callable(API): void  $work
      */
     private function session(TelegramAccount $account, array $config, callable $work): void
     {
-        $api = null;
-
         try {
             $api = $this->madeline->for($account);
 
             if (! $api) {
                 throw $this->madeline->lastError ?? new RuntimeException('Failed to start MadelineProto.');
             }
+
+            $this->awake = $api;
 
             $work($api);
 
@@ -1280,14 +1289,6 @@ final class GroupJoinService
                 $this->pool->registerFailure($account, ProcessEnum::GroupJoin, mb_substr($this->reason($e), 0, 200));
 
                 $this->log('failed', $this->reason($e), $account->id, null, ['exception' => $e::class]);
-            }
-        } finally {
-            if ($api) {
-                try {
-                    $api->stop();
-                } catch (Throwable) {
-                    // The session is being dropped anyway.
-                }
             }
         }
     }

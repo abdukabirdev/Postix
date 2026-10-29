@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands\Telegram;
 
+use App\Application\Telegram\Support\SessionSleep;
 use App\Application\Telegram\Support\VendorNoticeShield;
 use App\Console\Commands\Telegram\Concerns\OpensTelegramAccountSession;
 use App\Models\Telegram\TelegramAccount;
@@ -139,17 +140,21 @@ class TelegramAccountCheckCommand extends Command
                 function () use ($account): array|false {
                     $Madeline = $this->openSession($account);
 
-                    if ($Madeline->getAuthorization() !== API::LOGGED_IN) {
-                        return false;
-                    }
+                    try {
+                        if ($Madeline->getAuthorization() !== API::LOGGED_IN) {
+                            return false;
+                        }
 
-                    /*
-                     * getSelf() only reads the cached copy; this goes to
-                     * the server, which is the whole point.
-                     */
-                    return $Madeline->users->getUsers(
-                        id: [['_' => 'inputUserSelf']]
-                    )[0] ?? false;
+                        /*
+                         * getSelf() only reads the cached copy; this goes to
+                         * the server, which is the whole point.
+                         */
+                        return $Madeline->users->getUsers(
+                            id: [['_' => 'inputUserSelf']]
+                        )[0] ?? false;
+                    } finally {
+                        SessionSleep::put($Madeline, ['account_id' => $account->id]);
+                    }
                 },
                 ['account_id' => $account->id],
             );

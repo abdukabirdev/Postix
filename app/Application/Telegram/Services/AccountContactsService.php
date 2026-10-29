@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\DeadSession;
+use App\Application\Telegram\Support\SessionSleep;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountContactState;
@@ -338,13 +339,7 @@ final class AccountContactsService
 
             throw $e;
         } finally {
-            if ($api) {
-                try {
-                    $api->stop();
-                } catch (Throwable) {
-                    // The session is being let go anyway.
-                }
-            }
+            SessionSleep::put($api, ['account_id' => $account->id]);
 
             $this->release($account);
         }

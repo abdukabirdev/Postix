@@ -8,6 +8,7 @@ use App\Application\Telegram\Services\MadelineService;
 use App\Application\Telegram\Services\TelegramAccountProcessService;
 use App\Application\Telegram\Services\TelegramContactResolver;
 use App\Application\Telegram\Services\TelegramNameMatcher;
+use App\Application\Telegram\Support\SessionSleep;
 use App\Enums\Drivers\TelegramDriverCheckStatus;
 use App\Enums\Drivers\TelegramDriverMessageType;
 use App\Enums\Telegram\TelegramAccountProcess as TelegramAccountProcessEnum;
@@ -1182,7 +1183,10 @@ final class ResolveTelegramPhoneCommand extends Command
                      */
                     if ($api) {
                         try {
-                            $api->stop();
+                            SessionSleep::put($api, [
+                                'check_id' => $check->id,
+                                'account_id' => $accountId,
+                            ]);
 
                             Log::info(
                                 'MadelineProto stopped',
