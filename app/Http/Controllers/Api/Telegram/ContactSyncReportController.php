@@ -66,6 +66,7 @@ final class ContactSyncReportController extends Controller
 
         /*
          * ok          - the last run reached its end
+         * stopped     - the Stop button ended it
          * running     - it is going now
          * interrupted - it began and never ended, and nothing holds the lock
          * never       - no run yet
@@ -76,6 +77,7 @@ final class ContactSyncReportController extends Controller
         $status = match (true) {
             $running => 'running',
             $lastStarted === null => 'never',
+            $finishedThatRun && ! empty($lastFinished->context['stopped']) => 'stopped',
             $finishedThatRun => 'ok',
             default => 'interrupted',
         };

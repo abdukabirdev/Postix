@@ -13,7 +13,7 @@ use Symfony\Component\Process\Process;
  * The Run button: nohups telegram:group-invites so the queue worker is not
  * held for the hours a full day of batches takes. The Check button: the
  * same command, only looking up the people already sent. "Who left": the
- * same command, looking everybody added up again.
+ * same command, reading the groups' members lists.
  */
 class StartGroupInviteJob implements ShouldQueue
 {

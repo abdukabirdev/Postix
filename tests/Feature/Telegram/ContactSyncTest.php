@@ -284,6 +284,75 @@ final class ContactSyncTest extends TestCase
         Queue::assertPushed(StartContactSyncJob::class, 1);
     }
 
+    public function test_a_stop_asked_from_the_panel_ends_the_account_before_the_next_contact(): void
+    {
+        (include database_path('migrations/2026_10_05_100000_create_telegram_settings_table.php'))->up();
+        (include database_path('migrations/2026_10_16_100000_add_contact_name_to_telegram_account_contacts_table.php'))->up();
+
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $service = $this->app->make(ContactSyncService::class);
+
+        foreach (['runId' => 'run-1', 'stoppable' => true] as $property => $value) {
+            (new \ReflectionProperty($service, $property))->setValue($service, $value);
+        }
+
+        ContactSyncService::requestStop('run-1');
+
+        $api = $this->fakeApi([
+            ['count' => 2, 'participants' => [['_' => 'channelParticipant', 'user_id' => 901], ['_' => 'channelParticipant', 'user_id' => 902]], 'users' => [['id' => 901, 'first_name' => 'Ali'], ['id' => 902, 'first_name' => 'Vali']]],
+        ]);
+
+        $config = ['daily_limit' => 5, 'skip_usernames' => false, 'delay_min' => 0, 'delay_max' => 0, 'nick_base' => ''];
+
+        $result = (new ReflectionMethod($service, 'runAccount'))->invoke($service, $api, $this->account(1), collect([$group]), $config, static function (string $line): void {});
+
+        $this->assertSame(0, $result['added']);
+        $this->assertSame([], $api->contacts->added);
+        $this->assertSame(0, TelegramAccountContact::query()->count(), 'nobody is left taken');
+
+        /* A stop for another run is not this one's. */
+        ContactSyncService::requestStop('run-0');
+        (new \ReflectionProperty($service, 'stopping'))->setValue($service, false);
+        (new \ReflectionProperty($service, 'stopLookedAt'))->setValue($service, 0);
+
+        $this->assertFalse((new ReflectionMethod($service, 'stopping'))->invoke($service));
+    }
+
+    public function test_the_stop_button_asks_the_run_and_queues_the_kill_of_a_stuck_one(): void
+    {
+        (include database_path('migrations/2026_10_05_100000_create_telegram_settings_table.php'))->up();
+
+        Queue::fake();
+
+        $controller = $this->app->make(ContactSyncController::class);
+
+        $this->assertSame(409, $controller->stop()->getStatusCode(), 'nothing runs');
+
+        $runId = (string) \Illuminate\Support\Str::uuid();
+        \App\Models\Telegram\TelegramContactSyncLog::query()->create(['run_id' => $runId, 'event' => 'started', 'message' => 'Sync started', 'context' => ['trigger' => 'schedule']]);
+
+        $this->assertTrue(\App\Telegram\TelegramProcessLock::acquire(\App\Console\Commands\Telegram\TelegramSyncContactsCommand::LOCK_NAME));
+
+        try {
+            $this->assertSame(200, $controller->stop()->getStatusCode());
+        } finally {
+            \App\Telegram\TelegramProcessLock::release(\App\Console\Commands\Telegram\TelegramSyncContactsCommand::LOCK_NAME);
+        }
+
+        /* A run from before the button writes no id: whichever runs is asked, and killed if it does not answer. */
+        $this->assertSame('*', \App\Models\Telegram\TelegramSetting::get(ContactSyncService::STOP_KEY));
+        Queue::assertPushedOn('telegram', \App\Jobs\Telegram\StopContactSyncJob::class, fn ($job) => $job->runId === null && $job->delay !== null);
+        $this->assertTrue(\App\Models\Telegram\TelegramContactSyncLog::query()->where('run_id', $runId)->where('event', 'stop')->exists());
+
+        /* Ended by the button: "stopped", not "finished" nor "interrupted". */
+        \App\Models\Telegram\TelegramContactSyncLog::query()->create(['run_id' => $runId, 'event' => 'finished', 'message' => 'Stopped from the panel', 'context' => ['accounts' => 1, 'stopped' => true]]);
+
+        $runs = $this->app->make(\App\Http\Controllers\Api\Telegram\ContactSyncRunController::class)->index(request())->getData(true);
+
+        $this->assertSame('stopped', $runs['data'][0]['status']);
+    }
+
     public function test_links_are_normalised(): void
     {
         foreach (['https://t.me/taxi_group', 't.me/taxi_group', '@taxi_group', ' taxi_group '] as $input) {

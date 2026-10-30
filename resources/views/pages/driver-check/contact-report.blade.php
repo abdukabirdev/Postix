@@ -10,6 +10,7 @@
             report: @js(route('api.telegram.contact-sync.report') . '?days=14'),
             runs: @js(route('api.telegram.contact-sync.runs')),
             run: @js(route('api.telegram.contact-sync.run')),
+            stop: @js(route('api.telegram.contact-sync.stop')),
             logs: @js(route('api.telegram.contact-sync.logs')),
         },
         translations: @js(__('driver_check.report')),
@@ -53,6 +54,10 @@
                     <x-driver-check.icon name="refresh" class="h-4 w-4 animate-spin" x-show="busy" x-cloak />
                     <x-driver-check.icon name="play" class="h-4 w-4" x-show="!busy" />
                     <span x-text="busy ? t.running : t.run_again"></span>
+                </x-driver-check.button>
+
+                <x-driver-check.button variant="danger" icon="stop" x-show="schedule?.running" x-cloak x-on:click="stop()" ::disabled="stopping">
+                    <span x-text="stopping ? t.stopping : t.stop"></span>
                 </x-driver-check.button>
             </x-slot:actions>
         </x-driver-check.page-header>

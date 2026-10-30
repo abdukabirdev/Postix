@@ -1546,10 +1546,13 @@ return [
             'finished' => 'Yakunlandi',
             'joined' => 'Qo\'shildi',
             'disabled' => 'O\'chirilgan',
+            'stop' => '«To\'xtatish» bosildi',
         ],
         'messages' => [
             'already_running' => 'Sinxronizatsiya allaqachon ketmoqda.',
             'run_queued' => 'Ishga tushirish navbatga qo\'yildi.',
+            'not_running' => 'Hozir hech narsa ishlamayapti.',
+            'stop_queued' => 'Ishga tushish to\'xtatilyapti. Agar osilib qolgan bo\'lsa, server uni 2 daqiqadan keyin to\'xtatadi.',
             'bad_link' => 'Guruh havolasi noto\'g\'ri.',
             'group_deleted' => 'Guruh o\'chirildi.',
             'account_enabled' => 'Akkaunt yana ishda.',

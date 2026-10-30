@@ -730,6 +730,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             ->group(function () {
                 Route::get('/', 'show')->name('api.telegram.contact-sync.show');
                 Route::post('/run', 'run')->name('api.telegram.contact-sync.run');
+                Route::post('/stop', 'stop')->name('api.telegram.contact-sync.stop');
                 Route::get('/logs', 'logs')->name('api.telegram.contact-sync.logs');
                 Route::get('/report', [ContactSyncReportController::class, 'show'])->name('api.telegram.contact-sync.report');
                 Route::get('/runs', [ContactSyncRunController::class, 'index'])->name('api.telegram.contact-sync.runs');

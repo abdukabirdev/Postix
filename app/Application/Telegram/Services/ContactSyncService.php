@@ -11,6 +11,7 @@ use App\Models\Telegram\TelegramAccountContact;
 use App\Models\Telegram\TelegramContactSyncLog;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramScrapeGroup;
+use App\Models\Telegram\TelegramSetting;
 use danog\MadelineProto\API;
 use danog\MadelineProto\RPCErrorException;
 use Illuminate\Support\Collection;
@@ -67,7 +68,26 @@ final class ContactSyncService
     /** A group not read for this long is read into the database again: the daily run reads each one. */
     private const COLLECT_EVERY_HOURS = 20;
 
+    /** The run id the panel asked to stop ("*": whichever runs). A TelegramSetting: the run and the page are different processes. */
+    public const STOP_KEY = 'contact_sync.stop';
+
+    /** The run going now as the Stop button sees it: its id, its process, the account it holds. */
+    public const NOW_KEY = 'contact_sync.now';
+
+    /** A run still going this long after the Stop button is stuck, and is killed (StopContactSyncJob). Seconds. */
+    public const STOP_GRACE = 120;
+
+    /** A stop asked from the panel is looked for at most this often, seconds. */
+    private const STOP_POLL = 2;
+
     private string $runId = '';
+
+    /** Only the daily sync stops by the button; a group's "fetch people" goes on. */
+    private bool $stoppable = false;
+
+    private bool $stopping = false;
+
+    private int $stopLookedAt = 0;
 
     /** @var list<int> accounts put on hold in this run: they do nothing more in it */
     private array $held = [];
@@ -98,6 +118,13 @@ final class ContactSyncService
         $this->held = [];
         $this->readGroups = [];
         $this->ownIds = null;
+        $this->stoppable = true;
+        $this->stopping = false;
+        $this->stopLookedAt = 0;
+
+        /* A stop asked of an earlier run is not this one's. */
+        TelegramSetting::set(self::STOP_KEY, null);
+        $this->now(null);
 
         $say = $output ?? static function (string $line): void {};
 
@@ -137,6 +164,7 @@ final class ContactSyncService
 
         if ($groups->isEmpty()) {
             $this->log('finished', 'No active groups, nothing to do');
+            TelegramSetting::set(self::NOW_KEY, null);
 
             return $totals;
         }
@@ -144,8 +172,8 @@ final class ContactSyncService
         /* Accounts left out in the panel are taken for used from the start. */
         $usedAccountIds = array_map('intval', (array) $config['excluded_accounts']);
 
-        /* Every available account takes its turn, however many there are. */
-        while (true) {
+        /* Every available account takes its turn, however many there are - until the Stop button. */
+        while (! $this->stopping()) {
             /*
              * The groups have to be read to learn who is in them; after
              * that, the contacts are done while nobody is left without an
@@ -188,6 +216,8 @@ final class ContactSyncService
             $totals['accounts']++;
 
             $say("Account #{$account->id} {$account->phone}");
+
+            $this->now($account->id);
 
             $api = null;
 
@@ -237,12 +267,86 @@ final class ContactSyncService
                 SessionSleep::put($api, ['account_id' => $account->id]);
 
                 $this->pool->release($account, ProcessEnum::ContactSync);
+
+                $this->now(null);
             }
         }
 
-        $this->log('finished', 'Sync finished', null, null, $totals);
+        $this->log(
+            'finished',
+            $this->stopping ? 'Stopped from the panel' : 'Sync finished',
+            null,
+            null,
+            $this->stopping ? [...$totals, 'stopped' => true] : $totals,
+        );
+
+        TelegramSetting::set(self::NOW_KEY, null);
 
         return $totals;
+    }
+
+    /**
+     * Asked from the panel: the run finishes the contact in hand, gives the
+     * account back and ends. One that does not answer is killed by
+     * StopContactSyncJob after STOP_GRACE.
+     */
+    public static function requestStop(?string $runId): void
+    {
+        TelegramSetting::set(self::STOP_KEY, $runId ?? '*');
+    }
+
+    /**
+     * The run going now as it wrote itself down: run_id, pid, account_id.
+     * Empty for a run that does not write it (one started before the Stop
+     * button existed).
+     *
+     * @return array<string, mixed>
+     */
+    public static function current(): array
+    {
+        return (array) TelegramSetting::get(self::NOW_KEY, []);
+    }
+
+    /**
+     * The panel asked this run to stop. Looked up every few seconds at most.
+     */
+    private function stopping(): bool
+    {
+        if ($this->stopping || ! $this->stoppable) {
+            return $this->stopping;
+        }
+
+        if (time() - $this->stopLookedAt < self::STOP_POLL) {
+            return false;
+        }
+
+        $this->stopLookedAt = time();
+
+        $asked = TelegramSetting::get(self::STOP_KEY);
+
+        if ($asked !== null && ($asked === '*' || $asked === $this->runId)) {
+            $this->stopping = true;
+        }
+
+        return $this->stopping;
+    }
+
+    /**
+     * Who the run is and which account it holds, for the Stop button: a
+     * stuck run is killed, and its account given back, by what is written
+     * here.
+     */
+    private function now(?int $accountId): void
+    {
+        try {
+            TelegramSetting::set(self::NOW_KEY, [
+                'run_id' => $this->runId,
+                'pid' => getmypid(),
+                'account_id' => $accountId,
+            ]);
+        } catch (Throwable) {
+            // the Stop button falls back on the lock's pid; the sync goes on
+        }
     }
 
     /**
@@ -261,6 +365,8 @@ final class ContactSyncService
         $this->held = [];
         $this->readGroups = [];
         $this->ownIds = null;
+        $this->stoppable = false;
+        $this->stopping = false;
 
         $say = $output ?? static function (string $line): void {};
 
@@ -388,7 +494,7 @@ final class ContactSyncService
 
         foreach ($groups as $group) {
             /* Its contacts for today are added: the groups left are read into the database by collect(). */
-            if ($remaining <= 0) {
+            if ($remaining <= 0 || $this->stopping()) {
                 break;
             }
 
@@ -451,7 +557,8 @@ final class ContactSyncService
                 ->get();
 
             foreach ($ids as $user) {
-                if ($remaining <= 0) {
+                /* Stopped: before the claim, so nobody is left taken. */
+                if ($remaining <= 0 || $this->stopping()) {
                     break;
                 }
 
@@ -587,7 +694,7 @@ final class ContactSyncService
         $result = ['members' => 0, 'new' => 0];
         $taken = 0;
 
-        while ($taken < self::COLLECT_PER_ACCOUNT && ($group = $queue->shift()) !== null) {
+        while ($taken < self::COLLECT_PER_ACCOUNT && ! $this->stopping() && ($group = $queue->shift()) !== null) {
             /* Read by this account for its contacts a moment ago. */
             if (isset($this->readGroups[$group->id])) {
                 continue;
@@ -731,6 +838,11 @@ final class ContactSyncService
 
             if ($offset >= $total) {
                 break;
+            }
+
+            /* Stopped half way: whoever was read goes into the database, the group is not taken for read. */
+            if ($this->stopping()) {
+                return array_values($members);
             }
 
             sleep(random_int(1, 3));
@@ -1082,8 +1194,15 @@ final class ContactSyncService
         $min = max(0, (int) ($config['delay_min'] ?? 3));
         $max = max($min, (int) ($config['delay_max'] ?? 5));
 
-        if ($max > 0) {
-            sleep(random_int($min, $max));
+        if ($max <= 0) {
+            return;
+        }
+
+        /* In one-second steps: a stop from the panel is not slept through. */
+        $until = time() + random_int($min, $max);
+
+        while (time() < $until && ! $this->stopping()) {
+            sleep(1);
         }
     }
 

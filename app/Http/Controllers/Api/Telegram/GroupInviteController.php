@@ -198,8 +198,9 @@ final class GroupInviteController extends Controller
     }
 
     /**
-     * "Who left": everybody added is looked up in the group again, nobody
-     * invited. Pressed by hand, once a week or so.
+     * "Who left": one account reads each group's members list, whoever it
+     * does not settle is looked up one by one, nobody invited. Pressed by
+     * hand, once a week or so.
      */
     public function checkLeft(): JsonResponse
     {

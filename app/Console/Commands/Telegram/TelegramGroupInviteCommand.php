@@ -22,7 +22,7 @@ final class TelegramGroupInviteCommand extends Command
     protected $signature = 'telegram:group-invites
         {--trigger=manual : Who started it: manual or schedule}
         {--check : Only look up the people already sent in their groups, invite nobody}
-        {--left : Who left: look everybody added up in their groups again, invite nobody}';
+        {--left : Who left: read the groups\' members lists, look up one by one whoever they do not settle, invite nobody}';
 
     protected $description = 'Invite the accounts\' contacts into the chosen groups';
 
@@ -59,7 +59,7 @@ final class TelegramGroupInviteCommand extends Command
         }
 
         $this->info(sprintf(
-            'Accounts: %d, batches: %d, added: %d, not added: %d, already in: %d, cannot be added: %d, unchecked: %d, still in: %d, left: %d',
+            'Accounts: %d, batches: %d, added: %d, not added: %d, already in: %d, cannot be added: %d, unchecked: %d, still in: %d, left: %d, back: %d',
             $totals['accounts'],
             $totals['batches'],
             $totals['invited'],
@@ -69,6 +69,7 @@ final class TelegramGroupInviteCommand extends Command
             $totals['sent'],
             $totals['stayed'],
             $totals['left'],
+            $totals['back'],
         ));
 
         return self::SUCCESS;

@@ -151,7 +151,7 @@ export function inviteHelpers(t) {
 
         /* added 3 · not added 10 · cannot 2 ... - only what is not zero. */
         summaryText(counts) {
-            const parts = ['invited', 'not_added', 'failed', 'already', 'sent', 'stayed', 'left']
+            const parts = ['invited', 'not_added', 'failed', 'already', 'sent', 'stayed', 'left', 'back']
                 .filter((key) => Number(counts?.[key] ?? 0) > 0)
                 .map((key) => t.log.summary[key].replace(':n', this.number(counts[key])));
 
@@ -203,6 +203,10 @@ export function inviteHelpers(t) {
                         return e.group_left.replace(':n', c.accounts ?? '?').replace(':reason', this.errorLabel(c.rpc));
                     }
 
+                    if (c.reason === 'list_failed') {
+                        return e.list_failed.replace(':reason', this.errorLabel(c.rpc));
+                    }
+
                     return line.message;
                 case 'batch': {
                     const error = c.error ? String(c.error) : null;
@@ -218,6 +222,14 @@ export function inviteHelpers(t) {
                     return error ? `${text} · ${this.errorLabel(error)}` : text;
                 }
                 case 'check':
+                    if (c.mode === 'left' && c.list) {
+                        return (c.whole ? e.check_left_list : e.check_left_part)
+                            .replace(':read', this.number(c.read ?? 0))
+                            .replace(':members', c.members === null || c.members === undefined ? '?' : this.number(c.members))
+                            .replace(':unchecked', this.number(c.unchecked ?? 0))
+                            .replace(':summary', this.summaryText(c));
+                    }
+
                     if (c.mode === 'left') {
                         return e.check_left
                             .replace(':done', this.number(c.done ?? 0))

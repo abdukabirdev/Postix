@@ -29,12 +29,14 @@ const RUN_TONES = {
     ok: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
     running: 'bg-blue-light-50 text-blue-light-700 dark:bg-blue-light-500/10 dark:text-blue-light-400',
     interrupted: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
+    stopped: 'bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300',
 };
 
 const RUN_DOTS = {
     ok: 'bg-success-500',
     running: 'animate-pulse bg-blue-light-500',
     interrupted: 'bg-error-500',
+    stopped: 'bg-gray-400',
 };
 
 const EVENT_TONES = {
@@ -46,6 +48,7 @@ const EVENT_TONES = {
     disabled: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
     failed: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
     flood: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
+    stop: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     finished: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
 };
 
@@ -84,6 +87,9 @@ export function contactReportPage(config) {
         scope: '',
 
         starting: false,
+
+        /** Stop pressed: the button waits until the run is gone. */
+        stopping: false,
 
         detailOpen: false,
 
@@ -129,6 +135,10 @@ export function contactReportPage(config) {
 
             try {
                 this.report = (await requestJson(this.endpoints.report)).data;
+
+                if (!this.schedule?.running) {
+                    this.stopping = false;
+                }
             } catch (error) {
                 this.reportError = error?.message || t.error;
             } finally {
@@ -255,6 +265,29 @@ export function contactReportPage(config) {
             }
         },
 
+        /** The run stops after the contact in hand; a stuck one is killed a couple of minutes later. */
+        async stop() {
+            if (this.stopping || !this.schedule?.running || !window.confirm(t.stop_confirm)) {
+                return;
+            }
+
+            this.stopping = true;
+
+            try {
+                const json = await requestJson(this.endpoints.stop, 'POST', {});
+
+                notify(json.message);
+
+                this.watchUntil = Date.now() + WATCH_MS;
+
+                await this.tick();
+            } catch (error) {
+                this.stopping = false;
+
+                notify(error?.message || t.error, false);
+            }
+        },
+
         /*
         |----------------------------------------------------------------
         | The history of runs
@@ -277,6 +310,7 @@ export function contactReportPage(config) {
                 ok: t.runs.ok,
                 running: t.runs.running_now,
                 interrupted: t.runs.interrupted,
+                stopped: t.runs.stopped,
             }[status] ?? status;
         },
 

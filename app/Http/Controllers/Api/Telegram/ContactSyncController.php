@@ -4,9 +4,11 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\Telegram;
 
+use App\Application\Telegram\Services\ContactSyncService;
 use App\Console\Commands\Telegram\TelegramSyncContactsCommand;
 use App\Http\Controllers\Controller;
 use App\Jobs\Telegram\StartContactSyncJob;
+use App\Jobs\Telegram\StopContactSyncJob;
 use App\Models\Telegram\TelegramAccount;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Models\Telegram\TelegramAccountContact;
@@ -166,6 +168,45 @@ final class ContactSyncController extends Controller
 
         return response()->json([
             'message' => __('telegram.contact_sync.messages.run_queued'),
+        ]);
+    }
+
+    /**
+     * The Stop button: the run is asked to stop and does so after the
+     * contact in hand. A run that has not stopped by itself a couple of
+     * minutes later is stuck, and the queue worker kills it. The run may be
+     * another OS user's process, so the page itself sends no signal.
+     */
+    public function stop(): JsonResponse
+    {
+        if (! TelegramProcessLock::isHeld(TelegramSyncContactsCommand::LOCK_NAME)) {
+            return response()->json([
+                'message' => __('telegram.contact_sync.messages.not_running'),
+            ], 409);
+        }
+
+        /* Null for a run started before the button existed: it is not asked, only killed. */
+        $runId = ContactSyncService::current()['run_id'] ?? null;
+
+        ContactSyncService::requestStop(is_string($runId) ? $runId : null);
+
+        $start = TelegramContactSyncLog::query()->where('event', 'started')->whereNull('group_id')->latest('id')->first();
+
+        if ($start !== null) {
+            TelegramContactSyncLog::query()->create([
+                'run_id' => $start->run_id,
+                'event' => 'stop',
+                'message' => 'Stop asked from the panel',
+                'context' => ['user_id' => auth()->id()],
+            ]);
+        }
+
+        StopContactSyncJob::dispatch(is_string($runId) ? $runId : null)
+            ->onQueue('telegram')
+            ->delay(now()->addSeconds(ContactSyncService::STOP_GRACE));
+
+        return response()->json([
+            'message' => __('telegram.contact_sync.messages.stop_queued'),
         ]);
     }
 

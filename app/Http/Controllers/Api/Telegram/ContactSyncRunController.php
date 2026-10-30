@@ -152,6 +152,7 @@ final class ContactSyncRunController extends Controller
         $context = (array) $start->context;
 
         $status = match (true) {
+            $finished !== null && ! empty($finished->context['stopped']) => 'stopped',
             $finished !== null => 'ok',
             $running => 'running',
             default => 'interrupted',
