@@ -81,6 +81,6 @@ class TelegramGroupInviteLog extends Model
 
     public function group(): BelongsTo
     {
-        return $this->belongsTo(TelegramInviteGroup::class, 'invite_group_id');
+        return $this->belongsTo(TelegramInviteGroup::class, 'invite_group_id')->withTrashed();
     }
 }

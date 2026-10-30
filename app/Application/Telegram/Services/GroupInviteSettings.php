@@ -26,8 +26,15 @@ final class GroupInviteSettings
         'usernames_per_day' => [0, 500],
     ];
 
+    /** Everybody not refused yet, those added before first; or only those added before. */
+    public const AUDIENCE_ALL = 'all';
+
+    public const AUDIENCE_PROVEN = 'proven';
+
+    public const AUDIENCES = [self::AUDIENCE_ALL, self::AUDIENCE_PROVEN];
+
     /**
-     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
      */
     public function defaults(): array
     {
@@ -48,12 +55,19 @@ final class GroupInviteSettings
              */
             'use_usernames' => true,
             'usernames_per_day' => 100,
+            /*
+             * Who is invited: all: people already added somewhere first,
+             * then the ones never tried; proven: only people already added
+             * into some group - a new group fills with sure ones, nobody
+             * unknown is spent on. People Telegram refused never are.
+             */
+            'audience' => self::AUDIENCE_ALL,
             'excluded_accounts' => self::listenerIds(),
         ];
     }
 
     /**
-     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
      */
     public function current(): array
     {
@@ -65,7 +79,7 @@ final class GroupInviteSettings
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
      */
     public function save(array $input): array
     {
@@ -77,7 +91,7 @@ final class GroupInviteSettings
     }
 
     /**
-     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
      */
     public function reset(): array
     {
@@ -105,7 +119,7 @@ final class GroupInviteSettings
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, batch_size: int, batches_per_day: int, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
      */
     private function normalise(array $input): array
     {
@@ -118,6 +132,10 @@ final class GroupInviteSettings
         $values['delay_max'] = max($values['delay_min'], $values['delay_max']);
         $values['enabled'] = filter_var($values['enabled'], FILTER_VALIDATE_BOOLEAN);
         $values['use_usernames'] = filter_var($values['use_usernames'], FILTER_VALIDATE_BOOLEAN);
+
+        if (! in_array($values['audience'], self::AUDIENCES, true)) {
+            $values['audience'] = self::AUDIENCE_ALL;
+        }
 
         if (preg_match('/^([01]\d|2[0-3]):[0-5]\d$/', (string) $values['schedule_at']) !== 1) {
             $values['schedule_at'] = $this->defaults()['schedule_at'];

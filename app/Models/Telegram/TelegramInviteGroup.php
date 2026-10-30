@@ -6,11 +6,15 @@ namespace App\Models\Telegram;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
  * A group the accounts invite their contacts into. Not a scrape group and
  * not a Join group: nothing is read from it except that the account can
  * invite into it.
+ *
+ * Deleting archives it (soft delete): who was added into it, who was not
+ * and why stays, and the same link added again brings all of it back.
  *
  * @property int         $id
  * @property string|null $title
@@ -19,6 +23,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class TelegramInviteGroup extends Model
 {
+    use SoftDeletes;
+
     protected $fillable = [
         'title',
         'link',
@@ -44,6 +50,26 @@ class TelegramInviteGroup extends Model
     public function invites(): HasMany
     {
         return $this->hasMany(TelegramGroupInvite::class, 'invite_group_id');
+    }
+
+    /**
+     * People are added into one group at a time: this one becomes it, every
+     * other group is switched off (not archived - its history stays and it
+     * can be made current again).
+     */
+    public function makeCurrent(): void
+    {
+        static::query()->whereKeyNot($this->getKey())->where('is_active', true)->update(['is_active' => false]);
+
+        $this->update(['is_active' => true]);
+    }
+
+    /**
+     * The group people are added into now; null when none is switched on.
+     */
+    public static function current(): ?self
+    {
+        return static::query()->where('is_active', true)->orderByDesc('id')->first();
     }
 
     /**

@@ -178,6 +178,48 @@ final class DriverCheckController extends Controller
         );
     }
 
+    public function groupInvitesGroups()
+    {
+        return view(
+            'pages.driver-check.group-invites-groups'
+        );
+    }
+
+    public function groupInvitesPeople()
+    {
+        return view(
+            'pages.driver-check.group-invites-people'
+        );
+    }
+
+    public function groupInvitesAccounts()
+    {
+        return view(
+            'pages.driver-check.group-invites-accounts'
+        );
+    }
+
+    public function groupInvitesLog()
+    {
+        return view(
+            'pages.driver-check.group-invites-log'
+        );
+    }
+
+    public function groupInvitesAnalysis()
+    {
+        return view(
+            'pages.driver-check.group-invites-analysis'
+        );
+    }
+
+    public function groupInvitesSettings()
+    {
+        return view(
+            'pages.driver-check.group-invites-settings'
+        );
+    }
+
     public function groupJoin()
     {
         return view(

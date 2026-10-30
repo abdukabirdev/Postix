@@ -40,6 +40,9 @@ class TelegramGroupInvite extends Model
     /** Cannot be added: Telegram refused because of the person (privacy, a link to their DMs or Premium only, a deleted account ...). */
     public const STATUS_FAILED = 'failed';
 
+    /** Was added, the "who left" check did not find them in the group any more (left_at). */
+    public const STATUS_LEFT = 'left';
+
     /** Every status a try ends in. */
     public const SETTLED = [
         self::STATUS_SENT,
@@ -47,7 +50,11 @@ class TelegramGroupInvite extends Model
         self::STATUS_NOT_ADDED,
         self::STATUS_ALREADY,
         self::STATUS_FAILED,
+        self::STATUS_LEFT,
     ];
+
+    /** Got into the group by our call, whether they are still there or not. */
+    public const ADDED = [self::STATUS_INVITED, self::STATUS_LEFT];
 
     /** The account's own contact: its session already knows the person. */
     public const VIA_CONTACT = 'contact';
@@ -65,6 +72,7 @@ class TelegramGroupInvite extends Model
         'batch_key',
         'attempted_at',
         'checked_at',
+        'left_at',
     ];
 
     protected function casts(): array
@@ -72,12 +80,14 @@ class TelegramGroupInvite extends Model
         return [
             'attempted_at' => 'datetime',
             'checked_at' => 'datetime',
+            'left_at' => 'datetime',
         ];
     }
 
+    /** Archived groups too: a person's history stays whole. */
     public function group(): BelongsTo
     {
-        return $this->belongsTo(TelegramInviteGroup::class, 'invite_group_id');
+        return $this->belongsTo(TelegramInviteGroup::class, 'invite_group_id')->withTrashed();
     }
 
     public function user(): BelongsTo

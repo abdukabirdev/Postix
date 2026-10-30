@@ -7,7 +7,11 @@ use App\Http\Controllers\Api\Telegram\ContactSyncController;
 use App\Http\Controllers\Api\Telegram\ContactSyncReportController;
 use App\Http\Controllers\Api\Telegram\ContactSyncRunController;
 use App\Http\Controllers\Api\Telegram\ContactSyncSettingsController;
+use App\Http\Controllers\Api\Telegram\GroupInviteAccountController;
+use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
 use App\Http\Controllers\Api\Telegram\GroupInviteController;
+use App\Http\Controllers\Api\Telegram\GroupInviteGroupController;
+use App\Http\Controllers\Api\Telegram\GroupInvitePeopleController;
 use App\Http\Controllers\Api\Telegram\GroupJoinController;
 use App\Http\Controllers\Api\Telegram\GroupJoinSettingsController;
 use App\Http\Controllers\Api\Telegram\AutoReplyController;
@@ -351,13 +355,22 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
         )->name('driver-check.contact-accounts');
 
         /*
-         * Group invites: the accounts add their own contacts into a chosen
-         * group. Separate from the contact sync and from Join group.
+         * Group invites: the accounts add their own contacts into our
+         * groups. Separate from the contact sync and from Join group. The
+         * overview, our groups, the base of people, the accounts, the run
+         * log, the analysis of the stops, the settings.
          */
         Route::get(
             '/group-invites',
             [DriverCheckController::class, 'groupInvites']
         )->name('driver-check.group-invites');
+
+        foreach (['groups', 'people', 'accounts', 'log', 'analysis', 'settings'] as $invitePage) {
+            Route::get(
+                "/group-invites/{$invitePage}",
+                [DriverCheckController::class, 'groupInvites' . ucfirst($invitePage)]
+            )->name("driver-check.group-invites.{$invitePage}");
+        }
 
         /*
          * Join group: the marked accounts find groups and join them by
@@ -797,23 +810,45 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             });
 
         /*
-         * Group invites: contacts of the accounts into a chosen group.
+         * Group invites: contacts of the accounts into our groups.
          */
         Route::prefix('/group-invites')
-            ->controller(GroupInviteController::class)
             ->group(function () {
-                Route::get('/', 'show')->name('api.telegram.group-invites.show');
-                Route::put('/settings', 'updateSettings')->name('api.telegram.group-invites.settings');
-                Route::post('/run', 'run')->name('api.telegram.group-invites.run');
-                Route::post('/check', 'check')->name('api.telegram.group-invites.check');
-                Route::post('/stop', 'stop')->name('api.telegram.group-invites.stop');
-                Route::get('/logs', 'logs')->name('api.telegram.group-invites.logs');
-                Route::get('/results', 'results')->name('api.telegram.group-invites.results');
-                Route::post('/retry-failed', 'retryFailed')->name('api.telegram.group-invites.retry');
-                Route::post('/groups', 'storeGroup')->name('api.telegram.group-invites.groups.store');
-                Route::patch('/groups/{inviteGroup}', 'updateGroup')->name('api.telegram.group-invites.groups.update');
-                Route::delete('/groups/{inviteGroup}', 'destroyGroup')->name('api.telegram.group-invites.groups.destroy');
-                Route::post('/accounts/{account}/enable', 'enableAccount')->name('api.telegram.group-invites.accounts.enable');
+                Route::controller(GroupInviteController::class)->group(function () {
+                    Route::get('/', 'show')->name('api.telegram.group-invites.show');
+                    Route::get('/settings', 'settings')->name('api.telegram.group-invites.settings');
+                    Route::put('/settings', 'updateSettings')->name('api.telegram.group-invites.settings.update');
+                    Route::post('/run', 'run')->name('api.telegram.group-invites.run');
+                    Route::post('/check', 'check')->name('api.telegram.group-invites.check');
+                    Route::post('/check-left', 'checkLeft')->name('api.telegram.group-invites.check-left');
+                    Route::post('/stop', 'stop')->name('api.telegram.group-invites.stop');
+                    Route::get('/logs', 'logs')->name('api.telegram.group-invites.logs');
+                });
+
+                Route::controller(GroupInviteGroupController::class)->group(function () {
+                    Route::get('/groups', 'index')->name('api.telegram.group-invites.groups');
+                    Route::post('/groups', 'store')->name('api.telegram.group-invites.groups.store');
+                    Route::patch('/groups/{inviteGroup}', 'update')->name('api.telegram.group-invites.groups.update');
+                    Route::delete('/groups/{inviteGroup}', 'destroy')->name('api.telegram.group-invites.groups.destroy');
+                    Route::post('/groups/{inviteGroup}/restore', 'restore')->whereNumber('inviteGroup')->name('api.telegram.group-invites.groups.restore');
+                    Route::post('/groups/{inviteGroup}/retry', 'retry')->name('api.telegram.group-invites.groups.retry');
+                });
+
+                Route::controller(GroupInvitePeopleController::class)->group(function () {
+                    Route::get('/people', 'index')->name('api.telegram.group-invites.people');
+                    Route::post('/people/reset', 'reset')->name('api.telegram.group-invites.people.reset');
+                });
+
+                Route::controller(GroupInviteAccountController::class)->group(function () {
+                    Route::get('/accounts', 'index')->name('api.telegram.group-invites.accounts');
+                    Route::patch('/accounts/{account}', 'update')->name('api.telegram.group-invites.accounts.update');
+                    Route::post('/accounts/{account}/enable', 'enable')->name('api.telegram.group-invites.accounts.enable');
+                });
+
+                Route::controller(GroupInviteAnalysisController::class)->group(function () {
+                    Route::get('/analysis', 'show')->name('api.telegram.group-invites.analysis');
+                    Route::get('/analysis/export', 'export')->name('api.telegram.group-invites.analysis.export');
+                });
             });
 
         /*

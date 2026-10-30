@@ -110,4 +110,12 @@ class TelegramScrapedUser extends Model
     {
         return $this->hasOne(TelegramAccountContact::class, 'scraped_user_id');
     }
+
+    /**
+     * What became of the person in each of our groups, archived ones too.
+     */
+    public function groupInvites(): HasMany
+    {
+        return $this->hasMany(TelegramGroupInvite::class, 'scraped_user_id');
+    }
 }

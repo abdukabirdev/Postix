@@ -30,6 +30,12 @@ import { groupJoinPeoplePage } from './group-join-people';
 import { groupJoinSettingsPage } from './group-join-settings';
 import { contactAccountsPage } from './contact-accounts';
 import { groupInvitesPage } from './group-invites';
+import { groupInvitesGroupsPage } from './group-invites-groups';
+import { groupInvitesPeoplePage } from './group-invites-people';
+import { groupInvitesAccountsPage } from './group-invites-accounts';
+import { groupInvitesLogPage } from './group-invites-log';
+import { groupInvitesAnalysisPage } from './group-invites-analysis';
+import { groupInvitesSettingsPage } from './group-invites-settings';
 import { statusType } from './status';
 
 /*
@@ -1242,6 +1248,12 @@ export function registerDriverCheck(Alpine) {
     Alpine.data('dcContactSettings', contactSettingsPage);
     Alpine.data('dcContactAccounts', contactAccountsPage);
     Alpine.data('dcGroupInvites', groupInvitesPage);
+    Alpine.data('dcGroupInvitesGroups', groupInvitesGroupsPage);
+    Alpine.data('dcGroupInvitesPeople', groupInvitesPeoplePage);
+    Alpine.data('dcGroupInvitesAccounts', groupInvitesAccountsPage);
+    Alpine.data('dcGroupInvitesLog', groupInvitesLogPage);
+    Alpine.data('dcGroupInvitesAnalysis', groupInvitesAnalysisPage);
+    Alpine.data('dcGroupInvitesSettings', groupInvitesSettingsPage);
     Alpine.data('dcGroupJoin', groupJoinPage);
     Alpine.data('dcGroupJoinGroups', groupJoinGroupsPage);
     Alpine.data('dcGroupJoinPeople', groupJoinPeoplePage);

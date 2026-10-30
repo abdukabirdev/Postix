@@ -226,9 +226,39 @@ class MenuHelper
                 'title' => __('driver_check.sections.invites'),
                 'items' => [
                     [
-                        'icon' => 'users',
+                        'icon' => 'dashboard',
                         'name' => __('driver_check.menu.group_invites'),
                         'path' => '/driver-check/group-invites',
+                    ],
+                    [
+                        'icon' => 'chat',
+                        'name' => __('driver_check.menu.group_invites_groups'),
+                        'path' => '/driver-check/group-invites/groups',
+                    ],
+                    [
+                        'icon' => 'user-profile',
+                        'name' => __('driver_check.menu.group_invites_people'),
+                        'path' => '/driver-check/group-invites/people',
+                    ],
+                    [
+                        'icon' => 'phone',
+                        'name' => __('driver_check.menu.group_invites_accounts'),
+                        'path' => '/driver-check/group-invites/accounts',
+                    ],
+                    [
+                        'icon' => 'task',
+                        'name' => __('driver_check.menu.group_invites_log'),
+                        'path' => '/driver-check/group-invites/log',
+                    ],
+                    [
+                        'icon' => 'statistics',
+                        'name' => __('driver_check.menu.group_invites_analysis'),
+                        'path' => '/driver-check/group-invites/analysis',
+                    ],
+                    [
+                        'icon' => 'task',
+                        'name' => __('driver_check.menu.group_invites_settings'),
+                        'path' => '/driver-check/group-invites/settings',
                     ],
                 ],
             ],
