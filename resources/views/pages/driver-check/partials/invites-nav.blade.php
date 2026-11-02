@@ -12,6 +12,7 @@
         'driver-check.group-invites.log' => ['menu' => 'group_invites_log', 'icon' => 'layers'],
         'driver-check.group-invites.analysis' => ['menu' => 'group_invites_analysis', 'icon' => 'chart'],
         'driver-check.group-invites.settings' => ['menu' => 'group_invites_settings', 'icon' => 'sliders-h'],
+        'driver-check.group-invites.bot' => ['menu' => 'group_invites_bot', 'icon' => 'bot'],
     ];
 @endphp
 

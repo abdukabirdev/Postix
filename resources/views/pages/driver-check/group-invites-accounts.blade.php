@@ -88,6 +88,7 @@
                             <div class="h-full rounded-full transition-all" :class="account.cap_lowered ? 'bg-warning-500' : 'bg-brand-500'" :style="`width: ${callsShare(account)}%`"></div>
                         </div>
                         <p x-show="account.cap_lowered" x-cloak class="mt-1 text-[11.5px] text-warning-600 dark:text-warning-400" x-text="t.accounts.cap_lowered.replace(':n', account.peer_floods)"></p>
+                        <p x-show="account.warm_day" x-cloak class="mt-1 text-[11.5px] text-brand-600 dark:text-brand-400" x-text="t.accounts.warm_up.replace(':day', account.warm_day).replace(':percent', account.warm_percent)"></p>
                     </div>
 
                     {{-- The numbers --}}

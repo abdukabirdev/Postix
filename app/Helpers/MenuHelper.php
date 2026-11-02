@@ -260,6 +260,11 @@ class MenuHelper
                         'name' => __('driver_check.menu.group_invites_settings'),
                         'path' => '/driver-check/group-invites/settings',
                     ],
+                    [
+                        'icon' => 'bot',
+                        'name' => __('driver_check.menu.group_invites_bot'),
+                        'path' => '/driver-check/group-invites/bot',
+                    ],
                 ],
             ],
             [

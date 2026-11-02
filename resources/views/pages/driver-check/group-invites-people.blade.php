@@ -59,7 +59,7 @@
 
                     <x-driver-check.select x-model="filters.status" x-on:change="load()">
                         <option value="">{{ __('driver_check.invites.people.any_status') }}</option>
-                        @foreach (['added', 'invited', 'left', 'not_added', 'failed', 'already', 'sent'] as $status)
+                        @foreach (['added', 'invited', 'left', 'not_added', 'failed', 'already', 'sent', 'joined'] as $status)
                             <option value="{{ $status }}">{{ __("driver_check.invites.statuses.{$status}") }}</option>
                         @endforeach
                     </x-driver-check.select>

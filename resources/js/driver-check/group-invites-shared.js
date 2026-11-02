@@ -39,6 +39,7 @@ export const STATUS_TONES = {
     left: 'bg-gray-900 text-white dark:bg-white dark:text-gray-900',
     not_added: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     failed: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
+    joined: 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-400',
 };
 
 /**

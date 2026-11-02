@@ -43,6 +43,13 @@ class TelegramGroupInvite extends Model
     /** Was added, the "who left" check did not find them in the group any more (left_at). */
     public const STATUS_LEFT = 'left';
 
+    /**
+     * Asked to join the group by themselves, our bot approved it. Nobody
+     * tried them: not a try, so not SETTLED - the base keeps their flag as it
+     * was, and the invite does not try them for this group.
+     */
+    public const STATUS_JOINED = 'joined';
+
     /** Every status a try ends in. */
     public const SETTLED = [
         self::STATUS_SENT,
@@ -61,6 +68,9 @@ class TelegramGroupInvite extends Model
 
     /** A person with a public @username from the common base, resolved first. */
     public const VIA_USERNAME = 'username';
+
+    /** Not invited: a request to join, approved by our bot. */
+    public const VIA_REQUEST = 'request';
 
     protected $fillable = [
         'invite_group_id',

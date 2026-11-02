@@ -174,6 +174,7 @@ export function groupInvitesGroupsPage(config) {
                 { key: 'failed', value: group.failed, status: 'failed' },
                 { key: 'already', value: group.already, status: 'already' },
                 { key: 'sent', value: group.sent, status: 'sent' },
+                { key: 'joined', value: group.joined, status: 'joined' },
             ];
         },
 

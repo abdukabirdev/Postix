@@ -50,6 +50,12 @@
                         <x-driver-check.field :label="__('driver_check.invites.settings.schedule_at')" :hint="__('driver_check.invites.settings.schedule_at_hint')">
                             <x-driver-check.input type="time" x-model="form.schedule_at" ::disabled="!form.enabled" required />
                         </x-driver-check.field>
+
+                        <x-driver-check.field :label="__('driver_check.invites.settings.runs_per_day')" :hint="__('driver_check.invites.settings.runs_per_day_hint')">
+                            <x-driver-check.input type="number" inputmode="numeric" x-model="form.runs_per_day" ::disabled="!form.enabled" ::min="limits.runs_per_day?.[0]" ::max="limits.runs_per_day?.[1]" required />
+                        </x-driver-check.field>
+
+                        <p class="self-end text-[12.5px] tabular-nums text-gray-600 dark:text-gray-300" x-show="form.enabled" x-text="t.settings.times.replace(':times', times().join(', '))"></p>
                     </div>
                 </x-driver-check.surface>
 
@@ -81,7 +87,7 @@
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
                         <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.settings.sections.pace') }}</h2>
-                        <p class="mt-0.5 text-[12px] text-gray-400" x-text="t.settings.per_account.replace(':n', number(perAccount()))"></p>
+                        <p class="mt-0.5 text-[12px] text-gray-400" x-text="t.settings.per_account.replace(':n', number(perAccount())) + ', ' + t.settings.per_run.replace(':n', number(perRun()))"></p>
                     </div>
                     <div class="grid gap-4 p-4 sm:grid-cols-2">
                         <x-driver-check.field :label="__('driver_check.invites.settings.batch_size')" :hint="__('driver_check.invites.settings.batch_size_hint')">
@@ -91,6 +97,18 @@
                         <x-driver-check.field :label="__('driver_check.invites.settings.batches_per_day')" :hint="__('driver_check.invites.settings.batches_per_day_hint')">
                             <x-driver-check.input type="number" inputmode="numeric" x-model="form.batches_per_day" ::min="limits.batches_per_day?.[0]" ::max="limits.batches_per_day?.[1]" required />
                         </x-driver-check.field>
+
+                        <label class="flex cursor-pointer items-start gap-3 sm:col-span-2">
+                            <span class="relative mt-0.5 inline-flex h-6 w-10 shrink-0 items-center">
+                                <input type="checkbox" x-model="form.warm_up" class="peer sr-only">
+                                <span class="absolute inset-0 rounded-full bg-gray-300 transition peer-checked:bg-brand-500 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 dark:bg-gray-700"></span>
+                                <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
+                            </span>
+                            <span>
+                                <span class="block text-[13px] font-semibold text-gray-900 dark:text-white">{{ __('driver_check.invites.settings.warm_up') }}</span>
+                                <span class="block text-[11.5px] leading-snug text-gray-400">{{ __('driver_check.invites.settings.warm_up_hint') }}</span>
+                            </span>
+                        </label>
 
                         <x-driver-check.field :label="__('driver_check.invites.settings.delay_min')" :hint="__('driver_check.invites.settings.delay_hint')">
                             <x-driver-check.input type="number" inputmode="numeric" x-model="form.delay_min" ::min="limits.delay_min?.[0]" ::max="limits.delay_min?.[1]" required />

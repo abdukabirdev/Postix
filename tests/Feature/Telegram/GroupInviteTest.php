@@ -4,6 +4,7 @@ namespace Tests\Feature\Telegram;
 
 use App\Application\Telegram\Services\GroupInviteService;
 use App\Application\Telegram\Services\GroupInviteSettings;
+use App\Application\Telegram\Services\JoinBotSettings;
 use App\Application\Telegram\Services\MadelineService;
 use App\Application\Telegram\Support\MemberCount;
 use App\Application\Telegram\Support\UsernameLookup;
@@ -27,12 +28,14 @@ use App\Models\Telegram\TelegramAccountProcess;
 use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramGroupInviteLog;
 use App\Models\Telegram\TelegramInviteGroup;
+use App\Models\Telegram\TelegramJoinRequest;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramSetting;
 use App\Models\User;
 use danog\MadelineProto\RPCError\RateLimitError;
 use danog\MadelineProto\RPCErrorException;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -93,6 +96,7 @@ final class GroupInviteTest extends TestCase
         (include database_path('migrations/2026_10_29_140000_add_invite_flags_to_telegram_tables.php'))->up();
         (include database_path('migrations/2026_10_29_160000_check_telegram_group_invites.php'))->up();
         (include database_path('migrations/2026_10_30_100000_keep_telegram_group_invite_history.php'))->up();
+        (include database_path('migrations/2026_11_02_110000_create_telegram_join_requests_table.php'))->up();
 
         DB::table('telegram_accounts')->insert([
             ['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001, 'session_path' => '/sessions/1'],
@@ -538,11 +542,14 @@ final class GroupInviteTest extends TestCase
         ]);
     }
 
-    public function test_calls_that_add_nobody_rest_the_account_until_tomorrow(): void
+    public function test_batches_that_add_nobody_rest_the_account_until_the_next_run_then_until_tomorrow(): void
     {
+        /* The default schedule: 05:00, 11:00, 17:00, 23:00. */
+        $this->travelTo(now()->setTime(12, 0));
+
         TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
 
-        foreach (range(1201, 1206) as $id) {
+        foreach (range(1201, 1212) as $id) {
             $this->hold(1, $this->person($id, "P{$id}"));
         }
 
@@ -550,14 +557,178 @@ final class GroupInviteTest extends TestCase
         $calls = $this->fakeTelegram(invite: fn () => ['missing_invitees' => []]);
 
         $settings = $this->app->make(GroupInviteSettings::class);
-        $settings->save([...$settings->current(), 'batch_size' => 1]);
+        $settings->save([...$settings->current(), 'batch_size' => 1, 'excluded_accounts' => [2]]);
 
         $totals = $this->service->run();
 
         $this->assertCount(5, $calls);
         $this->assertSame([0, 5], [$totals['invited'], $totals['not_added']]);
         $this->assertSame(5, TelegramGroupInvite::query()->where('status', TelegramGroupInvite::STATUS_NOT_ADDED)->count());
-        $this->assertSame('NOBODY_ADDED', $this->service->meta(TelegramAccount::query()->find(1))['rest_reason']);
+
+        /* The first time in a day it may only have been unlucky: it sits out until a minute before the 17:00 run. */
+        $meta = $this->service->meta(TelegramAccount::query()->find(1));
+        $this->assertSame('NOBODY_ADDED', $meta['rest_reason']);
+        $this->assertSame(now()->setTime(16, 59)->format('Y-m-d H:i'), Carbon::parse($meta['rest_until'])->format('Y-m-d H:i'));
+
+        /* The 17:00 run: the same again, now it rests until tomorrow. */
+        $this->travelTo(now()->setTime(17, 0));
+        $this->service->run();
+
+        $this->assertCount(10, $calls);
+        $this->assertTrue(Carbon::parse($this->service->meta(TelegramAccount::query()->find(1))['rest_until'])->isTomorrow());
+    }
+
+    public function test_batches_telegram_refused_outright_do_not_count_as_nobody_added(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach (range(1251, 1257) as $id) {
+            $this->hold(1, $this->person($id, "P{$id}"));
+        }
+
+        /* Unlucky with the people: privacy keeps every one of them out, and Telegram says so. */
+        $calls = $this->fakeTelegram(invite: fn (array $users) => [
+            'missing_invitees' => array_map(fn (int $id) => ['_' => 'missingInvitee', 'user_id' => $id, 'premium_would_allow_invite' => false], $users),
+        ]);
+
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'batch_size' => 1, 'excluded_accounts' => [2]]);
+
+        $totals = $this->service->run();
+
+        $this->assertCount(7, $calls);
+        $this->assertSame(7, $totals['failed']);
+        $this->assertArrayNotHasKey('rest_until', $this->service->meta(TelegramAccount::query()->find(1)));
+    }
+
+    public function test_four_runs_a_day_and_a_scheduled_run_makes_its_share_of_the_days_calls(): void
+    {
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $values = $settings->current();
+
+        $this->assertSame(4, $values['runs_per_day']);
+        $this->assertSame(['05:00', '11:00', '17:00', '23:00'], GroupInviteSettings::times($values));
+        $this->assertSame(['00:30', '08:30', '16:30'], GroupInviteSettings::times([...$values, 'schedule_at' => '16:30', 'runs_per_day' => 3]));
+
+        $this->travelTo(now()->setTime(11, 0));
+        $this->assertTrue($settings->dueNow());
+        $this->travelTo(now()->setTime(11, 1));
+        $this->assertFalse($settings->dueNow());
+        $this->assertSame('17:00', $settings->nextRun()?->format('H:i'));
+
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach (range(1271, 1290) as $id) {
+            $this->hold(1, $this->person($id, "P{$id}"));
+        }
+
+        $calls = $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+        $settings->save([...$settings->current(), 'batch_size' => 1, 'batches_per_day' => 8, 'warm_up' => false, 'excluded_accounts' => [2]]);
+
+        /* 8 a day over 4 runs: a scheduled run makes 2 calls with the account. */
+        $this->service->run(trigger: 'schedule');
+        $this->assertCount(2, $calls);
+
+        $this->service->run(trigger: 'schedule');
+        $this->assertCount(4, $calls);
+
+        /* From the panel: what is left of the day. */
+        $this->service->run();
+        $this->assertCount(8, $calls);
+
+        $this->service->run(trigger: 'schedule');
+        $this->assertCount(8, $calls);
+    }
+
+    public function test_a_new_account_warms_up_from_half_the_calls_to_all_of_them(): void
+    {
+        $values = $this->app->make(GroupInviteSettings::class)->current();
+        $ten = [...$values, 'batches_per_day' => 10];
+
+        $this->assertTrue($values['warm_up']);
+        $this->assertSame([5, 6, 7, 9, 10, 10], array_map(fn (int $day) => GroupInviteSettings::warmCap($day, $ten), [1, 2, 3, 4, 5, 6]));
+        $this->assertSame(10, GroupInviteSettings::warmCap(1, [...$ten, 'warm_up' => false]));
+
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        foreach (range(1301, 1320) as $id) {
+            $this->hold(1, $this->person($id, "P{$id}"));
+        }
+
+        $calls = $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'batch_size' => 1, 'batches_per_day' => 10, 'excluded_accounts' => [2]]);
+
+        /* Its first day of inviting: half of the 10. */
+        $this->travelTo(now()->setTime(10, 0));
+        $this->service->run();
+        $this->assertCount(5, $calls);
+        $this->assertSame(now()->toDateString(), $this->service->meta(TelegramAccount::query()->find(1))['first_day']);
+
+        /* The next day: 60%. */
+        $this->travelTo(now()->addDay());
+        $this->service->run();
+        $this->assertCount(11, $calls);
+
+        $row = collect($this->app->make(GroupInviteAccountController::class)->index()->getData(true)['accounts'])->firstWhere('id', 1);
+        $this->assertSame([2, 60, 6], [$row['warm_day'], $row['warm_percent'], $row['cap']]);
+
+        /* From the fifth day all of it. */
+        $this->travelTo(now()->addDays(3));
+        $row = collect($this->app->make(GroupInviteAccountController::class)->index()->getData(true)['accounts'])->firstWhere('id', 1);
+        $this->assertSame([null, 100, 10], [$row['warm_day'], $row['warm_percent'], $row['cap']]);
+    }
+
+    public function test_an_account_asked_to_join_goes_on_once_our_bot_approved_it(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(1295, 'Ali'));
+
+        $joins = new ArrayObject;
+        $calls = $this->fakeTelegram(
+            invite: fn (array $users) => $this->added($users),
+            join: function () use ($joins) {
+                $joins[] = true;
+
+                /* The group takes members by request; once approved, the account is in. */
+                throw RPCErrorException::make(count($joins) === 1 ? 'INVITE_REQUEST_SENT' : 'USER_ALREADY_PARTICIPANT', 400, '');
+            },
+        );
+
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'excluded_accounts' => [2]]);
+
+        /* Our bot is on and asking Telegram; it has approved account 1. */
+        TelegramSetting::set(JoinBotSettings::KEY, ['token' => '123456:' . str_repeat('a', 35), 'enabled' => true, 'bot' => ['id' => 5, 'username' => 'our_bot', 'name' => 'Bot']]);
+        TelegramSetting::set(JoinBotSettings::STATE_KEY, ['polled_at' => now()->toIso8601String()]);
+        TelegramJoinRequest::query()->create([
+            'chat_id' => -1000000000777,
+            'telegram_user_id' => 9001,
+            'telegram_account_id' => 1,
+            'status' => TelegramJoinRequest::STATUS_APPROVED,
+        ]);
+
+        $totals = $this->service->run();
+
+        $this->assertCount(2, $joins);
+        $this->assertCount(1, $calls);
+        $this->assertSame(1, $totals['invited']);
+    }
+
+    public function test_an_account_asked_to_join_without_our_bot_cannot_invite_there(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(1296, 'Ali'));
+
+        $calls = $this->fakeTelegram(
+            invite: fn (array $users) => $this->added($users),
+            join: fn () => throw RPCErrorException::make('INVITE_REQUEST_SENT', 400, ''),
+        );
+
+        $this->service->run();
+
+        $this->assertCount(0, $calls);
+        $this->assertSame(1, TelegramGroupInviteLog::query()->where('message', 'like', 'INVITE_REQUEST_SENT%')->count());
     }
 
     public function test_left_the_group_is_not_added_here_and_not_refused_elsewhere(): void
@@ -761,7 +932,8 @@ final class GroupInviteTest extends TestCase
     public function test_the_page_shows_how_each_account_stands_and_resume_clears_it(): void
     {
         $account = TelegramAccount::query()->find(1);
-        $config = $this->app->make(GroupInviteSettings::class)->current();
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $config = $settings->save([...$settings->current(), 'warm_up' => false]);
 
         $this->service->spamLimited($account, $config, 'PEER_FLOOD');
         $this->person(901, 'Private')->update(['can_add_to_group' => false]);
@@ -1267,14 +1439,14 @@ final class GroupInviteTest extends TestCase
         $role = Role::query()->create(['name' => 'driverCheck']);
         $this->actingAs(User::query()->create(['name' => 'Checker', 'role_id' => $role->id]));
 
-        foreach (['', '/groups', '/people', '/accounts', '/log', '/analysis', '/settings'] as $page) {
+        foreach (['', '/groups', '/people', '/accounts', '/log', '/analysis', '/settings', '/bot'] as $page) {
             $this->get('/driver-check/group-invites' . $page)
                 ->assertOk()
                 ->assertSee(__('driver_check.menu.group_invites_people'))
-                ->assertSee(__('driver_check.menu.group_invites_analysis'));
+                ->assertSee(__('driver_check.menu.group_invites_bot'));
         }
 
-        foreach (['', '/groups', '/people', '/accounts', '/logs', '/analysis', '/settings'] as $endpoint) {
+        foreach (['', '/groups', '/people', '/accounts', '/logs', '/analysis', '/settings', '/bot', '/bot/groups'] as $endpoint) {
             $this->getJson('/api/telegram/group-invites' . $endpoint)->assertOk();
         }
 
@@ -1346,13 +1518,14 @@ final class GroupInviteTest extends TestCase
         ?callable $member = null,
         ?array $list = null,
         ?int $members = null,
+        ?callable $join = null,
     ): ArrayObject {
         $calls = new ArrayObject;
         $this->checks = new ArrayObject;
 
         $api = (new ReflectionClass(API::class))->newInstanceWithoutConstructor();
 
-        $api->channels = new class($invite, $calls, $this->checks, $member, $list, $members)
+        $api->channels = new class($invite, $calls, $this->checks, $member, $list, $members, $join)
         {
             private int $members = 100;
 
@@ -1363,6 +1536,7 @@ final class GroupInviteTest extends TestCase
                 private $member,
                 private ?array $list,
                 private ?int $full,
+                private $join,
             ) {}
 
             /* As MadelineProto: not to be called directly. */
@@ -1379,6 +1553,10 @@ final class GroupInviteTest extends TestCase
 
             public function joinChannel(mixed ...$args): array
             {
+                if ($this->join !== null) {
+                    ($this->join)();
+                }
+
                 return ['chats' => [['_' => 'channel', 'id' => 777, 'title' => 'Drivers']]];
             }
 

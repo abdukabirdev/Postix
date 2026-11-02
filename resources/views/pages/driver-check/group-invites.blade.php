@@ -289,7 +289,7 @@
                             </div>
                             <div class="flex items-center justify-between gap-3 px-4 py-2.5">
                                 <dt class="text-gray-500">{{ __('driver_check.invites.overview.pace') }}</dt>
-                                <dd class="text-right tabular-nums text-gray-950 dark:text-white" x-text="t.overview.pace_value.replace(':size', data.settings.batch_size).replace(':times', data.settings.batches_per_day)"></dd>
+                                <dd class="text-right tabular-nums text-gray-950 dark:text-white" x-text="paceLabel()"></dd>
                             </div>
                             <div class="flex items-center justify-between gap-3 px-4 py-2.5">
                                 <dt class="text-gray-500">{{ __('driver_check.invites.overview.audience') }}</dt>

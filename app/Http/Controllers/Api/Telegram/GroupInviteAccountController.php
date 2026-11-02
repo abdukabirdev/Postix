@@ -37,6 +37,7 @@ final class GroupInviteAccountController extends Controller
             ->groupBy('telegram_account_id');
 
         $callsToday = TelegramGroupInviteLog::callsToday();
+        $firstDays = TelegramGroupInviteLog::firstCallDays();
 
         $lookupsToday = TelegramGroupInvite::query()
             ->where('via', TelegramGroupInvite::VIA_USERNAME)
@@ -74,13 +75,17 @@ final class GroupInviteAccountController extends Controller
             ->where('is_authorized', true)
             ->orderBy('id')
             ->get()
-            ->map(function (TelegramAccount $account) use ($byStatus, $callsToday, $lookupsToday, $addedToday, $contacts, $lastStops, $states, $config, $limit) {
+            ->map(function (TelegramAccount $account) use ($byStatus, $callsToday, $firstDays, $lookupsToday, $addedToday, $contacts, $lastStops, $states, $config, $limit) {
                 $counts = GroupInviteGroupController::counts($byStatus->get($account->id, collect())->pluck('total', 'status')->all());
                 $state = $states->get($account->id);
                 $meta = (array) ($state?->meta ?? []);
                 $restUntil = GroupInviteController::future($meta['rest_until'] ?? null);
                 $stop = $lastStops->get($account->id);
                 $own = $contacts[$account->id] ?? ['total' => 0, 'can' => 0, 'cannot' => 0];
+                /* A new account makes a share of the calls on its first days. */
+                $day = TelegramGroupInviteLog::inviteDay($meta['first_day'] ?? $firstDays[$account->id] ?? null);
+                $share = GroupInviteSettings::warmShare($day, $config);
+                $warmCap = GroupInviteSettings::warmCap($day, $config);
 
                 return [
                     'id' => $account->id,
@@ -97,8 +102,10 @@ final class GroupInviteAccountController extends Controller
                     'added_today' => (int) ($addedToday[$account->id] ?? 0),
                     'lookups_today' => (int) ($lookupsToday[$account->id] ?? 0),
                     /* Lowered after a PEER_FLOOD, grows back by itself. */
-                    'cap' => isset($meta['cap']) ? min($limit, (int) $meta['cap']) : $limit,
-                    'cap_lowered' => isset($meta['cap']) && (int) $meta['cap'] < $limit,
+                    'cap' => isset($meta['cap']) ? min($warmCap, (int) $meta['cap']) : $warmCap,
+                    'cap_lowered' => isset($meta['cap']) && (int) $meta['cap'] < $warmCap,
+                    'warm_day' => $share < 1 ? $day : null,
+                    'warm_percent' => (int) round($share * 100),
                     'peer_floods' => (int) ($meta['peer_floods'] ?? 0),
                     ...$counts,
                     'held' => $state !== null && ! $state->is_available,

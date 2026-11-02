@@ -31,6 +31,15 @@ Schedule::command('telegram:group-invites --trigger=schedule')
     ->runInBackground()
     ->withoutOverlapping();
 
+// Our bot approves the requests to join our groups and writes who asked
+// into the base. Each start asks Telegram for under a minute and ends; the
+// token and the switch live in the panel (Group invites -> Join bot).
+Schedule::command('telegram:join-requests')
+    ->everyMinute()
+    ->when(fn () => app(\App\Application\Telegram\Services\JoinBotSettings::class)->enabled())
+    ->runInBackground()
+    ->withoutOverlapping(5);
+
 // The Join group watchdog: one worker per account marked in the panel, each
 // finding the groups of our topic and joining them by itself. Asked every
 // minute while it is on, so it is back by itself after a reboot or a crash

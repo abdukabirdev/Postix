@@ -14,6 +14,7 @@ use App\Models\Telegram\TelegramAccountProcess;
 use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramGroupInviteLog;
 use App\Models\Telegram\TelegramInviteGroup;
+use App\Models\Telegram\TelegramJoinRequest;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramSetting;
 use danog\MadelineProto\API;
@@ -38,7 +39,14 @@ use Throwable;
  * Telegram holds tight, hence its own daily cap), then invited the same way.
  *
  * One call adds a batch (20 by default); an account makes a limited number
- * of calls a day (80 by default). A person is claimed before the call,
+ * of calls a day (80 by default). The schedule starts a few runs a day (four,
+ * six hours apart); each makes its share of an account's calls, so the day
+ * is spread over them. A run started from the panel may use what is left
+ * of the day. A new account warms up: 50% of the day's calls on its first
+ * day of inviting, then 60, 70, 85, all of them from the fifth day
+ * (GroupInviteSettings::WARM_UP). A group that lets people in only by request: the account's
+ * request is approved by our bot (JoinRequestService) and the run goes
+ * on. A person is claimed before the call,
  * unique per group, so two accounts never invite the same person and a
  * person is tried once per group. That row stays: an archived group keeps
  * it, and the same group added again does not try anybody twice.
@@ -205,8 +213,15 @@ final class GroupInviteService
     /** A clean day raises a lowered cap by this, one call at least. */
     private const CAP_GROWTH = 1.25;
 
-    /** Calls in a row that added nobody: the account rests until tomorrow. */
-    private const MAX_EMPTY_CALLS = 5;
+    /**
+     * Batches in a row where nobody was added and people were left out
+     * without a word: the account rests until the next run, the second
+     * time in a day until tomorrow.
+     */
+    private const MAX_EMPTY_BATCHES = 5;
+
+    /** How long an account that asked to join waits for our bot to approve it, seconds. */
+    private const BOT_APPROVAL_WAIT = 90;
 
     /** This many accounts that may not invite into a group, none that may: the run leaves it. */
     private const DENIED_ACCOUNTS_LIMIT = 3;
@@ -297,12 +312,19 @@ final class GroupInviteService
     /** The "proven" audience: only people already added into some group. */
     private bool $provenOnly = false;
 
+    /** A scheduled run: each account makes its share of the day's calls, the rest is for the runs after it. */
+    private bool $byShare = false;
+
+    /** @var array<int, int> account id => invite calls it made in this run */
+    private array $runCalls = [];
+
     public function __construct(
         private readonly MadelineService $madeline,
         private readonly TelegramAccountProcessService $pool,
         private readonly GroupInviteSettings $settings,
         private readonly UsernameLookup $usernames,
         private readonly MemberCount $memberCount,
+        private readonly JoinBotSettings $joinBot,
     ) {}
 
     /**
@@ -335,6 +357,8 @@ final class GroupInviteService
 
         $config = $this->settings->current();
         $this->provenOnly = $config['audience'] === GroupInviteSettings::AUDIENCE_PROVEN;
+        $this->byShare = $trigger === 'schedule';
+        $this->runCalls = [];
         $checkOnly = $checkOnly || $whoLeft;
         $totals = ['accounts' => 0, 'batches' => 0, ...self::ZERO, 'stayed' => 0, 'back' => 0];
 
@@ -367,6 +391,9 @@ final class GroupInviteService
             'groups' => $groups->pluck('link')->all(),
             'batch_size' => (int) $config['batch_size'],
             'batches_per_day' => (int) $config['batches_per_day'],
+            'runs_per_day' => (int) $config['runs_per_day'],
+            /* The calls one account makes in this run at most, without a lowered cap; null: the day's whole cap. */
+            'run_share' => $this->byShare ? GroupInviteSettings::runShare((int) $config['batches_per_day'], $config) : null,
             'use_usernames' => (bool) $config['use_usernames'],
             'usernames_per_day' => (int) $config['usernames_per_day'],
             'excluded_accounts' => $config['excluded_accounts'],
@@ -844,15 +871,17 @@ final class GroupInviteService
     }
 
     /**
-     * The calls this account may make today: the panel's number, or less
-     * while it comes back from a PEER_FLOOD.
+     * The calls this account may make today: the panel's number - its
+     * share of it while the account is new (warm-up) - or less while it
+     * comes back from a PEER_FLOOD.
      *
      * @param array<string, mixed> $config
      */
     public function dailyCap(TelegramAccount $account, array $config): int
     {
-        $limit = max(1, (int) $config['batches_per_day']);
+        $full = max(1, (int) $config['batches_per_day']);
         $meta = $this->meta($account);
+        $limit = GroupInviteSettings::warmCap($this->inviteDay($account, $meta), $config);
 
         /*
          * The account reached its cap on an earlier day without a
@@ -863,13 +892,27 @@ final class GroupInviteService
             $floods = max(0, (int) ($meta['peer_floods'] ?? 0) - 1);
 
             $meta = $this->setMeta($account, [
-                'cap' => $cap !== null && $cap < $limit ? $cap : null,
+                'cap' => $cap !== null && $cap < $full ? $cap : null,
                 'peer_floods' => $floods > 0 ? $floods : null,
                 'clean_day' => null,
             ]);
         }
 
         return isset($meta['cap']) ? max(1, min($limit, (int) $meta['cap'])) : $limit;
+    }
+
+    /**
+     * Which day of inviting today is for the account (1: its first): from
+     * the day it first made a call, kept in its meta once it has.
+     *
+     * @param array<string, mixed>|null $meta
+     */
+    public function inviteDay(TelegramAccount $account, ?array $meta = null): int
+    {
+        $meta ??= $this->meta($account);
+        $first = $meta['first_day'] ?? TelegramGroupInviteLog::firstCallDays([$account->id])[$account->id] ?? null;
+
+        return TelegramGroupInviteLog::inviteDay($first);
     }
 
     /**
@@ -1011,6 +1054,12 @@ final class GroupInviteService
                 break;
             }
 
+            if ($this->shareDone($account, $config)) {
+                $say("  this run's share reached ({$this->runCalls[$account->id]} calls), the rest of the day is for the next runs");
+
+                break;
+            }
+
             $chunk = $this->nextChunk($account, $config);
 
             if ($chunk === null) {
@@ -1028,26 +1077,28 @@ final class GroupInviteService
                 break;
             }
 
-            $empty = $done['invited'] > 0 ? 0 : $empty + $done['calls'];
-
             /*
-             * Call after call and nobody added: Telegram may be holding the
-             * account quietly. It stops for today instead of burning more.
+             * Batch after batch nobody added, people left out without a
+             * word: Telegram may be holding the account quietly. A batch
+             * whose people Telegram refused outright (privacy, already in
+             * the group, only a mutual contact) says nothing about the
+             * account - it was unlucky with the people: it neither counts
+             * nor breaks the row. A batch split to find who refused is
+             * still one batch.
              */
-            if ($empty >= self::MAX_EMPTY_CALLS) {
-                $this->rest(
-                    $account,
-                    now()->addDay()->startOfDay()->timestamp - now()->timestamp + random_int(300, 1800),
-                    'empty',
-                    'NOBODY_ADDED',
-                    context: ['step' => self::STEP_INVITE, 'empty_calls' => $empty],
-                );
-                $say("  {$empty} calls without anybody added, the account rests until tomorrow");
+            if ($done['invited'] > 0) {
+                $empty = 0;
+            } elseif ($done['quiet'] > 0) {
+                $empty++;
+            }
+
+            if ($empty >= self::MAX_EMPTY_BATCHES) {
+                $this->restEmpty($account, $empty, $say);
 
                 break;
             }
 
-            if ($this->callsToday($account->id) < $this->dailyCap($account, $config)) {
+            if (! $this->capReached($account, $config)) {
                 $this->pause($config);
             }
         }
@@ -1110,7 +1161,7 @@ final class GroupInviteService
      * @param Collection<int, TelegramScrapedUser> $people
      * @param array<string, mixed>                 $config
      *
-     * @return array{calls: int, invited: int, not_added: int, already: int, sent: int, failed: int, stop: bool}
+     * @return array{calls: int, invited: int, not_added: int, already: int, sent: int, failed: int, quiet: int, stop: bool}
      */
     private function work(
         API $api,
@@ -1121,7 +1172,8 @@ final class GroupInviteService
         array $config,
         callable $say,
     ): array {
-        $done = ['calls' => 0, ...self::ZERO, 'stop' => false];
+        /* quiet: people Telegram took the call for and left out without a word, or that could not be checked. */
+        $done = ['calls' => 0, ...self::ZERO, 'quiet' => 0, 'stop' => false];
 
         try {
             $this->ensureJoined($api, $group, $account, $say);
@@ -1167,7 +1219,7 @@ final class GroupInviteService
             $part = array_shift($parts);
 
             if ($done['calls'] > 0) {
-                if ($this->callsToday($account->id) >= $this->dailyCap($account, $config)) {
+                if ($this->capReached($account, $config)) {
                     $this->releasePeople($group, collect([$part, ...$parts])->flatten(1));
 
                     break;
@@ -1259,6 +1311,7 @@ final class GroupInviteService
                 'named' => count(array_intersect_key($added, array_flip($part->map(fn (TelegramScrapedUser $user) => (int) $user->telegram_user_id)->all()))),
             ]);
             $this->tally($done, $account, $group, $settled);
+            $done['quiet'] += $settled['not_added'] + $settled['sent'];
 
             $say("  {$group->link}: " . self::summary($settled) . ($via === TelegramGroupInvite::VIA_USERNAME ? ' (@username)' : ''));
 
@@ -2249,7 +2302,7 @@ final class GroupInviteService
      */
     private function hasWork(TelegramAccount $account, array $config): bool
     {
-        if ($this->callsToday($account->id) >= $this->dailyCap($account, $config)) {
+        if ($this->capReached($account, $config)) {
             return false;
         }
 
@@ -2261,6 +2314,63 @@ final class GroupInviteService
 
         return $this->usernamesLeft($account, $config) > 0
             && $open->contains(fn (TelegramInviteGroup $group) => $this->usernameCandidates($group, 1)->isNotEmpty());
+    }
+
+    /**
+     * No more calls for this account in this run: the day's cap is made,
+     * or the share of it a scheduled run gives one account.
+     *
+     * @param array<string, mixed> $config
+     */
+    private function capReached(TelegramAccount $account, array $config): bool
+    {
+        return $this->callsToday($account->id) >= $this->dailyCap($account, $config)
+            || $this->shareDone($account, $config);
+    }
+
+    /**
+     * A scheduled run gives each account its share of the day's cap (a
+     * quarter at four runs a day); a run started from the panel the whole
+     * day's cap that is left.
+     *
+     * @param array<string, mixed> $config
+     */
+    private function shareDone(TelegramAccount $account, array $config): bool
+    {
+        return $this->byShare
+            && ($this->runCalls[$account->id] ?? 0) >= GroupInviteSettings::runShare($this->dailyCap($account, $config), $config);
+    }
+
+    /**
+     * Nobody added batch after batch. The first time in a day the account
+     * may only have been unlucky: it sits out until the next run. The
+     * second time it rests until tomorrow, as a quiet hold does not end
+     * within hours.
+     *
+     * @param callable(string): void $say
+     */
+    private function restEmpty(TelegramAccount $account, int $batches, callable $say): void
+    {
+        $again = TelegramGroupInviteLog::query()
+            ->where('telegram_account_id', $account->id)
+            ->where('event', 'rest')
+            ->where('created_at', '>=', now()->startOfDay())
+            ->exists();
+
+        $next = $again ? null : $this->settings->nextRun();
+
+        /* A minute before the run starts: it finds the account rested. */
+        $seconds = $next !== null
+            ? max(60, $next->timestamp - now()->timestamp - 60)
+            : now()->addDay()->startOfDay()->timestamp - now()->timestamp + random_int(300, 1800);
+
+        $this->rest($account, $seconds, 'empty', 'NOBODY_ADDED', context: [
+            'step' => self::STEP_INVITE,
+            'empty_batches' => $batches,
+            'again_today' => $again,
+        ]);
+
+        $say("  {$batches} batches without anybody added, the account rests " . ($next !== null ? 'until the next run' : 'until tomorrow'));
     }
 
     /**
@@ -2378,10 +2488,25 @@ final class GroupInviteService
 
         $context = ['step' => self::STEP_JOIN];
 
+        $join = fn () => $this->patiently(fn () => $group->isInvite()
+            ? $api->messages->importChatInvite(hash: $group->inviteHash(), floodWaitLimit: 0)
+            : $api->channels->joinChannel(channel: '@' . ltrim($group->link, '@'), floodWaitLimit: 0), $say, $account, $group, $context);
+
         try {
-            $result = $this->patiently(fn () => $group->isInvite()
-                ? $api->messages->importChatInvite(hash: $group->inviteHash(), floodWaitLimit: 0)
-                : $api->channels->joinChannel(channel: '@' . ltrim($group->link, '@'), floodWaitLimit: 0), $say, $account, $group, $context);
+            try {
+                $result = $join();
+            } catch (Throwable $e) {
+                /*
+                 * The group takes new members by request: our bot approves
+                 * the account's as well. Once it has, the same join finds
+                 * the account in the group.
+                 */
+                if (self::code($e) !== 'INVITE_REQUEST_SENT' || ! $this->approvedByBot($account, $group, $say)) {
+                    throw $e;
+                }
+
+                $result = $join();
+            }
 
             $this->rememberChat($group, $result, $account->id);
         } catch (Throwable $e) {
@@ -2403,6 +2528,49 @@ final class GroupInviteService
         $this->joined[$key] = true;
 
         $group->refresh();
+    }
+
+    /**
+     * The account asked to join (INVITE_REQUEST_SENT). While our bot is
+     * asking Telegram, it approves the request within seconds: the run
+     * waits for that line of the bot, a little while at most.
+     *
+     * @param callable(string): void $say
+     */
+    private function approvedByBot(TelegramAccount $account, TelegramInviteGroup $group, callable $say): bool
+    {
+        if (! $this->joinBot->alive()) {
+            return false;
+        }
+
+        /* The bot may have been quicker than the error got here. */
+        $since = now()->subSeconds(15);
+        $until = time() + self::BOT_APPROVAL_WAIT;
+
+        $say("  {$group->link}: asked to join, waiting for our bot to approve");
+        $this->doing('waiting_bot', ['until' => Carbon::createFromTimestamp($until)->toIso8601String()]);
+
+        while (time() < $until && ! $this->stopping()) {
+            $request = TelegramJoinRequest::query()
+                ->where('telegram_account_id', $account->id)
+                ->where('created_at', '>=', $since)
+                ->latest('id')
+                ->first();
+
+            if ($request !== null) {
+                $approved = $request->status === TelegramJoinRequest::STATUS_APPROVED;
+
+                $say('  ' . ($approved ? 'approved by our bot' : "our bot could not approve: {$request->error}"));
+
+                return $approved;
+            }
+
+            sleep(2);
+        }
+
+        $say('  our bot did not approve in time');
+
+        return false;
     }
 
     private function rememberChat(TelegramInviteGroup $group, mixed $result, int $accountId): void
@@ -2801,6 +2969,14 @@ final class GroupInviteService
         $message = self::summary($settled) . ($error !== null ? " ({$error})" : '');
 
         $this->live([], 1);
+        $this->runCalls[$account->id] = ($this->runCalls[$account->id] ?? 0) + 1;
+
+        /* Its first call ever starts its warm-up; the day is kept, the log may not be for good. */
+        if ($this->runCalls[$account->id] === 1 && ! isset($this->meta($account)['first_day'])) {
+            $this->setMeta($account, [
+                'first_day' => TelegramGroupInviteLog::firstCallDays([$account->id])[$account->id] ?? now()->toDateString(),
+            ]);
+        }
 
         $this->log(TelegramGroupInviteLog::EVENT_CALL, $message, $account->id, $group->id, [
             'batch_key' => $batchKey,

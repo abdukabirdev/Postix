@@ -103,7 +103,7 @@
                 </div>
 
                 {{-- The numbers: each opens its people --}}
-                <div class="grid grid-cols-3 divide-x divide-y divide-gray-100 sm:grid-cols-6 sm:divide-y-0 dark:divide-gray-800">
+                <div class="grid grid-cols-4 divide-x divide-y divide-gray-100 sm:grid-cols-7 sm:divide-y-0 dark:divide-gray-800">
                     <template x-for="cell in cells(group)" :key="cell.key">
                         <a :href="peopleLink(group, cell.status)" class="block px-4 py-3 transition hover:bg-gray-25 dark:hover:bg-white/[0.02]">
                             <span class="block text-[11px] font-medium uppercase tracking-wide text-gray-400" x-text="t.groups.cells[cell.key]"></span>

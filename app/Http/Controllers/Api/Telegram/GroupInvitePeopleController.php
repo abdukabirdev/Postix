@@ -22,7 +22,7 @@ use Illuminate\Http\Request;
 final class GroupInvitePeopleController extends Controller
 {
     /** Every status a person can have in one group. */
-    private const GROUP_STATUSES = ['invited', 'left', 'not_added', 'already', 'sent', 'failed', 'pending'];
+    private const GROUP_STATUSES = ['invited', 'left', 'not_added', 'already', 'sent', 'failed', 'pending', 'joined'];
 
     public function __construct(
         private readonly GroupInviteSettings $settings,

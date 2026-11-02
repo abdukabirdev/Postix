@@ -222,6 +222,8 @@ final class GroupInviteGroupController extends Controller
             'sent' => $of(TelegramGroupInvite::STATUS_SENT),
             'failed' => $of(TelegramGroupInvite::STATUS_FAILED),
             'pending' => $of(TelegramGroupInvite::STATUS_PENDING),
+            /* Asked to join by themselves, our bot let them in: not added by us. */
+            'joined' => $of(TelegramGroupInvite::STATUS_JOINED),
         ];
     }
 }

@@ -6,6 +6,7 @@ namespace App\Models\Telegram;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Carbon;
 
 /**
  * One line of a group-invite run, shown on the page.
@@ -72,6 +73,40 @@ class TelegramGroupInviteLog extends Model
             ->pluck('calls', 'telegram_account_id')
             ->map(fn ($calls) => (int) $calls)
             ->all();
+    }
+
+    /**
+     * The day of each account's first invite call (Y-m-d): where its
+     * warm-up starts, for an account that has not remembered it yet.
+     *
+     * @param list<int>|null $accountIds
+     *
+     * @return array<int, string>
+     */
+    public static function firstCallDays(?array $accountIds = null): array
+    {
+        return self::query()
+            ->where('event', self::EVENT_CALL)
+            ->whereNotNull('telegram_account_id')
+            ->when($accountIds !== null, fn ($q) => $q->whereIn('telegram_account_id', $accountIds))
+            ->selectRaw('telegram_account_id, MIN(created_at) as first_at')
+            ->groupBy('telegram_account_id')
+            ->pluck('first_at', 'telegram_account_id')
+            ->map(fn ($at) => Carbon::parse($at)->toDateString())
+            ->all();
+    }
+
+    /**
+     * Which day of inviting today is for an account that first invited on
+     * $firstDay (1: the first; an account that never invited is on it).
+     */
+    public static function inviteDay(?string $firstDay): int
+    {
+        if ($firstDay === null) {
+            return 1;
+        }
+
+        return max(1, (int) round(Carbon::parse($firstDay)->startOfDay()->diffInDays(now()->startOfDay())) + 1);
     }
 
     public function account(): BelongsTo

@@ -3,8 +3,9 @@
 | Group invites: the settings
 |--------------------------------------------------------------------------
 |
-| When the daily run starts, how many people one call adds and how many
-| calls an account makes a day, the pause between them, who is invited
+| When the runs start (the first one, the others at equal steps through the
+| day), how many people one call adds and how many calls an account makes a
+| day - each scheduled run its share of them -, the pause between them, who is invited
 | (everybody not refused, those added before first - or only those), and
 | the @username lookups. Which accounts take part is set on their page.
 |
@@ -13,8 +14,8 @@
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify } from './group-invites-shared';
 
-const FIELDS = ['enabled', 'schedule_at', 'batch_size', 'batches_per_day', 'delay_min', 'delay_max', 'use_usernames', 'usernames_per_day', 'audience'];
-const NUMBERS = ['batch_size', 'batches_per_day', 'delay_min', 'delay_max', 'usernames_per_day'];
+const FIELDS = ['enabled', 'schedule_at', 'runs_per_day', 'batch_size', 'batches_per_day', 'warm_up', 'delay_min', 'delay_max', 'use_usernames', 'usernames_per_day', 'audience'];
+const NUMBERS = ['runs_per_day', 'batch_size', 'batches_per_day', 'delay_min', 'delay_max', 'usernames_per_day'];
 
 export function groupInvitesSettingsPage(config) {
     const t = config.translations;
@@ -71,6 +72,35 @@ export function groupInvitesSettingsPage(config) {
             const times = Number(this.form?.batches_per_day ?? 0);
 
             return size > 0 && times > 0 ? size * times : 0;
+        },
+
+        /* The day's run times, as GroupInviteSettings::times() counts them. */
+        times() {
+            const [hours, minutes] = String(this.form?.schedule_at ?? '').split(':').map(Number);
+            const runs = Math.max(1, Math.min(24, Math.floor(Number(this.form?.runs_per_day) || 1)));
+
+            if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+                return [];
+            }
+
+            const pad = (n) => String(n).padStart(2, '0');
+            const first = hours * 60 + minutes;
+            const times = new Set();
+
+            for (let run = 0; run < runs; run++) {
+                const minute = (first + Math.floor((run * 1440) / runs)) % 1440;
+                times.add(`${pad(Math.floor(minute / 60))}:${pad(minute % 60)}`);
+            }
+
+            return [...times].sort();
+        },
+
+        /* The batches one scheduled run makes with an account. */
+        perRun() {
+            const times = Number(this.form?.batches_per_day ?? 0);
+            const runs = Math.max(1, Number(this.form?.runs_per_day ?? 1));
+
+            return times > 0 ? Math.ceil(times / runs) : 0;
         },
 
         audiences() {

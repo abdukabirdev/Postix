@@ -123,6 +123,7 @@ final class GroupInviteController extends Controller
                 'held' => $taking->filter(fn (int $id) => $states->has($id) && ! $states->get($id)->is_available)->count(),
             ],
             'settings' => $config,
+            'times' => GroupInviteSettings::times($config),
             'last_left_check' => $lastLeft ? [
                 'at' => $lastLeft->created_at,
                 'left' => (int) ($lastLeft->context['left'] ?? 0),
@@ -135,8 +136,11 @@ final class GroupInviteController extends Controller
 
     public function settings(): JsonResponse
     {
+        $current = $this->settings->current();
+
         return response()->json([
-            'settings' => $this->settings->current(),
+            'settings' => $current,
+            'times' => GroupInviteSettings::times($current),
             'saved' => $this->settings->isSaved(),
             'limits' => GroupInviteSettings::LIMITS,
             'audiences' => GroupInviteSettings::AUDIENCES,
@@ -150,6 +154,7 @@ final class GroupInviteController extends Controller
      */
     public function updateSettings(Request $request): JsonResponse
     {
+        [$runsMin, $runsMax] = GroupInviteSettings::LIMITS['runs_per_day'];
         [$batchMin, $batchMax] = GroupInviteSettings::LIMITS['batch_size'];
         [$timesMin, $timesMax] = GroupInviteSettings::LIMITS['batches_per_day'];
         [$delayMin, $delayMax] = GroupInviteSettings::LIMITS['delay_min'];
@@ -158,11 +163,13 @@ final class GroupInviteController extends Controller
         $data = $request->validate([
             'enabled' => ['required', 'boolean'],
             'schedule_at' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
+            'runs_per_day' => ['nullable', 'integer', "min:{$runsMin}", "max:{$runsMax}"],
             'batch_size' => ['required', 'integer', "min:{$batchMin}", "max:{$batchMax}"],
             'batches_per_day' => ['required', 'integer', "min:{$timesMin}", "max:{$timesMax}"],
             'delay_min' => ['required', 'integer', "min:{$delayMin}", "max:{$delayMax}"],
             'delay_max' => ['required', 'integer', "min:{$delayMin}", "max:{$delayMax}", 'gte:delay_min'],
             'use_usernames' => ['required', 'boolean'],
+            'warm_up' => ['nullable', 'boolean'],
             'usernames_per_day' => ['required', 'integer', "min:{$usernamesMin}", "max:{$usernamesMax}"],
             'audience' => ['nullable', 'in:' . implode(',', GroupInviteSettings::AUDIENCES)],
             'excluded_accounts' => ['nullable', 'array'],
@@ -171,14 +178,17 @@ final class GroupInviteController extends Controller
 
         $current = $this->settings->current();
 
+        $saved = $this->settings->save([
+            ...$current,
+            ...array_filter($data, fn ($value) => $value !== null),
+            'excluded_accounts' => $request->has('excluded_accounts')
+                ? ($data['excluded_accounts'] ?? [])
+                : $current['excluded_accounts'],
+        ]);
+
         return response()->json([
-            'settings' => $this->settings->save([
-                ...$current,
-                ...array_filter($data, fn ($value) => $value !== null),
-                'excluded_accounts' => $request->has('excluded_accounts')
-                    ? ($data['excluded_accounts'] ?? [])
-                    : $current['excluded_accounts'],
-            ]),
+            'settings' => $saved,
+            'times' => GroupInviteSettings::times($saved),
             'saved' => true,
             'message' => __('driver_check.invites.messages.settings_saved'),
         ]);

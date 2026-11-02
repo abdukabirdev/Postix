@@ -215,8 +215,24 @@ export function groupInvitesPage(config) {
             }
 
             return settings.enabled
-                ? t.overview.schedule_on.replace(':time', settings.schedule_at)
+                ? t.overview.schedule_on.replace(':time', (this.data.times ?? [settings.schedule_at]).join(', '))
                 : t.overview.schedule_off;
+        },
+
+        /* 20 at a time, up to 80 times a day, up to 20 in one run. */
+        paceLabel() {
+            const settings = this.data?.settings;
+
+            if (!settings) {
+                return '';
+            }
+
+            const share = Math.ceil(Number(settings.batches_per_day) / Math.max(1, Number(settings.runs_per_day) || 1));
+
+            return t.overview.pace_value
+                .replace(':size', this.number(settings.batch_size))
+                .replace(':times', this.number(settings.batches_per_day))
+                .replace(':share', this.number(share));
         },
     };
 }
