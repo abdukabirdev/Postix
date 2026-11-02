@@ -63,4 +63,46 @@ final class SessionSleep
             ]);
         }
     }
+
+    /**
+     * Ends the worker of a session that hangs: the IPC client could not
+     * reach it ("The endpoint does not exist!") and waited for good. There
+     * is no API to ask it, so its process is found by its title and killed;
+     * the next new API() starts a fresh one. Linux only, never throws.
+     *
+     * @param array<string, mixed> $context
+     *
+     * @return list<int> the pids killed
+     */
+    public static function kill(string $sessionPath, array $context = []): array
+    {
+        if (PHP_OS_FAMILY !== 'Linux' || ! function_exists('posix_kill') || $sessionPath === '') {
+            return [];
+        }
+
+        $session = basename(rtrim($sessionPath, '/'));
+        $killed = [];
+
+        try {
+            foreach (glob('/proc/[0-9]*/cmdline') ?: [] as $path) {
+                $cmdline = str_replace("\0", ' ', (string) @file_get_contents($path));
+
+                if (str_contains($cmdline, 'MadelineProto worker') && str_contains($cmdline, $session)) {
+                    $pid = (int) basename(dirname($path));
+
+                    if ($pid !== getmypid() && posix_kill($pid, 9)) {
+                        $killed[] = $pid;
+                    }
+                }
+            }
+        } catch (Throwable) {
+            // nothing more to do: the next start of the session tries anew
+        }
+
+        if ($killed !== []) {
+            Log::warning('MadelineProto worker of a hung session killed', [...$context, 'session' => $session, 'pids' => $killed]);
+        }
+
+        return $killed;
+    }
 }

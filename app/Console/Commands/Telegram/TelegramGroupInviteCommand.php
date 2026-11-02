@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands\Telegram;
 
 use App\Application\Telegram\Services\GroupInviteService;
+use App\Application\Telegram\Support\SignalStop;
 use App\Telegram\TelegramProcessLock;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -29,6 +30,11 @@ final class TelegramGroupInviteCommand extends Command
     public function handle(GroupInviteService $invites): int
     {
         EventLoop::setErrorHandler(static function (Throwable $e): void {
+            /* A kill (SIGTERM) stops the run the way the panel's Stop does, it is not only logged. */
+            if (SignalStop::handle($e, fn () => GroupInviteService::requestStop(null))) {
+                return;
+            }
+
             Log::error('Group invite: an exception in the event loop', [
                 'exception' => $e::class,
                 'message' => $e->getMessage(),

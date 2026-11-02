@@ -17,6 +17,8 @@ use danog\MadelineProto\RPCErrorException;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
+use Symfony\Component\Process\Exception\ProcessTimedOutException;
+use Symfony\Component\Process\Process;
 use Throwable;
 
 /**
@@ -36,6 +38,11 @@ use Throwable;
  * account, a couple each, whatever its limit. The people found wait in the
  * database for an account, and the count of them tells how many numbers
  * more it would take to save them all.
+ *
+ * Each account's turn runs in a process of its own (work(), the run's
+ * worker): a session that hangs - a MadelineProto start that never ends -
+ * hung the whole run for hours. Now the run kills a worker silent for too
+ * long, puts its account on hold and goes on with the next one.
  */
 final class ContactSyncService
 {
@@ -80,7 +87,23 @@ final class ContactSyncService
     /** A stop asked from the panel is looked for at most this often, seconds. */
     private const STOP_POLL = 2;
 
+    /**
+     * A worker that says nothing this long, the longest pause aside, hangs
+     * on its session. A worker says a line a contact; reading a big group
+     * is a few minutes of silence at most.
+     */
+    public const WORKER_SILENCE_MINUTES = 15;
+
+    /** The worker's last line: what its account did, as JSON. */
+    public const RESULT_MARK = '@@result ';
+
+    /** Why an account whose worker hung is on hold (the accounts page shows it). */
+    public const HUNG = 'SESSION_HUNG';
+
     private string $runId = '';
+
+    /** The worker of the account in hand: told when the run is told to stop. */
+    private ?Process $workerProcess = null;
 
     /** Only the daily sync stops by the button; a group's "fetch people" goes on. */
     private bool $stoppable = false;
@@ -219,57 +242,35 @@ final class ContactSyncService
 
             $this->now($account->id);
 
-            $api = null;
-
             try {
-                $api = $this->madeline->for($account);
-
-                if (! $api) {
-                    throw $this->madeline->lastError
-                        ?? new \RuntimeException('Failed to start MadelineProto.');
-                }
-
-                if ($adds) {
-                    $result = $this->runAccount($api, $account, $groups, $config, $say);
-
-                    $totals['added'] += $result['added'];
-                    $totals['failed'] += $result['failed'];
-                    $totals['members'] += $result['members'];
-                    $totals['new'] += $result['new'];
-                }
-
-                /* A flood wait on the contacts put it on hold: it reads nothing more. */
-                if ($reads && ! in_array($account->id, $this->held, true)) {
-                    $result = $this->collect($api, $account, $collect, $config, $say);
-
-                    $totals['members'] += $result['members'];
-                    $totals['new'] += $result['new'];
-                }
-
-                $this->pool->registerSuccess($account, ProcessEnum::ContactSync);
-            } catch (Throwable $e) {
-                if ($this->isAccountError($e) || $this->isFlood($e)) {
-                    $this->hold($account, $e);
-                } else {
-                    $this->pool->registerFailure(
-                        $account,
-                        ProcessEnum::ContactSync,
-                        mb_substr($e->getMessage(), 0, 200),
-                    );
-                }
-
-                $this->log('failed', mb_substr($e->getMessage(), 0, 500), $account->id, null, [
-                    'exception' => $e::class,
-                ]);
-
-                $say("  failed: {$e->getMessage()}");
+                $result = $this->worker($account, $groupId, $adds, $reads ? $collect->pluck('id')->all() : [], $config, $say);
             } finally {
-                SessionSleep::put($api, ['account_id' => $account->id]);
-
                 $this->pool->release($account, ProcessEnum::ContactSync);
 
                 $this->now(null);
             }
+
+            if ($result !== null) {
+                foreach (['added', 'failed', 'members', 'new'] as $key) {
+                    $totals[$key] += $result[$key];
+                }
+
+                $this->readGroups += array_fill_keys($result['read'], true);
+
+                /* What the worker left to read, in its order: the ones it pushed back go last. */
+                if ($reads) {
+                    $collect = collect($result['queue'])
+                        ->map(fn (int $id) => $collect->firstWhere('id', $id))
+                        ->filter()
+                        ->values();
+                }
+            } else {
+                /* Hung or died on them: they wait for the next run, not for every account in this one. */
+                $collect = $collect->slice(self::COLLECT_PER_ACCOUNT)->values();
+            }
+
+            /* The worker read groups in its own process: what they say now is in the database. */
+            $groups = $groups->fresh();
         }
 
         $this->log(
@@ -332,21 +333,279 @@ final class ContactSyncService
     }
 
     /**
-     * Who the run is and which account it holds, for the Stop button: a
-     * stuck run is killed, and its account given back, by what is written
-     * here.
+     * Who the run is, which account it holds and the worker doing that
+     * account's turn, for the Stop button: a stuck run is killed, and its
+     * account given back, by what is written here.
      */
-    private function now(?int $accountId): void
+    private function now(?int $accountId, ?int $workerPid = null): void
     {
         try {
             TelegramSetting::set(self::NOW_KEY, [
                 'run_id' => $this->runId,
                 'pid' => getmypid(),
                 'account_id' => $accountId,
+                'worker_pid' => $workerPid,
             ]);
         } catch (Throwable) {
             // the Stop button falls back on the lock's pid; the sync goes on
         }
+    }
+
+    /**
+     * One account's turn of a run, in a process of its own (the run's
+     * worker, telegram:sync-contacts --worker): its contacts, then the
+     * groups it was given to read. The run claimed the account and gives it
+     * back; a worker that hangs on its session is killed by the run, not
+     * waited for.
+     *
+     * @param list<int> $collectIds the run's groups still to read into the database, in its order
+     *
+     * @return array{added: int, failed: int, members: int, new: int, read: list<int>, queue: list<int>}
+     */
+    public function work(int $accountId, string $runId, ?int $groupId, bool $adds, array $collectIds, ?callable $output = null): array
+    {
+        $this->runId = $runId;
+        $this->held = [];
+        $this->readGroups = [];
+        $this->ownIds = null;
+        $this->stoppable = true;
+        $this->stopping = false;
+        $this->stopLookedAt = 0;
+
+        $say = $output ?? static function (string $line): void {};
+        $config = $this->settings->current();
+
+        $result = ['added' => 0, 'failed' => 0, 'members' => 0, 'new' => 0, 'read' => [], 'queue' => $collectIds];
+
+        $account = TelegramAccount::query()->find($accountId);
+
+        if (! $account) {
+            return $result;
+        }
+
+        /* The run's groups, as run() takes them. */
+        $groups = TelegramScrapeGroup::query()
+            ->forContacts()
+            ->where('is_active', true)
+            ->when($groupId, fn ($q) => $q->whereKey($groupId))
+            ->get();
+
+        $byId = TelegramScrapeGroup::query()->whereKey($collectIds)->get()->keyBy('id');
+        $queue = collect($collectIds)->map(fn (int $id) => $byId->get($id))->filter()->values();
+
+        $api = null;
+
+        try {
+            $api = $this->madeline->for($account);
+
+            if (! $api) {
+                throw $this->madeline->lastError
+                    ?? new \RuntimeException('Failed to start MadelineProto.');
+            }
+
+            if ($adds) {
+                $done = $this->runAccount($api, $account, $groups, $config, $say);
+
+                foreach (['added', 'failed', 'members', 'new'] as $key) {
+                    $result[$key] += $done[$key];
+                }
+            }
+
+            /* A flood wait on the contacts put it on hold: it reads nothing more. */
+            if ($queue->isNotEmpty() && ! in_array($account->id, $this->held, true)) {
+                $done = $this->collect($api, $account, $queue, $config, $say);
+
+                $result['members'] += $done['members'];
+                $result['new'] += $done['new'];
+            }
+
+            $this->pool->registerSuccess($account, ProcessEnum::ContactSync);
+        } catch (Throwable $e) {
+            if ($this->isAccountError($e) || $this->isFlood($e)) {
+                $this->hold($account, $e);
+            } else {
+                $this->pool->registerFailure(
+                    $account,
+                    ProcessEnum::ContactSync,
+                    mb_substr($e->getMessage(), 0, 200),
+                );
+            }
+
+            $this->log('failed', mb_substr($e->getMessage(), 0, 500), $account->id, null, [
+                'exception' => $e::class,
+            ]);
+
+            $say("  failed: {$e->getMessage()}");
+        } finally {
+            SessionSleep::put($api, ['account_id' => $account->id]);
+        }
+
+        $result['read'] = array_keys($this->readGroups);
+        $result['queue'] = $queue->pluck('id')->map(fn ($id) => (int) $id)->values()->all();
+
+        return $result;
+    }
+
+    /**
+     * The server's SIGTERM to the run: it stops the way the Stop button
+     * stops it, and the worker in hand is told too.
+     */
+    public function terminate(): void
+    {
+        self::requestStop($this->runId !== '' ? $this->runId : null);
+
+        try {
+            $this->workerProcess?->signal(15);
+        } catch (Throwable) {
+            // gone already
+        }
+    }
+
+    /**
+     * Runs one account's turn in a worker process. A worker that says
+     * nothing for WORKER_SILENCE_MINUTES (and the longest pause on top)
+     * hangs on its session: it is killed, the account put on hold with the
+     * reason, and the run goes on with the next account.
+     *
+     * @param list<int>            $collectIds
+     * @param array<string, mixed> $config
+     *
+     * @return array{added: int, failed: int, members: int, new: int, read: list<int>, queue: list<int>}|null null when the worker did not come back
+     */
+    private function worker(TelegramAccount $account, ?int $groupId, bool $adds, array $collectIds, array $config, callable $say): ?array
+    {
+        $command = [PHP_BINARY, base_path('artisan'), 'telegram:sync-contacts', '--worker=' . $account->id, '--run=' . $this->runId];
+
+        if ($groupId !== null) {
+            $command[] = '--group=' . $groupId;
+        }
+
+        if ($adds) {
+            $command[] = '--adds';
+        }
+
+        if ($collectIds !== []) {
+            $command[] = '--read=' . implode(',', $collectIds);
+        }
+
+        $process = new Process($command, base_path());
+        $process->setTimeout(null);
+        $process->setIdleTimeout(self::WORKER_SILENCE_MINUTES * 60 + max(0, (int) $config['delay_max']));
+
+        $this->workerProcess = $process;
+
+        $output = '';
+
+        try {
+            $process->start();
+
+            $this->now($account->id, $process->getPid());
+
+            $process->wait(function (string $type, string $buffer) use (&$output, $say): void {
+                if ($type !== Process::OUT) {
+                    return;
+                }
+
+                $output .= $buffer;
+
+                foreach (explode("\n", rtrim($buffer, "\n")) as $line) {
+                    if ($line !== '' && ! str_starts_with($line, self::RESULT_MARK)) {
+                        $say($line);
+                    }
+                }
+            });
+        } catch (ProcessTimedOutException) {
+            $this->stuck($account, $say);
+
+            return null;
+        } catch (Throwable $e) {
+            $this->log('failed', 'The worker could not run: ' . mb_substr($e->getMessage(), 0, 300), $account->id, null, ['exception' => $e::class]);
+            $this->giveBack($account);
+
+            return null;
+        } finally {
+            $this->workerProcess = null;
+        }
+
+        $result = self::workerResult($output);
+
+        if ($result === null) {
+            /* Killed by the Stop button, or a fatal error: it never wrote what it did. */
+            if (! $this->stopping()) {
+                $this->log('failed', 'The worker stopped without a result (exit ' . $process->getExitCode() . ')', $account->id);
+            }
+
+            $this->giveBack($account);
+
+            return null;
+        }
+
+        return $result;
+    }
+
+    /**
+     * What a worker did: its last RESULT_MARK line.
+     *
+     * @return array{added: int, failed: int, members: int, new: int, read: list<int>, queue: list<int>}|null
+     */
+    public static function workerResult(string $output): ?array
+    {
+        foreach (array_reverse(explode("\n", $output)) as $line) {
+            $line = rtrim($line, "\r");
+
+            if (! str_starts_with($line, self::RESULT_MARK)) {
+                continue;
+            }
+
+            $result = json_decode(substr($line, strlen(self::RESULT_MARK)), true);
+
+            if (! is_array($result)) {
+                return null;
+            }
+
+            return [
+                'added' => (int) ($result['added'] ?? 0),
+                'failed' => (int) ($result['failed'] ?? 0),
+                'members' => (int) ($result['members'] ?? 0),
+                'new' => (int) ($result['new'] ?? 0),
+                'read' => array_values(array_map('intval', (array) ($result['read'] ?? []))),
+                'queue' => array_values(array_map('intval', (array) ($result['queue'] ?? []))),
+            ];
+        }
+
+        return null;
+    }
+
+    /**
+     * The worker said nothing for too long: its session hangs (the
+     * MadelineProto start that never ends, "The endpoint does not exist!").
+     * The account is put on hold - it would hang again tomorrow - and comes
+     * back when somebody enables it again in the panel.
+     */
+    private function stuck(TelegramAccount $account, callable $say): void
+    {
+        $minutes = self::WORKER_SILENCE_MINUTES;
+
+        $this->hold($account, new \RuntimeException("No answer from the session for {$minutes} minutes"), null, self::HUNG);
+
+        $this->giveBack($account);
+
+        /* The session's own MadelineProto worker is what hangs: once it is gone, the account works again when it is enabled. */
+        SessionSleep::kill((string) $account->session_path, ['account_id' => $account->id]);
+
+        $say("  no answer for {$minutes} minutes: the account is put on hold");
+    }
+
+    /**
+     * A worker gone half way: the person it was saving is nobody's again,
+     * another account may take them.
+     */
+    private function giveBack(TelegramAccount $account): void
+    {
+        TelegramAccountContact::query()
+            ->where('telegram_account_id', $account->id)
+            ->where('status', TelegramAccountContact::STATUS_PENDING)
+            ->delete();
     }
 
     /**
@@ -598,6 +857,9 @@ final class ContactSyncService
                         'contact_name' => $nick,
                     ]);
 
+                    /* A line a contact: the run knows the worker is alive by it. */
+                    $say("  added {$user->telegram_user_id}");
+
                     $this->pause($config);
                 } catch (RPCErrorException $e) {
                     if ($this->isFlood($e)) {
@@ -631,6 +893,8 @@ final class ContactSyncService
                     }
 
                     $this->finishClaim($account, $user, TelegramAccountContact::STATUS_FAILED, $e->rpc);
+
+                    $say("  not added {$user->telegram_user_id}: {$e->rpc}");
 
                     $result['failed']++;
                     $streak++;

@@ -5,9 +5,12 @@ namespace Tests\Feature\Telegram;
 use App\Application\Telegram\Services\GroupInviteService;
 use App\Application\Telegram\Services\GroupInviteSettings;
 use App\Application\Telegram\Services\MadelineService;
+use App\Application\Telegram\Support\MemberCount;
 use App\Application\Telegram\Support\UsernameLookup;
 use ArrayObject;
 use danog\MadelineProto\API;
+use danog\MadelineProto\Exception as MadelineException;
+use danog\MadelineProto\Namespace\Blacklist;
 use Mockery;
 use ReflectionClass;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
@@ -1362,9 +1365,16 @@ final class GroupInviteTest extends TestCase
                 private ?int $full,
             ) {}
 
-            public function getFullChannel(mixed ...$args): array
+            /* As MadelineProto: not to be called directly. */
+            public function getFullChannel(mixed ...$args): never
             {
-                return ['full_chat' => ['_' => 'channelFull', 'participants_count' => $this->full ?? ($this->list !== null ? count($this->list) : $this->members)]];
+                throw new MadelineException(Blacklist::BLACKLIST['channels.getFullChannel']);
+            }
+
+            /** What getFullInfo says the group has. */
+            public function fullCount(): int
+            {
+                return $this->full ?? ($this->list !== null ? count($this->list) : $this->members);
             }
 
             public function joinChannel(mixed ...$args): array
@@ -1419,6 +1429,14 @@ final class GroupInviteTest extends TestCase
             public function user(API $api, string $username): ?array
             {
                 return ($this->resolve)($username);
+            }
+        });
+
+        $this->app->instance(MemberCount::class, new class extends MemberCount
+        {
+            public function of(API $api, int|string $peer): ?int
+            {
+                return $api->channels->fullCount();
             }
         });
 

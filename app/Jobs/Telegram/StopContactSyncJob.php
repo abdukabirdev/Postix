@@ -3,8 +3,11 @@
 namespace App\Jobs\Telegram;
 
 use App\Application\Telegram\Services\ContactSyncService;
+use App\Application\Telegram\Support\SessionSleep;
+use App\Application\Telegram\Support\SignalStop;
 use App\Console\Commands\Telegram\TelegramSyncContactsCommand;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
+use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountContact;
 use App\Models\Telegram\TelegramAccountProcess;
 use App\Models\Telegram\TelegramContactSyncLog;
@@ -22,7 +25,8 @@ use Throwable;
 /**
  * The second half of the contact sync's Stop button. The button asks the
  * run to stop; a run still going ContactSyncService::STOP_GRACE later
- * answers nothing - it hangs on a session - and is killed here.
+ * answers nothing - it hangs on a session - and is ended here: SIGTERM
+ * first (the run stops its way), then kill -9 for it and its worker.
  *
  * The worker runs as the same user as the scheduled run (root), so its
  * signal gets through; the web server's would not.
@@ -38,6 +42,9 @@ class StopContactSyncJob implements ShouldQueue
 
     /** Only about the run of this moment: later it would hit whatever runs by then. */
     public int $tries = 1;
+
+    /** The run's grace and the kill after it, longer than the worker's default minute. */
+    public int $timeout = 120;
 
     /**
      * @param string|null $runId the run the button was pressed for; null for one that does not write its id down
@@ -68,11 +75,25 @@ class StopContactSyncJob implements ShouldQueue
             return;
         }
 
+        /* SIGTERM: the run stops its way and tells its worker, who has SignalStop::GRACE seconds to end. */
         $this->signal($pid, 15);
 
-        if (! $this->released($lock, 15)) {
+        if (! $this->released($lock, SignalStop::GRACE + 15)) {
+            $worker = isset($now['worker_pid']) ? (int) $now['worker_pid'] : 0;
+
+            if ($worker > 0 && $this->isSync($worker)) {
+                $this->signal($worker, 9);
+            }
+
             $this->signal($pid, 9);
             $this->released($lock, 10);
+
+            /* Killed on a session that hangs: its MadelineProto worker goes too. */
+            $account = isset($now['account_id']) ? TelegramAccount::query()->find((int) $now['account_id']) : null;
+
+            if ($account !== null) {
+                SessionSleep::kill((string) $account->session_path, ['account_id' => $account->id]);
+            }
         }
 
         if (TelegramProcessLock::isHeld($lock)) {

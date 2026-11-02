@@ -353,6 +353,76 @@ final class ContactSyncTest extends TestCase
         $this->assertSame('stopped', $runs['data'][0]['status']);
     }
 
+    public function test_an_accounts_turn_in_its_worker_saves_contacts_and_says_what_is_left_to_read(): void
+    {
+        $this->workerTables();
+
+        $mine = TelegramScrapeGroup::create(['link' => 'mine']);
+        $other = TelegramScrapeGroup::create(['link' => 'other']);
+        $third = TelegramScrapeGroup::create(['link' => 'third']);
+
+        $api = $this->fakeApi([
+            ['count' => 1, 'participants' => [['_' => 'channelParticipant', 'user_id' => 1001]], 'users' => [['id' => 1001, 'first_name' => 'Ali']]],
+            ['count' => 1, 'participants' => [['_' => 'channelParticipant', 'user_id' => 1002]], 'users' => [['id' => 1002, 'first_name' => 'Vali']]],
+            ['count' => 1, 'participants' => [['_' => 'channelParticipant', 'user_id' => 1003]], 'users' => [['id' => 1003, 'first_name' => 'Soli']]],
+            ['count' => 1, 'participants' => [['_' => 'channelParticipant', 'user_id' => 1004]], 'users' => [['id' => 1004, 'first_name' => 'Gani']]],
+        ]);
+
+        $madeline = \Mockery::mock(\App\Application\Telegram\Services\MadelineService::class);
+        $madeline->shouldReceive('for')->andReturn($api);
+        $this->app->instance(\App\Application\Telegram\Services\MadelineService::class, $madeline);
+
+        $lines = [];
+
+        $result = $this->app->make(ContactSyncService::class)->work(
+            1,
+            'run-1',
+            null,
+            true,
+            [$other->id, $third->id],
+            function (string $line) use (&$lines): void {
+                $lines[] = $line;
+            },
+        );
+
+        /* The contacts read all three groups; nothing is left to read into the database. */
+        $this->assertSame(3, $result['added']);
+        $this->assertEqualsCanonicalizing([$mine->id, $other->id, $third->id], $result['read']);
+        $this->assertSame([], $result['queue']);
+        $this->assertContains('  added 1001', $lines, 'a line a contact: the run knows the worker is alive');
+        $this->assertSame(3, \App\Models\Telegram\TelegramContactSyncLog::query()->where('run_id', 'run-1')->where('event', 'added')->count(), 'logged into the run');
+
+        /* What the run reads back from the worker's last line. */
+        $output = "Account #1\n  added 1001\n" . ContactSyncService::RESULT_MARK . json_encode($result) . "\n";
+
+        $this->assertSame($result, ContactSyncService::workerResult($output));
+        $this->assertNull(ContactSyncService::workerResult("Account #1\n  added 1001\n"), 'killed before it wrote what it did');
+    }
+
+    public function test_a_worker_silent_too_long_puts_its_account_on_hold_and_frees_its_person(): void
+    {
+        $this->workerTables();
+
+        $person = TelegramScrapedUser::create(['telegram_user_id' => 1101, 'first_name' => 'Ali']);
+        $other = TelegramScrapedUser::create(['telegram_user_id' => 1102, 'first_name' => 'Vali']);
+
+        $service = $this->app->make(ContactSyncService::class);
+
+        /* Taken by the hung worker, and one saved by another account. */
+        $this->invokeService('claim', [$this->account(1), $person, false]);
+        $this->invokeService('claim', [$this->account(2), $other, false]);
+
+        (new \ReflectionProperty($service, 'runId'))->setValue($service, 'run-1');
+        (new ReflectionMethod($service, 'stuck'))->invoke($service, $this->account(1), static function (string $line): void {});
+
+        $state = \App\Models\Telegram\TelegramAccountProcess::query()->where('telegram_account_id', 1)->where('process', 'contact_sync')->sole();
+
+        $this->assertFalse((bool) $state->is_available, 'on hold until enabled in the panel');
+        $this->assertSame(ContactSyncService::HUNG, $state->disabled_reason);
+        $this->assertSame([1102], TelegramAccountContact::query()->with('user')->get()->map(fn ($row) => (int) $row->user->telegram_user_id)->all(), 'the person it was saving is nobody\'s again');
+        $this->assertTrue(\App\Models\Telegram\TelegramContactSyncLog::query()->where('run_id', 'run-1')->where('event', 'disabled')->where('telegram_account_id', 1)->exists());
+    }
+
     public function test_links_are_normalised(): void
     {
         foreach (['https://t.me/taxi_group', 't.me/taxi_group', '@taxi_group', ' taxi_group '] as $input) {
@@ -360,6 +430,40 @@ final class ContactSyncTest extends TestCase
         }
 
         $this->assertSame('+AbCdEf', TelegramScrapeGroup::normalizeLink('https://t.me/+AbCdEf'));
+    }
+
+    /**
+     * What an account's turn writes besides the people: its state in the
+     * pool, the settings the run reads, the names contacts are saved under.
+     */
+    private function workerTables(): void
+    {
+        Schema::create('telegram_account_processes', function (Blueprint $table) {
+            $table->id();
+            $table->unsignedBigInteger('telegram_account_id');
+            $table->string('process');
+            $table->unsignedInteger('successes')->default(0);
+            $table->unsignedInteger('failures')->default(0);
+            $table->unsignedInteger('consecutive_failures')->default(0);
+            $table->boolean('is_available')->default(true);
+            $table->boolean('is_busy')->default(false);
+            $table->timestamp('busy_at')->nullable();
+            $table->timestamp('disabled_at')->nullable();
+            $table->string('disabled_reason')->nullable();
+            $table->json('meta')->nullable();
+            $table->timestamps();
+        });
+
+        (include database_path('migrations/2026_10_05_100000_create_telegram_settings_table.php'))->up();
+        (include database_path('migrations/2026_10_16_100000_add_contact_name_to_telegram_account_contacts_table.php'))->up();
+        (include database_path('migrations/2026_10_17_100000_create_telegram_account_contacts_state_tables.php'))->up();
+
+        $this->app->make(\App\Application\Telegram\Services\ContactSyncSettings::class)->save([
+            ...$this->app->make(\App\Application\Telegram\Services\ContactSyncSettings::class)->current(),
+            'daily_limit' => 10,
+            'delay_min' => 0,
+            'delay_max' => 0,
+        ]);
     }
 
     private function account(int $id): \App\Models\Telegram\TelegramAccount

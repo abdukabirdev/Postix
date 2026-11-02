@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\DeadSession;
+use App\Application\Telegram\Support\MemberCount;
 use App\Application\Telegram\Support\SessionSleep;
 use App\Application\Telegram\Support\UsernameLookup;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
@@ -301,6 +302,7 @@ final class GroupInviteService
         private readonly TelegramAccountProcessService $pool,
         private readonly GroupInviteSettings $settings,
         private readonly UsernameLookup $usernames,
+        private readonly MemberCount $memberCount,
     ) {}
 
     /**
@@ -1825,16 +1827,9 @@ final class GroupInviteService
     {
         $context = ['step' => self::STEP_CHECK];
 
-        /* How many the group has, apart from the list. */
+        /* How many the group has, apart from the list. Up to an hour old: at worst a whole list is taken for a part. */
         try {
-            $full = $this->patiently(fn () => $api->channels->getFullChannel(
-                channel: $this->peer($group),
-                floodWaitLimit: 0,
-            ), $say, $account, $group, $context);
-
-            $members = is_array($full) && isset($full['full_chat']['participants_count'])
-                ? (int) $full['full_chat']['participants_count']
-                : null;
+            $members = $this->patiently(fn () => $this->memberCount->of($api, $this->peer($group)), $say, $account, $group, $context);
         } catch (Throwable $e) {
             if (in_array(self::classify($e, self::STEP_CHECK), self::ACCOUNT_KINDS, true)) {
                 throw $e;
