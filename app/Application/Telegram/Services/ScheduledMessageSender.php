@@ -56,6 +56,18 @@ final class ScheduledMessageSender
      */
     public function send(SimpleEventHandler $telegram, TelegramScheduledMessage $message, bool $scheduled): string
     {
+        /* A slot whose text was not pasted in yet: nothing to write, and nothing to alert about. */
+        if (! $message->hasText()) {
+            $message->update([
+                'send_requested_at' => null,
+                'last_run_at' => now(),
+                'last_status' => TelegramScheduledMessage::STATUS_FAILED,
+                'last_error' => 'No text',
+            ]);
+
+            return TelegramScheduledMessage::STATUS_FAILED;
+        }
+
         $targets = $message->targets();
         $errors = [];
 

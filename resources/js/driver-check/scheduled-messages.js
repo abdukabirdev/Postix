@@ -170,7 +170,11 @@ export function scheduledMessagesPage(config) {
         /** "today 17:00" / "tomorrow 17:00" / the weekday and time. */
         nextLabel(row) {
             if (!row.next_at) {
-                return row.is_active ? t.next.no_groups : t.next.off;
+                if (!row.is_active) {
+                    return t.next.off;
+                }
+
+                return row.has_text ? t.next.no_groups : t.next.no_text;
             }
 
             return this.date(row.next_at);

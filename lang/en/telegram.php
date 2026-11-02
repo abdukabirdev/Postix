@@ -1114,6 +1114,7 @@ return [
             'no_groups' => 'No groups chosen',
             'never' => 'Not sent yet',
             'queued' => 'Sending…',
+            'no_text' => 'No text yet - click to paste it in. Until then the message is not sent.',
         ],
         'status' => [
             'active' => 'On',
@@ -1127,6 +1128,7 @@ return [
         'next' => [
             'off' => 'Off',
             'no_groups' => 'No groups',
+            'no_text' => 'Waiting for text',
         ],
         'days' => [
             'every_day' => 'Every day',
@@ -1138,6 +1140,7 @@ return [
             'name' => 'Name',
             'name_hint' => 'For the panel only',
             'text' => 'Message text',
+            'text_hint' => 'May stay empty and be pasted in later: until there is text, the message is not sent.',
             'time' => 'Time',
             'days' => 'Days of the week',
             'groups' => 'Groups',
@@ -1174,6 +1177,7 @@ return [
             'save' => 'Could not save',
             'delete' => 'Could not delete',
             'send' => 'Could not send',
+            'no_text' => 'Paste the message text first',
         ],
         'empty' => [
             'title' => 'No messages yet',

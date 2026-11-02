@@ -98,11 +98,21 @@ class TelegramScheduledMessage extends Model
     }
 
     /**
+     * A message may be saved without its text: a slot set up in advance
+     * (time, days, groups, account), the text pasted in later. Until then
+     * it never goes out.
+     */
+    public function hasText(): bool
+    {
+        return trim((string) $this->text) !== '';
+    }
+
+    /**
      * Due from its time on, for CATCH_UP_MINUTES, until today's has gone out.
      */
     public function isDue(CarbonInterface $now): bool
     {
-        if (! $this->is_active || $this->targets() === [] || ! $this->runsOn($now)) {
+        if (! $this->is_active || ! $this->hasText() || $this->targets() === [] || ! $this->runsOn($now)) {
             return false;
         }
 
@@ -118,11 +128,11 @@ class TelegramScheduledMessage extends Model
     }
 
     /**
-     * The next time it goes out, or null while it is off or has no group.
+     * The next time it goes out, or null while it is off, has no text or no group.
      */
     public function nextRunAt(CarbonInterface $now): ?CarbonInterface
     {
-        if (! $this->is_active || $this->targets() === []) {
+        if (! $this->is_active || ! $this->hasText() || $this->targets() === []) {
             return null;
         }
 

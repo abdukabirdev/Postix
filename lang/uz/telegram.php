@@ -1102,6 +1102,7 @@ return [
             'no_groups' => 'Guruhlar tanlanmagan',
             'never' => 'Hali yuborilmagan',
             'queued' => 'Yuborilmoqda…',
+            'no_text' => 'Matn hali qo\'yilmagan - qo\'yish uchun bosing. Matn bo\'lmaguncha xabar yuborilmaydi.',
         ],
         'status' => [
             'active' => 'Yoqilgan',
@@ -1115,6 +1116,7 @@ return [
         'next' => [
             'off' => 'O\'chirilgan',
             'no_groups' => 'Guruh yo\'q',
+            'no_text' => 'Matn kutilmoqda',
         ],
         'days' => [
             'every_day' => 'Har kuni',
@@ -1126,6 +1128,7 @@ return [
             'name' => 'Nomi',
             'name_hint' => 'Faqat panel uchun',
             'text' => 'Xabar matni',
+            'text_hint' => 'Bo\'sh qoldirib, keyin qo\'yish mumkin: matn bo\'lmaguncha xabar yuborilmaydi.',
             'time' => 'Vaqt',
             'days' => 'Hafta kunlari',
             'groups' => 'Guruhlar',
@@ -1162,6 +1165,7 @@ return [
             'save' => 'Saqlab bo\'lmadi',
             'delete' => 'O\'chirib bo\'lmadi',
             'send' => 'Yuborib bo\'lmadi',
+            'no_text' => 'Avval xabar matnini qo\'ying',
         ],
         'empty' => [
             'title' => 'Hozircha xabarlar yo\'q',

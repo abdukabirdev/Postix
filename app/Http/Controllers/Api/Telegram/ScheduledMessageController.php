@@ -59,6 +59,10 @@ final class ScheduledMessageController extends Controller
      */
     public function send(TelegramScheduledMessage $scheduledMessage): JsonResponse
     {
+        if (! $scheduledMessage->hasText()) {
+            return response()->json(['message' => __('telegram.scheduled.errors.no_text')], 422);
+        }
+
         $scheduledMessage->update(['send_requested_at' => now()]);
 
         return response()->json(['data' => $this->row($scheduledMessage)]);
@@ -68,7 +72,8 @@ final class ScheduledMessageController extends Controller
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
-            'text' => ['required', 'string', 'max:4000'],
+            /* Empty is a slot waiting for its text: it is kept, and not sent. */
+            'text' => ['nullable', 'string', 'max:4000'],
             'send_at' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
             'days' => ['present', 'array'],
             'days.*' => ['integer', 'between:1,7'],
@@ -78,9 +83,11 @@ final class ScheduledMessageController extends Controller
             'is_active' => ['required', 'boolean'],
         ]);
 
+        $wasEmpty = $message->exists && trim((string) $message->getOriginal('text')) === '';
+
         $message->fill([
             'name' => trim($data['name']),
-            'text' => trim($data['text']),
+            'text' => trim((string) ($data['text'] ?? '')),
             'send_at' => $data['send_at'],
             'days' => array_values(array_unique(array_map('intval', $data['days']))),
             'chat_ids' => array_values(array_unique(array_map('intval', $data['chat_ids']))),
@@ -90,9 +97,13 @@ final class ScheduledMessageController extends Controller
 
         /*
          * Saved after its time today: today is over for it. Without this a
-         * message made at 18:00 for 17:00 would go out within seconds.
+         * message made at 18:00 for 17:00 would go out within seconds. A
+         * slot getting its text is the same: pasted at 11:00 for 10:00, it
+         * starts tomorrow.
          */
-        if (! $message->exists || $message->isDirty(['send_at', 'is_active', 'days'])) {
+        $filled = $wasEmpty && $message->hasText();
+
+        if (! $message->exists || $filled || $message->isDirty(['send_at', 'is_active', 'days'])) {
             $message->last_sent_on = $message->send_at <= now()->format('H:i') ? now()->toDateString() : null;
         }
 
@@ -107,7 +118,8 @@ final class ScheduledMessageController extends Controller
         return [
             'id' => $m->id,
             'name' => $m->name,
-            'text' => $m->text,
+            'text' => (string) $m->text,
+            'has_text' => $m->hasText(),
             'send_at' => $m->send_at,
             'days' => $m->weekdays(),
             'chat_ids' => $m->targets(),

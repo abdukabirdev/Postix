@@ -83,9 +83,22 @@
                         </div>
 
                         <p
+                            x-show="row.has_text"
                             class="dc-break whitespace-pre-line rounded-xl bg-gray-25 px-3 py-2.5 text-[13px] text-gray-800 dark:bg-white/[0.03] dark:text-gray-200"
                             x-text="row.text"
                         ></p>
+
+                        {{-- A slot set up in advance: the text is pasted in with "Edit". --}}
+                        <button
+                            type="button"
+                            x-show="!row.has_text"
+                            x-cloak
+                            x-on:click="openEdit(row)"
+                            class="dc-tap rounded-xl border border-dashed border-warning-300 bg-warning-25 px-3 py-2.5 text-left text-[13px]
+                                   text-warning-700 transition hover:bg-warning-50 dark:border-warning-500/40 dark:bg-warning-500/[0.06]
+                                   dark:text-warning-400 dark:hover:bg-warning-500/10"
+                            x-text="translations.table.no_text"
+                        ></button>
 
                         <dl class="grid grid-cols-1 gap-x-3 gap-y-2.5 sm:grid-cols-3">
                             <x-driver-check.kv :label="__('telegram.scheduled.table.groups')">
@@ -144,7 +157,7 @@
                                 {{ __('telegram.scheduled.table.edit') }}
                             </x-driver-check.button>
 
-                            <x-driver-check.button x-on:click="ask('send', row)" ::disabled="row.queued || row.chat_ids.length === 0">
+                            <x-driver-check.button x-on:click="ask('send', row)" ::disabled="row.queued || !row.has_text || row.chat_ids.length === 0">
                                 <x-driver-check.icon name="send" class="h-4 w-4" />
                                 {{ __('telegram.scheduled.table.send_now') }}
                             </x-driver-check.button>
@@ -192,12 +205,15 @@
                 </x-slot:error>
             </x-driver-check.field>
 
-            <x-driver-check.field :label="__('telegram.scheduled.form.text')" for="scheduled-text">
+            <x-driver-check.field
+                :label="__('telegram.scheduled.form.text')"
+                :hint="__('telegram.scheduled.form.text_hint')"
+                for="scheduled-text"
+            >
                 <textarea
                     id="scheduled-text"
                     x-model="form.text"
                     rows="3"
-                    required
                     maxlength="4000"
                     class="w-full resize-y rounded-lg border bg-white px-3 py-2 text-[14px] leading-relaxed
                            text-gray-900 outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10

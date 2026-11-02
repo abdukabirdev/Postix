@@ -4,8 +4,11 @@ namespace Tests\Feature\Telegram;
 
 use App\Application\Telegram\Services\ScheduledMessageSender;
 use App\Models\Role;
+use App\Models\Telegram\TelegramFileRoute;
+use App\Models\Telegram\TelegramListener;
 use App\Models\Telegram\TelegramScheduledMessage;
 use App\Models\User;
+use Illuminate\Support\Facades\DB;
 use danog\MadelineProto\SimpleEventHandler;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
@@ -265,6 +268,122 @@ class ScheduledMessageTest extends TestCase
         $this->flush();
 
         $this->assertSame([], $this->messages->sent);
+    }
+
+    public function test_an_empty_slot_is_saved_but_never_goes_out(): void
+    {
+        $this->signIn();
+
+        $this->travelTo(now()->next('Monday')->setTime(9, 0));
+
+        $this->postJson('/api/telegram/scheduled-messages', [
+            'name' => 'Slot',
+            'text' => '',
+            'send_at' => '10:00',
+            'days' => [1, 2, 3, 4, 5],
+            'chat_ids' => [self::FIRST],
+            'is_active' => true,
+        ])
+            ->assertCreated()
+            ->assertJsonPath('data.text', '')
+            ->assertJsonPath('data.has_text', false)
+            ->assertJsonPath('data.next_at', null);
+
+        $id = TelegramScheduledMessage::query()->value('id');
+
+        $this->postJson("/api/telegram/scheduled-messages/{$id}/send")->assertUnprocessable();
+
+        $this->travelTo(now()->setTime(10, 0));
+        $this->flush();
+
+        $this->assertSame([], $this->messages->sent);
+        $this->assertNull(TelegramScheduledMessage::query()->find($id)->last_status);
+    }
+
+    public function test_a_slot_filled_before_its_time_goes_out_today_after_it_tomorrow(): void
+    {
+        $this->signIn();
+
+        $monday = now()->next('Monday');
+
+        $this->travelTo($monday->copy()->setTime(8, 0));
+
+        $early = $this->make(['name' => 'Early', 'text' => '', 'send_at' => '10:00', 'days' => [1, 2, 3, 4, 5], 'chat_ids' => [self::FIRST]]);
+        $late = $this->make(['name' => 'Late', 'text' => '', 'send_at' => '10:00', 'days' => [1, 2, 3, 4, 5], 'chat_ids' => [self::SECOND]]);
+
+        $fill = fn (TelegramScheduledMessage $m, string $text) => $this->putJson("/api/telegram/scheduled-messages/{$m->id}", [
+            'name' => $m->name,
+            'text' => $text,
+            'send_at' => $m->send_at,
+            'days' => $m->weekdays(),
+            'chat_ids' => $m->targets(),
+            'is_active' => true,
+        ])->assertOk();
+
+        $this->travelTo($monday->copy()->setTime(9, 0));
+        $fill($early, 'Утреннее');
+
+        $this->travelTo($monday->copy()->setTime(10, 30));
+        $fill($late, 'Опоздавшее');
+
+        $this->flush();
+
+        $this->assertSame([self::FIRST], $this->messages->peers());
+        $this->assertSame('Утреннее', $this->messages->sent[0]['message']);
+
+        $this->travelTo($monday->copy()->addDay()->setTime(10, 0));
+        $this->flush();
+
+        $this->assertSame([self::FIRST, self::FIRST, self::SECOND], $this->messages->peers());
+    }
+
+    public function test_the_migration_sets_up_two_empty_weekday_slots_from_the_files_account(): void
+    {
+        Schema::dropIfExists('telegram_settings');
+        (require base_path('database/migrations/2026_10_05_100000_create_telegram_settings_table.php'))->up();
+        (require base_path('database/migrations/2026_10_19_100000_add_listener_key_to_telegram_file_routes.php'))->up();
+
+        $accountId = DB::table('telegram_accounts')->insertGetId(['created_at' => now(), 'updated_at' => now()]);
+
+        TelegramListener::query()->create([
+            'key' => 'ceo',
+            'name' => 'CEO',
+            'telegram_account_id' => $accountId,
+            'is_enabled' => true,
+            'duties' => [],
+        ]);
+
+        TelegramFileRoute::query()->create([
+            'name' => 'Zitic',
+            'keywords' => 'zitic',
+            'target_chat_ids' => [-5243539111],
+            'listener_key' => 'ceo',
+            'is_active' => true,
+            'sort' => 0,
+        ]);
+
+        $migration = require base_path('database/migrations/2026_11_02_100000_add_file_sender_scheduled_message_slots.php');
+
+        $migration->up();
+        $migration->up();
+
+        $slots = TelegramScheduledMessage::query()->orderBy('send_at')->get();
+
+        $this->assertSame(['10:00', '16:00'], $slots->pluck('send_at')->all());
+
+        foreach ($slots as $slot) {
+            $this->assertSame('', $slot->text);
+            $this->assertSame([1, 2, 3, 4, 5], $slot->weekdays());
+            $this->assertSame([-5243539111], $slot->targets());
+            $this->assertSame('ceo', $slot->listener_key);
+            $this->assertTrue($slot->is_active);
+        }
+
+        $slots->first()->update(['text' => 'Заполнено']);
+
+        $migration->down();
+
+        $this->assertSame(['Заполнено'], TelegramScheduledMessage::query()->pluck('text')->all());
     }
 
     private function signIn(): void
