@@ -43,7 +43,7 @@ export function listenersPage(config) {
         duties: [],
 
         /* Who does what: { duties: [{duty, owner, saved}], options: [{key, name, running}] } */
-        owners: { duties: [], options: [] },
+        owners: { duties: [], roles: [], options: [] },
 
         /* The select values: '' is Driver Check. */
         ownerForm: {},
