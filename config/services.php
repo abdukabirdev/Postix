@@ -100,6 +100,13 @@ return [
         'bot_webhook_secret' => env('TELEGRAM_BOT_WEBHOOK_SECRET'),
 
         /*
+         * The bearer token of the developer's read-only report
+         * (GET /api/telegram/report/group-invites). Empty or shorter than
+         * 32 characters - the address answers 404.
+         */
+        'report_token' => env('TELEGRAM_REPORT_TOKEN'),
+
+        /*
          * Where problems are told to the developer (DeveloperAlerts): a bot
          * and the chat it writes to. Empty - they are only recorded on the
          * "How it works" page and in the log. The same problem is told once

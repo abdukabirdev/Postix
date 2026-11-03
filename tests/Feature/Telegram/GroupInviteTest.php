@@ -1529,6 +1529,49 @@ final class GroupInviteTest extends TestCase
         $this->assertSame([0, 2], [$overview['last_left_check']['left'], $overview['last_left_check']['stayed']]);
     }
 
+    public function test_the_report_api_answers_only_to_its_token_and_shows_no_phone(): void
+    {
+        $url = '/api/telegram/report/group-invites';
+        $token = str_repeat('a1', 20);
+
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(2901, 'One'));
+        $this->hold(1, $this->person(2902, 'Two'));
+
+        $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+        $this->service->run();
+
+        /* No token in .env: the address does not exist. */
+        config(['services.telegram.report_token' => null]);
+        $this->getJson($url, ['Authorization' => "Bearer {$token}"])->assertNotFound();
+
+        /* Too short to count as one. */
+        config(['services.telegram.report_token' => 'short']);
+        $this->getJson($url, ['Authorization' => 'Bearer short'])->assertNotFound();
+
+        config(['services.telegram.report_token' => $token]);
+        $this->getJson($url)->assertNotFound();
+        $this->getJson($url, ['Authorization' => 'Bearer ' . strrev($token)])->assertNotFound();
+
+        $response = $this->getJson("{$url}?days=2&lines=50", ['Authorization' => "Bearer {$token}"])->assertOk();
+
+        $this->assertStringNotContainsString('998900000001', $response->getContent());
+        $this->assertSame('invite', $response->json('runs.0.mode'));
+        $this->assertSame([1, 1, 2], [
+            $response->json('runs.0.accounts.0.account_id'),
+            $response->json('runs.0.accounts.0.calls'),
+            $response->json('runs.0.accounts.0.added'),
+        ]);
+        $this->assertSame(2, $response->json('hours.0.added'));
+
+        $accounts = collect($response->json('accounts'))->keyBy('id');
+        $this->assertSame([2, 0, 1], [$accounts[1]['contacts'], $accounts[1]['contacts_untried'], $accounts[1]['calls_today']]);
+        $this->assertSame(0, $accounts[2]['contacts']);
+
+        /* The other header works as well. */
+        $this->getJson($url, ['X-Report-Token' => $token])->assertOk();
+    }
+
     public function test_a_check_run_does_not_read_the_members_lists(): void
     {
         $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
