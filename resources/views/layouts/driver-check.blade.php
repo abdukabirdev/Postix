@@ -37,6 +37,8 @@
         '/driver-check/group-invites/log' => 'layers',
         '/driver-check/group-invites/analysis' => 'chart',
         '/driver-check/group-invites/settings' => 'sliders-h',
+        '/driver-check/group-invites/bot' => 'bot',
+        '/driver-check/group-invites/spam' => 'shield',
         '/driver-check/group-join' => 'pulse',
         '/driver-check/group-join/joined' => 'check-circle',
         '/driver-check/group-join/queue' => 'clock',

@@ -227,6 +227,13 @@ final class DriverCheckController extends Controller
         );
     }
 
+    public function groupInvitesSpam()
+    {
+        return view(
+            'pages.driver-check.group-invites-spam'
+        );
+    }
+
     public function groupJoin()
     {
         return view(

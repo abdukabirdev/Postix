@@ -29,10 +29,11 @@ final class JoinBotReporter
     /**
      * @param string               $key     driver_check.invites.bot.report.<key>
      * @param array<string, mixed> $replace
+     * @param bool                 $silent  arrives without a sound (the spam list's deletions)
      *
      * @return bool whether it got through
      */
-    public function send(string $key, array $replace = []): bool
+    public function send(string $key, array $replace = [], bool $silent = false): bool
     {
         try {
             $reports = $this->settings->reports();
@@ -50,7 +51,7 @@ final class JoinBotReporter
 
             $text = (string) __("driver_check.invites.bot.report.{$key}", $replace, $reports['locale']);
 
-            return $this->deliver($token, $reports['chat_id'], $text) === null;
+            return $this->deliver($token, $reports['chat_id'], $text, $silent) === null;
         } catch (Throwable) {
             return false;
         }
@@ -94,7 +95,7 @@ final class JoinBotReporter
     /**
      * @return string|null null: it got through; else why not
      */
-    private function deliver(string $token, string $chatId, string $text): ?string
+    private function deliver(string $token, string $chatId, string $text, bool $silent = false): ?string
     {
         $api = new BotApi($token);
 
@@ -104,6 +105,7 @@ final class JoinBotReporter
                     'chat_id' => $chatId,
                     'text' => mb_substr($text, 0, 4000),
                     'link_preview_options' => ['is_disabled' => true],
+                    ...($silent ? ['disable_notification' => true] : []),
                 ], 10);
 
                 $this->remember(['sent_at' => now()->toIso8601String(), 'error' => null, 'error_at' => null]);

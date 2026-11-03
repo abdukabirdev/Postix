@@ -37,6 +37,15 @@ final class JoinBotSettings
     /** Reports go to the owner's chat until the panel says otherwise. */
     public const DEFAULT_REPORT_CHAT = '8028326577';
 
+    /** The spam list: how many seconds after it was sent a message goes, and whether the owner is told (SpamCleaner). */
+    public const SPAM_KEY = 'group_invite.join_bot.spam';
+
+    /** A message of the spam list goes this many seconds after it was sent, until the panel says otherwise. */
+    public const DEFAULT_SPAM_DELAY = 15;
+
+    /** The longest wait the panel takes, seconds: the Bot API deletes a message for 48 hours. */
+    public const MAX_SPAM_DELAY = 3600;
+
     /** The poll asked Telegram this recently, seconds: it is alive. */
     private const ALIVE_SECONDS = 120;
 
@@ -152,6 +161,31 @@ final class JoinBotSettings
     public function saveReports(?string $chatId, bool $enabled, string $locale): void
     {
         TelegramSetting::set(self::REPORTS_KEY, ['chat_id' => trim((string) $chatId), 'enabled' => $enabled, 'locale' => $locale]);
+    }
+
+    /**
+     * The spam list's settings: a message goes $delay seconds after it was
+     * sent; $notify: the owner is told of each, without a sound (to the
+     * chat the reports go to).
+     *
+     * @return array{delay: int, notify: bool}
+     */
+    public function spam(): array
+    {
+        $saved = TelegramSetting::get(self::SPAM_KEY);
+        $saved = is_array($saved) ? $saved : [];
+
+        $delay = filter_var($saved['delay'] ?? null, FILTER_VALIDATE_INT);
+
+        return [
+            'delay' => $delay === false ? self::DEFAULT_SPAM_DELAY : max(0, min(self::MAX_SPAM_DELAY, $delay)),
+            'notify' => filter_var($saved['notify'] ?? true, FILTER_VALIDATE_BOOLEAN),
+        ];
+    }
+
+    public function saveSpam(int $delay, bool $notify): void
+    {
+        TelegramSetting::set(self::SPAM_KEY, ['delay' => max(0, min(self::MAX_SPAM_DELAY, $delay)), 'notify' => $notify]);
     }
 
     /**

@@ -34,6 +34,10 @@ use Throwable;
  *
  * Every action of the bot is reported to the owner (JoinBotReporter).
  *
+ * The messages of the people on the spam list are deleted a few seconds
+ * after they were sent (SpamCleaner): the bot, an admin of the group, gets
+ * every message there, and deletes the due ones between its asks.
+ *
  * The bot is asked by getUpdates (long polling), a minute at a time, from
  * the scheduler: no webhook, nothing public to set up.
  */
@@ -42,8 +46,12 @@ final class JoinRequestService
     /** One getUpdates waits this long for something to come, seconds. */
     private const LONG_POLL = 25;
 
-    /** chat_member: who came into a group where the bot is an admin - a bot among them is muted. */
-    private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member'];
+    /**
+     * chat_member: who came into a group where the bot is an admin - a bot
+     * among them is muted; message: what is written there - the spam list's
+     * messages are deleted.
+     */
+    private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member', 'message'];
 
     /** What a muted bot may not do in the group: anything. */
     private const RIGHTS = [
@@ -78,6 +86,7 @@ final class JoinRequestService
     public function __construct(
         private readonly JoinBotSettings $settings,
         private readonly JoinBotReporter $reporter,
+        private readonly SpamCleaner $spam,
     ) {}
 
     /**
@@ -142,6 +151,10 @@ final class JoinRequestService
                 break;
             }
 
+            /* The spam list's messages whose time has come go first; the ask waits no longer than the next one. */
+            $this->spam->sweep($api, $say);
+            $wait = max(1, min($wait, $this->spam->dueIn()));
+
             try {
                 $updates = $api->call('getUpdates', [
                     'offset' => $this->settings->state()['offset'],
@@ -182,6 +195,10 @@ final class JoinRequestService
             }
         }
 
+        if ($this->settings->enabled() && $this->settings->token() === $token) {
+            $this->spam->sweep($api, $say);
+        }
+
         return $totals;
     }
 
@@ -191,7 +208,10 @@ final class JoinRequestService
      * not there. A group joined only by an invite link is known by its chat
      * id once an account has joined it.
      *
-     * @return Collection<int, array{id: int, title: string, link: string, is_active: bool, state: string, error: string|null}>
+     * can_delete: whether it may delete the spam list's messages there
+     * (null: not known).
+     *
+     * @return Collection<int, array{id: int, title: string, link: string, is_active: bool, state: string, error: string|null, can_delete: bool|null}>
      */
     public function groups(): Collection
     {
@@ -205,7 +225,9 @@ final class JoinRequestService
             ->get()
             ->map(function (TelegramInviteGroup $group) use ($api, $botId): array {
                 $chat = $group->telegram_chat_id ?: ($group->isInvite() ? null : '@' . ltrim($group->link, '@'));
-                [$state, $error] = $api === null || $botId === 0 ? ['no_bot', null] : ($chat === null ? ['unknown', null] : self::standing($api, $chat, $botId));
+                [$state, $error, $canDelete] = $api === null || $botId === 0
+                    ? ['no_bot', null, null]
+                    : ($chat === null ? ['unknown', null, null] : self::standing($api, $chat, $botId));
 
                 return [
                     'id' => $group->id,
@@ -214,13 +236,14 @@ final class JoinRequestService
                     'is_active' => $group->is_active,
                     'state' => $state,
                     'error' => $error,
+                    'can_delete' => $canDelete,
                 ];
             })
             ->values();
     }
 
     /**
-     * @return array{0: string, 1: string|null} ok | no_right | not_admin | absent | error, and Telegram's words
+     * @return array{0: string, 1: string|null, 2: bool|null} ok | no_right | no_restrict | no_delete | not_admin | absent | error, Telegram's words, whether it may delete messages
      */
     private static function standing(BotApi $api, int|string $chat, int $botId): array
     {
@@ -228,19 +251,25 @@ final class JoinRequestService
             $member = (array) $api->call('getChatMember', ['chat_id' => $chat, 'user_id' => $botId], 8);
         } catch (BotApiError $e) {
             /* "chat not found": the bot was never added there. */
-            return in_array($e->getCode(), [400, 403], true) ? ['absent', $e->reason()] : ['error', $e->reason()];
+            return in_array($e->getCode(), [400, 403], true) ? ['absent', $e->reason(), false] : ['error', $e->reason(), null];
         }
 
-        return match ($member['status'] ?? null) {
-            'creator' => ['ok', null],
+        $canDelete = ($member['status'] ?? null) === 'creator'
+            || (($member['status'] ?? null) === 'administrator' && ! empty($member['can_delete_messages']));
+
+        $state = match ($member['status'] ?? null) {
+            'creator' => 'ok',
             'administrator' => match (true) {
-                empty($member['can_invite_users']) => ['no_right', null],
-                empty($member['can_restrict_members']) => ['no_restrict', null],
-                default => ['ok', null],
+                empty($member['can_invite_users']) => 'no_right',
+                empty($member['can_restrict_members']) => 'no_restrict',
+                ! $canDelete => 'no_delete',
+                default => 'ok',
             },
-            'member', 'restricted' => ['not_admin', null],
-            default => ['absent', null],
+            'member', 'restricted' => 'not_admin',
+            default => 'absent',
         };
+
+        return [$state, null, $canDelete];
     }
 
     /**
@@ -319,6 +348,12 @@ final class JoinRequestService
      */
     private function handle(BotApi $api, array $update, array &$totals, callable $say): void
     {
+        if (is_array($update['message'] ?? null)) {
+            $this->spam->take($update['message'], $say);
+
+            return;
+        }
+
         if (is_array($update['my_chat_member'] ?? null)) {
             $this->rememberChat($update['my_chat_member']);
 
@@ -705,21 +740,24 @@ final class JoinRequestService
                 'admin' => in_array($status, ['administrator', 'creator'], true),
                 'can_invite' => $status === 'creator' || ! empty($member['can_invite_users']),
                 'can_restrict' => $status === 'creator' || ! empty($member['can_restrict_members']),
+                'can_delete' => $status === 'creator' || ! empty($member['can_delete_messages']),
                 'at' => now()->toIso8601String(),
             ];
             $chats[(string) $chat['id']] = $now;
 
-            /* Another right changed: nothing new about letting people in or muting bots. */
+            /* Another right changed: nothing new about letting people in, muting bots or deleting spam. */
             $same = is_array($before)
                 && ($before['admin'] ?? null) === $now['admin']
                 && ($before['can_invite'] ?? null) === $now['can_invite']
-                && ($before['can_restrict'] ?? null) === $now['can_restrict'];
+                && ($before['can_restrict'] ?? null) === $now['can_restrict']
+                && ($before['can_delete'] ?? null) === $now['can_delete'];
 
             $report = match (true) {
                 $same => null,
                 ! $now['admin'] => 'member',
                 ! $now['can_invite'] => 'admin_no_right',
                 ! $now['can_restrict'] => 'admin_no_restrict',
+                ! $now['can_delete'] => 'admin_no_delete',
                 default => 'admin',
             };
         }

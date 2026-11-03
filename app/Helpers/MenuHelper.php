@@ -265,6 +265,11 @@ class MenuHelper
                         'name' => __('driver_check.menu.group_invites_bot'),
                         'path' => '/driver-check/group-invites/bot',
                     ],
+                    [
+                        'icon' => 'task',
+                        'name' => __('driver_check.menu.group_invites_spam'),
+                        'path' => '/driver-check/group-invites/spam',
+                    ],
                 ],
             ],
             [

@@ -13,6 +13,7 @@
         'driver-check.group-invites.analysis' => ['menu' => 'group_invites_analysis', 'icon' => 'chart'],
         'driver-check.group-invites.settings' => ['menu' => 'group_invites_settings', 'icon' => 'sliders-h'],
         'driver-check.group-invites.bot' => ['menu' => 'group_invites_bot', 'icon' => 'bot'],
+        'driver-check.group-invites.spam' => ['menu' => 'group_invites_spam', 'icon' => 'shield'],
     ];
 @endphp
 

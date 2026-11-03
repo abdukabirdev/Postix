@@ -21,6 +21,7 @@ const GROUP_TONES = {
     ok: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
     no_right: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     no_restrict: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
+    no_delete: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     not_admin: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     absent: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
 };

@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\Telegram\ContactSyncSettingsController;
 use App\Http\Controllers\Api\Telegram\GroupInviteAccountController;
 use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
 use App\Http\Controllers\Api\Telegram\GroupInviteBotController;
+use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
 use App\Http\Controllers\Api\Telegram\GroupInviteController;
 use App\Http\Controllers\Api\Telegram\GroupInviteGroupController;
 use App\Http\Controllers\Api\Telegram\GroupInvitePeopleController;
@@ -359,14 +360,15 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
          * Group invites: the accounts add their own contacts into our
          * groups. Separate from the contact sync and from Join group. The
          * overview, our groups, the base of people, the accounts, the run
-         * log, the analysis of the stops, the settings, our join request bot.
+         * log, the analysis of the stops, the settings, our join request bot,
+         * the spam list it deletes the messages of.
          */
         Route::get(
             '/group-invites',
             [DriverCheckController::class, 'groupInvites']
         )->name('driver-check.group-invites');
 
-        foreach (['groups', 'people', 'accounts', 'log', 'analysis', 'settings', 'bot'] as $invitePage) {
+        foreach (['groups', 'people', 'accounts', 'log', 'analysis', 'settings', 'bot', 'spam'] as $invitePage) {
             Route::get(
                 "/group-invites/{$invitePage}",
                 [DriverCheckController::class, 'groupInvites' . ucfirst($invitePage)]
@@ -861,6 +863,14 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::delete('/bot/token', 'disconnect')->name('api.telegram.group-invites.bot.disconnect');
                     Route::patch('/bot/reports', 'reports')->name('api.telegram.group-invites.bot.reports');
                     Route::post('/bot/reports/test', 'testReport')->name('api.telegram.group-invites.bot.reports.test');
+                });
+
+                /* The spam list: the bot deletes what these people write in our groups. */
+                Route::controller(GroupInviteSpamController::class)->group(function () {
+                    Route::get('/spam', 'show')->name('api.telegram.group-invites.spam');
+                    Route::patch('/spam', 'settings')->name('api.telegram.group-invites.spam.settings');
+                    Route::post('/spam/senders', 'store')->name('api.telegram.group-invites.spam.store');
+                    Route::delete('/spam/senders/{spamSender}', 'destroy')->name('api.telegram.group-invites.spam.destroy');
                 });
             });
 
