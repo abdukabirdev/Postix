@@ -21,6 +21,22 @@ final class JoinBotSettings
     /** Where the poll is: the next update id, when it last asked Telegram, its last error, the chats the bot is in. */
     public const STATE_KEY = 'group_invite.join_bot.state';
 
+    /**
+     * The bot's own links that take requests, one per group: our accounts
+     * ask to join by them (createChatInviteLink). Only the invite run
+     * writes it, apart from the poll's state.
+     */
+    public const LINKS_KEY = 'group_invite.join_bot.links';
+
+    /** Where the bot reports everything it does: a chat id set in the panel. */
+    public const REPORTS_KEY = 'group_invite.join_bot.reports';
+
+    /** Whether the last report got through; the poll and the invite run both write it. */
+    public const REPORTS_STATE_KEY = 'group_invite.join_bot.reports.state';
+
+    /** Reports go to the owner's chat until the panel says otherwise. */
+    public const DEFAULT_REPORT_CHAT = '8028326577';
+
     /** The poll asked Telegram this recently, seconds: it is alive. */
     private const ALIVE_SECONDS = 120;
 
@@ -61,8 +77,9 @@ final class JoinBotSettings
     {
         TelegramSetting::set(self::KEY, ['token' => $token, 'enabled' => true, 'bot' => $bot]);
 
-        /* Another bot: its updates start from its own first one. */
+        /* Another bot: its updates start from its own first one, its links are its own. */
         TelegramSetting::set(self::STATE_KEY, null);
+        TelegramSetting::set(self::LINKS_KEY, null);
     }
 
     public function setEnabled(bool $enabled): void
@@ -74,7 +91,98 @@ final class JoinBotSettings
 
     public function forget(): void
     {
-        TelegramSetting::query()->whereIn('key', [self::KEY, self::STATE_KEY])->delete();
+        TelegramSetting::query()->whereIn('key', [self::KEY, self::STATE_KEY, self::LINKS_KEY])->delete();
+    }
+
+    /**
+     * The links of the bot in now, by group (its chat id or @name).
+     *
+     * @return array<string, string>
+     */
+    public function links(): array
+    {
+        $saved = TelegramSetting::get(self::LINKS_KEY);
+
+        if (! is_array($saved) || (int) ($saved['bot_id'] ?? 0) !== $this->botId() || ! is_array($saved['chats'] ?? null)) {
+            return [];
+        }
+
+        return array_filter($saved['chats'], 'is_string');
+    }
+
+    /**
+     * @param string|null $link null: the link is gone, a new one is made next time
+     */
+    public function saveLink(string $chat, ?string $link): void
+    {
+        $chats = $this->links();
+
+        if ($link === null) {
+            unset($chats[$chat]);
+        } else {
+            $chats[$chat] = $link;
+        }
+
+        TelegramSetting::set(self::LINKS_KEY, ['bot_id' => $this->botId(), 'chats' => $chats]);
+    }
+
+    /**
+     * Where the reports go. Never set: the owner's chat; emptied in the
+     * panel: nowhere. The locale is the one of whoever set it.
+     *
+     * @return array{chat_id: string|null, enabled: bool, locale: string}
+     */
+    public function reports(): array
+    {
+        $saved = TelegramSetting::get(self::REPORTS_KEY);
+
+        if (! is_array($saved)) {
+            return ['chat_id' => self::DEFAULT_REPORT_CHAT, 'enabled' => true, 'locale' => 'ru'];
+        }
+
+        $chat = trim((string) ($saved['chat_id'] ?? ''));
+
+        return [
+            'chat_id' => $chat === '' ? null : $chat,
+            'enabled' => $chat !== '' && filter_var($saved['enabled'] ?? true, FILTER_VALIDATE_BOOLEAN),
+            'locale' => is_string($saved['locale'] ?? null) && $saved['locale'] !== '' ? $saved['locale'] : 'ru',
+        ];
+    }
+
+    public function saveReports(?string $chatId, bool $enabled, string $locale): void
+    {
+        TelegramSetting::set(self::REPORTS_KEY, ['chat_id' => trim((string) $chatId), 'enabled' => $enabled, 'locale' => $locale]);
+    }
+
+    /**
+     * @return array{sent_at: string|null, error: string|null, error_at: string|null}
+     */
+    public function reportsState(): array
+    {
+        $state = TelegramSetting::get(self::REPORTS_STATE_KEY);
+        $state = is_array($state) ? $state : [];
+
+        return [
+            'sent_at' => $state['sent_at'] ?? null,
+            'error' => $state['error'] ?? null,
+            'error_at' => $state['error_at'] ?? null,
+        ];
+    }
+
+    /**
+     * @param array{sent_at?: string|null, error?: string|null, error_at?: string|null} $state
+     */
+    public function setReportsState(array $state): void
+    {
+        TelegramSetting::set(self::REPORTS_STATE_KEY, array_filter(
+            array_replace($this->reportsState(), $state),
+            static fn ($value) => $value !== null,
+        ));
+    }
+
+    private function botId(): int
+    {
+        return (int) ($this->current()['bot']['id'] ?? 0);
     }
 
     /**

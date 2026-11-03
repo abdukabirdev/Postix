@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\Api\Telegram;
 
+use App\Application\Telegram\Services\JoinBotReporter;
 use App\Application\Telegram\Services\JoinBotSettings;
 use App\Application\Telegram\Services\JoinRequestService;
 use App\Application\Telegram\Support\BotApiError;
@@ -28,6 +29,7 @@ final class GroupInviteBotController extends Controller
     public function __construct(
         private readonly JoinBotSettings $settings,
         private readonly JoinRequestService $requests,
+        private readonly JoinBotReporter $reporter,
     ) {}
 
     public function show(Request $request): JsonResponse
@@ -74,6 +76,11 @@ final class GroupInviteBotController extends Controller
                 'polled_at' => $state['polled_at'],
                 'error' => $state['error'],
                 'error_at' => $state['error_at'],
+            ],
+            'reports' => [
+                'chat_id' => $this->settings->reports()['chat_id'],
+                'enabled' => $this->settings->reports()['enabled'],
+                ...$this->settings->reportsState(),
             ],
             'chats' => collect($state['chats'])
                 ->map(fn (array $chat, string|int $id) => [...$chat, 'id' => (string) $id])
@@ -148,6 +155,49 @@ final class GroupInviteBotController extends Controller
         return response()->json([
             'message' => __('driver_check.invites.bot.messages.' . ($data['enabled'] ? 'enabled' : 'disabled')),
         ]);
+    }
+
+    /**
+     * Where the bot reports everything it does: a chat id (a person's, or
+     * a group's with a minus), on or off. Empty: nowhere.
+     */
+    public function reports(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'chat_id' => ['nullable', 'string', 'max:32', 'regex:/^\s*-?\d{5,20}\s*$/'],
+            'enabled' => ['required', 'boolean'],
+        ], [
+            'chat_id.regex' => __('driver_check.invites.bot.reports.bad_chat'),
+        ]);
+
+        $chat = trim((string) ($data['chat_id'] ?? ''));
+        $enabled = $chat !== '' && (bool) $data['enabled'];
+
+        $this->settings->saveReports($chat, $enabled, app()->getLocale());
+
+        return response()->json([
+            'message' => $enabled
+                ? __('driver_check.invites.bot.reports.saved', ['chat' => $chat])
+                : __('driver_check.invites.bot.reports.saved_off'),
+        ]);
+    }
+
+    /**
+     * A test message to the chat the reports go to.
+     */
+    public function testReport(): JsonResponse
+    {
+        if ($this->settings->token() === null) {
+            return response()->json(['message' => __('driver_check.invites.bot.errors.no_token')], 422);
+        }
+
+        $error = $this->reporter->test(app()->getLocale());
+
+        if ($error !== null) {
+            return response()->json(['message' => __('driver_check.invites.bot.reports.test_failed', ['reason' => $error])], 422);
+        }
+
+        return response()->json(['message' => __('driver_check.invites.bot.reports.test_sent')]);
     }
 
     /**

@@ -859,6 +859,8 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::get('/bot/groups', 'groups')->name('api.telegram.group-invites.bot.groups');
                     Route::put('/bot/token', 'connect')->name('api.telegram.group-invites.bot.connect');
                     Route::delete('/bot/token', 'disconnect')->name('api.telegram.group-invites.bot.disconnect');
+                    Route::patch('/bot/reports', 'reports')->name('api.telegram.group-invites.bot.reports');
+                    Route::post('/bot/reports/test', 'testReport')->name('api.telegram.group-invites.bot.reports.test');
                 });
             });
 

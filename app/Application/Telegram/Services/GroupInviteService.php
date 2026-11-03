@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace App\Application\Telegram\Services;
 
+use App\Application\Telegram\Support\BotApiError;
 use App\Application\Telegram\Support\DeadSession;
+use App\Application\Telegram\Support\JoinRefused;
 use App\Application\Telegram\Support\MemberCount;
 use App\Application\Telegram\Support\SessionSleep;
 use App\Application\Telegram\Support\UsernameLookup;
@@ -281,6 +283,12 @@ final class GroupInviteService
     /** @var array<int, true> groups this run leaves alone */
     private array $blocked = [];
 
+    /** @var array<int, true> groups our bot cannot make a link for in this run: accounts join by the group's own link */
+    private array $noBotLink = [];
+
+    /** @var array<int, true> groups whose bots this run has looked for */
+    private array $botsChecked = [];
+
     /** @var array<string, true> accountId:groupId - this account may not invite there */
     private array $denied = [];
 
@@ -325,6 +333,7 @@ final class GroupInviteService
         private readonly UsernameLookup $usernames,
         private readonly MemberCount $memberCount,
         private readonly JoinBotSettings $joinBot,
+        private readonly JoinRequestService $joinRequests,
     ) {}
 
     /**
@@ -344,6 +353,8 @@ final class GroupInviteService
         $this->troubled = [];
         $this->joined = [];
         $this->blocked = [];
+        $this->noBotLink = [];
+        $this->botsChecked = [];
         $this->denied = [];
         $this->invitedInto = [];
         $this->ownIds = null;
@@ -635,6 +646,11 @@ final class GroupInviteService
      */
     public static function classify(Throwable $e, string $step = self::STEP_INVITE): string
     {
+        /* Our bot did not let the account in: it cannot add here in this run. */
+        if ($e instanceof JoinRefused) {
+            return self::KIND_GROUP_DENIED;
+        }
+
         $error = self::rpcError($e);
 
         if ($error instanceof RateLimitError) {
@@ -1200,6 +1216,7 @@ final class GroupInviteService
         $this->now['group'] = $group->title ?: $group->link;
 
         $this->countBefore($api, $account, $group);
+        $this->muteBotsIn($api, $account, $group, $say);
 
         if ($via === TelegramGroupInvite::VIA_USERNAME) {
             [$people, $done['stop']] = $this->resolve($api, $account, $group, $people, $config, $say, $done);
@@ -1289,6 +1306,11 @@ final class GroupInviteService
             }
 
             $done['calls']++;
+
+            /* A bot among them after all (the base did not know it): it may not write. */
+            foreach ($this->botsIn($response, $part) as $bot) {
+                $this->muteBot($account, $group, $bot, $say);
+            }
 
             $refused = $this->missingIds($response);
             $added = $this->addedIds($response);
@@ -2476,6 +2498,13 @@ final class GroupInviteService
             ->all();
     }
 
+    /**
+     * The account is in the group before it adds or checks anybody, once a
+     * run. Our bot first: an account not in the group yet asks to join by
+     * the bot's link and the bot lets it in. Where the bot cannot help (not
+     * on, not an admin with the right to let people in, the group not known
+     * by its id or @name yet): the group's own link.
+     */
     private function ensureJoined(API $api, TelegramInviteGroup $group, TelegramAccount $account, callable $say): void
     {
         $key = $account->id . ':' . $group->id;
@@ -2486,6 +2515,154 @@ final class GroupInviteService
 
         $this->doing('joining');
 
+        if (! $this->joinThroughBot($api, $group, $account, $say)) {
+            $this->joinByLink($api, $group, $account, $say);
+        }
+
+        $this->joined[$key] = true;
+
+        $group->refresh();
+    }
+
+    /**
+     * Through our bot. The bot's link tells whether the account is in
+     * (chatInviteAlready); not in, it asks to join by it - the link takes
+     * requests - and the bot lets it in at once. The group's own link is
+     * not needed: it may be dead, or take nobody without a request.
+     *
+     * @return bool false: the bot cannot help here, the group's own link is next
+     *
+     * @throws Throwable the account's own trouble (a flood, a frozen account), a refusal of the join (JoinRefused)
+     */
+    private function joinThroughBot(API $api, TelegramInviteGroup $group, TelegramAccount $account, callable $say): bool
+    {
+        if (isset($this->noBotLink[$group->id]) || ! $this->joinBot->enabled()) {
+            return false;
+        }
+
+        $context = ['step' => self::STEP_JOIN];
+        $seen = null;
+
+        foreach ([false, true] as $fresh) {
+            try {
+                $hash = $this->joinRequests->requestLink($group, $fresh);
+            } catch (BotApiError $e) {
+                $this->noBotLink[$group->id] = true;
+                $this->log('skipped', "Our bot cannot make a link here: {$e->reason()}", $account->id, $group->id, ['reason' => 'no_bot_link', 'rpc' => $e->reason()]);
+                $say("  {$group->link}: our bot cannot make a link here ({$e->reason()}), the group's own link");
+
+                return false;
+            }
+
+            if ($hash === null) {
+                $this->noBotLink[$group->id] = true;
+
+                return false;
+            }
+
+            try {
+                $seen = $this->patiently(fn () => $api->messages->checkChatInvite(hash: $hash, floodWaitLimit: 0), $say, $account, $group, $context);
+
+                break;
+            } catch (Throwable $e) {
+                if (in_array(self::classify($e, self::STEP_JOIN), self::ACCOUNT_KINDS, true)) {
+                    throw $e;
+                }
+
+                /* Revoked in the group: the bot makes a new one, once. */
+                if (! $fresh && in_array(self::code($e), ['INVITE_HASH_EXPIRED', 'INVITE_HASH_INVALID'], true)) {
+                    continue;
+                }
+
+                $say("  {$group->link}: our bot's link: " . self::code($e) . ", the group's own link");
+
+                return false;
+            }
+        }
+
+        if (($seen['_'] ?? null) === 'chatInviteAlready') {
+            $this->rememberChat($group, $seen, $account->id);
+
+            return true;
+        }
+
+        /* The bot lets in by the account's Telegram id. */
+        if (! $this->knowSelf($api, $account)) {
+            return false;
+        }
+
+        $say("  {$group->link}: not in the group yet, asks to join through our bot");
+        $this->doing('waiting_bot');
+
+        try {
+            $this->patiently(fn () => $api->messages->importChatInvite(hash: $hash, floodWaitLimit: 0), $say, $account, $group, $context);
+        } catch (Throwable $e) {
+            if (self::code($e) !== 'INVITE_REQUEST_SENT') {
+                if (self::classify($e, self::STEP_JOIN) !== self::KIND_ALREADY) {
+                    throw $e;
+                }
+            } elseif (($error = $this->joinRequests->letIn($group, $account)) !== null) {
+                $say("  our bot could not let it in: {$error}");
+
+                throw new JoinRefused($error === 'NO_BOT' ? 'JOIN_NOT_APPROVED' : $error);
+            }
+        }
+
+        /* In now: the group as the account sees it - its id, what it invites by. */
+        for ($look = 1; ; $look++) {
+            $seen = $this->patiently(fn () => $api->messages->checkChatInvite(hash: $hash, floodWaitLimit: 0), $say, $account, $group, $context);
+
+            if (($seen['_'] ?? null) === 'chatInviteAlready' || $look >= 2) {
+                break;
+            }
+
+            $this->snooze(3, 'waiting_bot');
+        }
+
+        if (($seen['_'] ?? null) !== 'chatInviteAlready') {
+            throw new JoinRefused('JOIN_NOT_APPROVED');
+        }
+
+        $this->rememberChat($group, $seen, $account->id);
+        $this->log('joined', 'Joined by request, our bot let the account in', $account->id, $group->id, ['via' => 'bot']);
+        $say('  in the group: our bot let the account in');
+
+        return true;
+    }
+
+    /**
+     * The account's own Telegram id - the bot lets in by it - asked of the
+     * session when it was never learned.
+     */
+    private function knowSelf(API $api, TelegramAccount $account): bool
+    {
+        if ($account->telegram_user_id) {
+            return true;
+        }
+
+        try {
+            $self = $api->getSelf();
+        } catch (Throwable) {
+            return false;
+        }
+
+        if (! is_array($self) || empty($self['id'])) {
+            return false;
+        }
+
+        $account->update(TelegramAccount::profileFrom($self));
+        $this->ownIds = null;
+
+        return true;
+    }
+
+    /**
+     * By the group's own link: an invite link or its public @name. A group
+     * that takes new members by request answers INVITE_REQUEST_SENT: our
+     * bot lets the account in, then the same join finds it in the group.
+     */
+    private function joinByLink(API $api, TelegramInviteGroup $group, TelegramAccount $account, callable $say): void
+    {
         $context = ['step' => self::STEP_JOIN];
 
         $join = fn () => $this->patiently(fn () => $group->isInvite()
@@ -2524,21 +2701,27 @@ final class GroupInviteService
                 ), $account->id);
             }
         }
-
-        $this->joined[$key] = true;
-
-        $group->refresh();
     }
 
     /**
-     * The account asked to join (INVITE_REQUEST_SENT). While our bot is
-     * asking Telegram, it approves the request within seconds: the run
-     * waits for that line of the bot, a little while at most.
+     * The account asked to join by the group's own link
+     * (INVITE_REQUEST_SENT). The group known by its id: the bot lets it in
+     * now. Not known yet (an invite link nobody has joined by): while our
+     * bot is asking Telegram, it approves the request within seconds - the
+     * run waits for that line of the bot, a little while at most.
      *
      * @param callable(string): void $say
      */
     private function approvedByBot(TelegramAccount $account, TelegramInviteGroup $group, callable $say): bool
     {
+        if ($group->telegram_chat_id && $this->joinBot->enabled() && $account->telegram_user_id) {
+            $error = $this->joinRequests->letIn($group, $account);
+
+            $say('  ' . ($error === null ? 'let in by our bot' : "our bot could not let it in: {$error}"));
+
+            return $error === null;
+        }
+
         if (! $this->joinBot->alive()) {
             return false;
         }
@@ -2624,6 +2807,20 @@ final class GroupInviteService
             $say("  join {$group->link}: {$code}, the account stops");
 
             return true;
+        }
+
+        /*
+         * Our accounts have been in the group (its id is known): it is the
+         * way in that is gone - a dead invite link, a changed @name - not
+         * the group. The accounts already in it go on adding; a group that
+         * is really gone is told by their own calls. Full is full for all.
+         */
+        if ($kind === self::KIND_GROUP_GONE && $group->telegram_chat_id && $code !== 'USERS_TOO_MUCH') {
+            $group->update(['last_error' => mb_substr($code, 0, 500)]);
+            $this->deny($account, $group, $code);
+            $say("  join {$group->link}: {$code} - this account cannot get in, the group stays on");
+
+            return false;
         }
 
         $kind === self::KIND_GROUP_GONE
@@ -3182,6 +3379,93 @@ final class GroupInviteService
         }
 
         return $added;
+    }
+
+    /**
+     * The bots among the people of a call, as Telegram's answer names them.
+     *
+     * @param Collection<int, TelegramScrapedUser> $part
+     *
+     * @return list<array<string, mixed>> their user objects
+     */
+    private function botsIn(mixed $result, Collection $part): array
+    {
+        $box = is_array($result) ? ($result['updates'] ?? $result) : [];
+        $asked = array_flip($part->map(fn (TelegramScrapedUser $user) => (int) $user->telegram_user_id)->all());
+        $bots = [];
+
+        foreach ((array) (is_array($box) ? ($box['users'] ?? []) : []) as $user) {
+            if (is_array($user) && ! empty($user['bot']) && isset($asked[(int) ($user['id'] ?? 0)])) {
+                $bots[] = $user;
+            }
+        }
+
+        return $bots;
+    }
+
+    /**
+     * Bots already in the group - added before, by anybody - may not write
+     * either: once a run, an account in the group reads the group's bots and
+     * our bot mutes every one that is a plain member (an admin's bot is the
+     * group's own business).
+     */
+    private function muteBotsIn(API $api, TelegramAccount $account, TelegramInviteGroup $group, callable $say): void
+    {
+        if (isset($this->botsChecked[$group->id]) || ! $this->joinBot->enabled() || ! $group->telegram_chat_id) {
+            return;
+        }
+
+        $this->botsChecked[$group->id] = true;
+
+        try {
+            $page = $api->channels->getParticipants(
+                channel: $this->peer($group),
+                filter: ['_' => 'channelParticipantsBots'],
+                offset: 0,
+                limit: self::MEMBERS_PAGE,
+                floodWaitLimit: 0,
+            );
+        } catch (Throwable) {
+            return;
+        }
+
+        $users = [];
+
+        foreach ((array) ($page['users'] ?? []) as $user) {
+            if (is_array($user) && isset($user['id'])) {
+                $users[(int) $user['id']] = $user;
+            }
+        }
+
+        foreach ((array) ($page['participants'] ?? []) as $participant) {
+            /* channelParticipantAdmin, the creator, one restricted already: left as they are. */
+            if (! is_array($participant) || ($participant['_'] ?? null) !== 'channelParticipant') {
+                continue;
+            }
+
+            $id = self::participantId($participant);
+
+            if ($id !== null && ! empty($users[$id]['bot'])) {
+                $this->muteBot($account, $group, $users[$id], $say);
+            }
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $user the bot's user object
+     */
+    private function muteBot(TelegramAccount $account, TelegramInviteGroup $group, array $user, callable $say): void
+    {
+        $who = JoinRequestService::who($user);
+        $error = $this->joinRequests->muteBot($group, (int) $user['id'], $who);
+
+        $this->log('bot_muted', $error === null ? "Bot {$who} may not write" : "Bot {$who} could not be muted: {$error}", $account->id, $group->id, [
+            'bot' => (int) $user['id'],
+            'who' => $who,
+            'rpc' => $error,
+        ]);
+
+        $say("  bot {$who}: " . ($error === null ? 'muted by our bot' : "could not be muted ({$error})"));
     }
 
     /**

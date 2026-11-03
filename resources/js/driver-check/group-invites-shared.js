@@ -208,7 +208,17 @@ export function inviteHelpers(t) {
                         return e.list_failed.replace(':reason', this.errorLabel(c.rpc));
                     }
 
+                    if (c.reason === 'no_bot_link') {
+                        return e.no_bot_link.replace(':reason', t.bot?.errors_tg?.[c.rpc] ?? this.errorLabel(c.rpc));
+                    }
+
                     return line.message;
+                case 'joined':
+                    return e.joined;
+                case 'bot_muted':
+                    return c.rpc
+                        ? e.bot_mute_failed.replace(':who', c.who ?? '?').replace(':reason', this.errorLabel(c.rpc))
+                        : e.bot_muted.replace(':who', c.who ?? '?');
                 case 'batch': {
                     const error = c.error ? String(c.error) : null;
 
@@ -292,6 +302,10 @@ export function inviteHelpers(t) {
                     return Number(c.not_added ?? 0) > 0 || (line.event === 'batch' && c.error) ? 'warn' : 'muted';
                 case 'members':
                     return Number(c.grew ?? 0) > 0 ? 'ok' : 'muted';
+                case 'joined':
+                    return 'ok';
+                case 'bot_muted':
+                    return c.rpc ? 'bad' : 'warn';
                 case 'finished':
                     return c.stopped ? 'warn' : 'ok';
                 default:

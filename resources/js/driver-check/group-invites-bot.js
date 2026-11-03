@@ -4,10 +4,10 @@
 |--------------------------------------------------------------------------
 |
 | The bot approves every request to join a group it administers and writes
-| who asked into the base. Our own accounts ask too (a group that takes
-| members by request): they are approved, not written. Here: the token, the
-| switch, whether the bot is asking Telegram right now, where it is an
-| admin, and the requests it took.
+| who asked into the base. Our own accounts ask too (by the bot's own link,
+| when not in the group yet): they are let in, not written. Here: the token,
+| the switch, where the bot reports what it does, whether it is asking
+| Telegram right now, where it is an admin, and the requests it took.
 |
 */
 
@@ -20,6 +20,7 @@ const REFRESH = 15000;
 const GROUP_TONES = {
     ok: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
     no_right: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
+    no_restrict: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     not_admin: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     absent: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
 };
@@ -50,6 +51,11 @@ export function groupInvitesBotPage(config) {
         busy: false,
         timer: null,
 
+        /* The reports form: filled from the first answer and after a save, not by the refreshes in between. */
+        reportChat: '',
+        reportOn: true,
+        reportFilled: false,
+
         init() {
             this.load();
             this.loadGroups();
@@ -77,6 +83,12 @@ export function groupInvitesBotPage(config) {
                 const params = this.kind === 'all' ? '' : `?kind=${this.kind}`;
                 this.data = await requestJson(this.endpoints.show + params);
                 this.loaded = true;
+
+                if (!this.reportFilled) {
+                    this.reportChat = this.reports.chat_id ?? '';
+                    this.reportOn = this.reports.enabled || !this.reports.chat_id;
+                    this.reportFilled = true;
+                }
             } catch (error) {
                 if (!quiet) {
                     this.error = error?.message || t.load_failed;
@@ -110,6 +122,76 @@ export function groupInvitesBotPage(config) {
 
         get bot() {
             return this.data?.bot ?? { connected: false };
+        },
+
+        get reports() {
+            return this.data?.reports ?? { chat_id: null, enabled: false };
+        },
+
+        /* Whether the reports get through: the last one arrived, they do not, none yet, off. */
+        reportState() {
+            const r = this.reports;
+            const rb = b.reports;
+
+            if (!r.enabled) {
+                return { tone: 'bg-gray-400', text: rb.off, bad: false };
+            }
+
+            const failing = r.error && (!r.sent_at || new Date(r.error_at) >= new Date(r.sent_at));
+
+            if (failing) {
+                return {
+                    tone: 'bg-error-500',
+                    text: rb.failing.replace(':time', this.time(r.error_at)).replace(':error', b.errors_tg[r.error] ?? r.error),
+                    bad: true,
+                };
+            }
+
+            if (r.sent_at) {
+                return { tone: 'bg-success-500', text: rb.sent.replace(':time', this.ago(r.sent_at)), bad: false };
+            }
+
+            return { tone: 'bg-gray-300 dark:bg-gray-600', text: rb.never, bad: false };
+        },
+
+        async saveReports() {
+            if (this.busy) {
+                return;
+            }
+
+            this.busy = true;
+
+            try {
+                const json = await requestJson(this.endpoints.reports, 'PATCH', {
+                    chat_id: String(this.reportChat ?? '').trim() || null,
+                    enabled: this.reportOn,
+                });
+                notify(json.message);
+                this.reportFilled = false;
+                await this.load(true);
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = false;
+            }
+        },
+
+        async testReport() {
+            if (this.busy) {
+                return;
+            }
+
+            this.busy = true;
+
+            try {
+                const json = await requestJson(this.endpoints.reportTest, 'POST');
+                notify(json.message);
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = false;
+                await this.load(true);
+            }
         },
 
         /* The bot as one line: asking now, switched off, or silent. */

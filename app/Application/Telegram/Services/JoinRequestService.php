@@ -26,10 +26,13 @@ use Throwable;
  * already wrote for them stays as it was (it is what the account's call
  * did); only someone who had left is in the group again.
  *
- * Our own accounts ask too: a group that takes new members by request
- * answers an account's join with INVITE_REQUEST_SENT. The bot approves them
- * as well, but they are not people of the base; the invite run waits for
- * that approval and goes on adding (GroupInviteService::ensureJoined()).
+ * Our own accounts ask too. An account that is not in the group yet asks
+ * to join by the bot's own link - one that takes requests - and the invite
+ * run lets it in through the bot at once (requestLink(), letIn()); a group
+ * that takes members by request answers its own link the same way. They
+ * are not people of the base (GroupInviteService::ensureJoined()).
+ *
+ * Every action of the bot is reported to the owner (JoinBotReporter).
  *
  * The bot is asked by getUpdates (long polling), a minute at a time, from
  * the scheduler: no webhook, nothing public to set up.
@@ -39,12 +42,43 @@ final class JoinRequestService
     /** One getUpdates waits this long for something to come, seconds. */
     private const LONG_POLL = 25;
 
-    private const UPDATES = ['chat_join_request', 'my_chat_member'];
+    /** chat_member: who came into a group where the bot is an admin - a bot among them is muted. */
+    private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member'];
+
+    /** What a muted bot may not do in the group: anything. */
+    private const RIGHTS = [
+        'can_send_messages',
+        'can_send_audios',
+        'can_send_documents',
+        'can_send_photos',
+        'can_send_videos',
+        'can_send_video_notes',
+        'can_send_voice_notes',
+        'can_send_polls',
+        'can_send_other_messages',
+        'can_add_web_page_previews',
+        'can_change_info',
+        'can_invite_users',
+        'can_pin_messages',
+        'can_manage_topics',
+    ];
 
     /** A 429 shorter than this is waited out on the spot, seconds. */
     private const WAIT_IN_PLACE = 30;
 
-    public function __construct(private readonly JoinBotSettings $settings) {}
+    /**
+     * Our account's request is gone or the account is in: the other one
+     * of the two (the poll, the invite run) let it in first.
+     */
+    private const LET_IN_ALREADY = ['USER_ALREADY_PARTICIPANT', 'HIDE_REQUESTER_MISSING'];
+
+    /** The name of the bot's link in the group's list of links (32 characters at most). */
+    private const LINK_NAME = 'Postix: our accounts';
+
+    public function __construct(
+        private readonly JoinBotSettings $settings,
+        private readonly JoinBotReporter $reporter,
+    ) {}
 
     /**
      * The token typed in the panel: a bot of its own (not one this project
@@ -199,10 +233,83 @@ final class JoinRequestService
 
         return match ($member['status'] ?? null) {
             'creator' => ['ok', null],
-            'administrator' => ! empty($member['can_invite_users']) ? ['ok', null] : ['no_right', null],
+            'administrator' => match (true) {
+                empty($member['can_invite_users']) => ['no_right', null],
+                empty($member['can_restrict_members']) => ['no_restrict', null],
+                default => ['ok', null],
+            },
             'member', 'restricted' => ['not_admin', null],
             default => ['absent', null],
         };
+    }
+
+    /**
+     * A bot in one of our groups may not write there: whoever added it, the
+     * moment it is in. The group's own admins' bots are left alone, and so
+     * is our bot. The bot is marked in the base: the invite never adds it.
+     *
+     * @param string $who how the report names it
+     *
+     * @return string|null null: it cannot write now; else why not
+     */
+    public function muteBot(TelegramInviteGroup $group, int $userId, string $who): ?string
+    {
+        $current = $this->settings->current();
+
+        if ($userId === (int) ($current['bot']['id'] ?? 0)) {
+            return null;
+        }
+
+        TelegramScrapedUser::query()->where('telegram_user_id', $userId)->update(['is_bot' => true]);
+        GroupInviteBase::forget();
+
+        if (! $current['enabled'] || $current['token'] === null || ! $group->telegram_chat_id) {
+            return 'NO_BOT';
+        }
+
+        try {
+            (new BotApi($current['token']))->call('restrictChatMember', [
+                'chat_id' => (int) $group->telegram_chat_id,
+                'user_id' => $userId,
+                'permissions' => array_fill_keys(self::RIGHTS, false),
+            ]);
+        } catch (BotApiError $e) {
+            $this->reporter->send('bot_mute_failed', ['group' => $group->title ?: $group->link, 'who' => $who, 'reason' => $e->reason()]);
+
+            return $e->reason();
+        }
+
+        $this->reporter->send('bot_muted', ['group' => $group->title ?: $group->link, 'who' => $who]);
+
+        return null;
+    }
+
+    /**
+     * Someone came into a chat where our bot is an admin. A bot that came
+     * into one of our groups as a plain member is muted at once.
+     *
+     * @param array<string, mixed>   $change
+     * @param callable(string): void $say
+     */
+    private function newMember(array $change, callable $say): void
+    {
+        $member = (array) ($change['new_chat_member'] ?? []);
+        $user = (array) ($member['user'] ?? []);
+
+        if (empty($user['is_bot']) || ($member['status'] ?? null) !== 'member' || empty($user['id'])) {
+            return;
+        }
+
+        $group = $this->ourGroup((array) ($change['chat'] ?? []));
+
+        if ($group === null) {
+            return;
+        }
+
+        $who = self::who($user);
+        $error = $this->muteBot($group, (int) $user['id'], $who);
+
+        $say(($error === null ? 'muted' : "could not mute ({$error})") . ": bot {$who} -> " . ($group->title ?: $group->link));
     }
 
     /**
@@ -214,6 +321,12 @@ final class JoinRequestService
     {
         if (is_array($update['my_chat_member'] ?? null)) {
             $this->rememberChat($update['my_chat_member']);
+
+            return;
+        }
+
+        if (is_array($update['chat_member'] ?? null)) {
+            $this->newMember($update['chat_member'], $say);
 
             return;
         }
@@ -236,6 +349,18 @@ final class JoinRequestService
         $group = $this->ourGroup($chat);
         $account = TelegramAccount::query()->where('telegram_user_id', $userId)->first();
         $error = $this->approve($api, $chatId, $userId);
+
+        /* The invite run let its account in itself, and wrote and reported it. */
+        if ($account !== null && in_array($error, self::LET_IN_ALREADY, true)) {
+            $say("already let in by the invite run: our account #{$account->id} -> " . ($chat['title'] ?? $chatId));
+
+            return;
+        }
+
+        if ($error === 'USER_ALREADY_PARTICIPANT') {
+            $error = null;
+        }
+
         $askedAt = isset($request['date']) ? Carbon::createFromTimestamp((int) $request['date']) : now();
 
         $person = null;
@@ -274,10 +399,171 @@ final class JoinRequestService
 
         $who = $account !== null ? "our account #{$account->id}" : "user {$userId}" . ($isNew ? ' (new in the base)' : '');
         $say(($error === null ? 'approved' : "not approved ({$error})") . ": {$who} -> " . ($chat['title'] ?? $chatId));
+
+        $where = ['group' => $group?->title ?: ($chat['title'] ?? $group?->link ?? (string) $chatId)];
+
+        if ($account !== null) {
+            $this->reporter->send($error === null ? 'approved_ours' : 'failed_ours', [...$where, 'phone' => $account->phone, 'reason' => $error]);
+        } else {
+            $this->reporter->send(
+                $error !== null ? 'failed_person' : ($isNew ? 'approved_new' : 'approved_known'),
+                [...$where, 'who' => self::who($from), 'reason' => $error],
+            );
+        }
     }
 
     /**
-     * @return string|null null: in the group now; else why not
+     * The bot's link to the group that takes requests: our accounts ask to
+     * join by it, and the bot lets them in. Made once and kept; $fresh: the
+     * kept one stopped working, a new one is made. A public group known
+     * only by its @name is looked up for its id first.
+     *
+     * @return string|null the link's hash; null when the bot is not on
+     *
+     * @throws BotApiError the bot may not make links there (not an admin, no right to let people in), Telegram is out of reach
+     */
+    public function requestLink(TelegramInviteGroup $group, bool $fresh = false): ?string
+    {
+        $current = $this->settings->current();
+
+        if (! $current['enabled'] || $current['token'] === null) {
+            return null;
+        }
+
+        $api = new BotApi($current['token']);
+        $chat = $this->chatOf($api, $group);
+
+        if ($chat === null) {
+            return null;
+        }
+
+        $kept = $this->settings->links()[(string) $chat] ?? null;
+
+        if ($kept !== null && ! $fresh) {
+            return self::hashOf($kept);
+        }
+
+        $made = (array) $api->call('createChatInviteLink', [
+            'chat_id' => $chat,
+            'name' => self::LINK_NAME,
+            'creates_join_request' => true,
+        ]);
+
+        $link = (string) ($made['invite_link'] ?? '');
+        $hash = self::hashOf($link);
+
+        if ($hash === null) {
+            return null;
+        }
+
+        $this->settings->saveLink((string) $chat, $link);
+
+        $this->reporter->send('link_made', ['group' => $group->title ?: $group->link, 'link' => $link]);
+
+        return $hash;
+    }
+
+    /**
+     * The invite run's account asked to join by the bot's link: the bot
+     * lets it in now, not waiting for the poll. Written and reported here;
+     * when the poll was quicker, it wrote and reported it itself.
+     *
+     * @return string|null null: the account is in; else why not
+     */
+    public function letIn(TelegramInviteGroup $group, TelegramAccount $account): ?string
+    {
+        $token = $this->settings->token();
+
+        if ($token === null || ! $group->telegram_chat_id || ! $account->telegram_user_id) {
+            return 'NO_BOT';
+        }
+
+        try {
+            $error = $this->approve(new BotApi($token), (int) $group->telegram_chat_id, (int) $account->telegram_user_id);
+        } catch (BotApiError $e) {
+            return $e->reason();
+        }
+
+        if (in_array($error, self::LET_IN_ALREADY, true)) {
+            return null;
+        }
+
+        if ($error !== null) {
+            return $error;
+        }
+
+        TelegramJoinRequest::query()->create([
+            'chat_id' => (int) $group->telegram_chat_id,
+            'chat_title' => self::cut($group->title),
+            'invite_group_id' => $group->id,
+            'telegram_user_id' => (int) $account->telegram_user_id,
+            'username' => self::cut($account->username ?? null),
+            'first_name' => self::cut($account->first_name ?? null),
+            'last_name' => self::cut($account->last_name ?? null),
+            'telegram_account_id' => $account->id,
+            'status' => TelegramJoinRequest::STATUS_APPROVED,
+            'requested_at' => now(),
+        ]);
+
+        $this->reporter->send('approved_ours', ['group' => $group->title ?: $group->link, 'phone' => $account->phone]);
+
+        return null;
+    }
+
+    /**
+     * The group as the Bot API knows it: its id; a public one known only
+     * by its @name is looked up, and its id kept.
+     *
+     * @throws BotApiError
+     */
+    private function chatOf(BotApi $api, TelegramInviteGroup $group): ?int
+    {
+        if ($group->telegram_chat_id) {
+            return (int) $group->telegram_chat_id;
+        }
+
+        if ($group->isInvite()) {
+            return null;
+        }
+
+        $chat = (array) $api->call('getChat', ['chat_id' => '@' . ltrim($group->link, '@')], 10);
+        $id = (int) ($chat['id'] ?? 0);
+
+        if ($id === 0) {
+            return null;
+        }
+
+        $group->update(['telegram_chat_id' => $id]);
+
+        return $id;
+    }
+
+    /**
+     * https://t.me/+AbC_d-1 -> AbC_d-1 (and the older t.me/joinchat/AbC).
+     */
+    private static function hashOf(string $link): ?string
+    {
+        return preg_match('~(?:/\+|/joinchat/)([A-Za-z0-9_-]+)~', $link, $m) === 1 ? $m[1] : null;
+    }
+
+    /**
+     * Ali Valiyev (@ali, ID 501) - the person as a report names them.
+     *
+     * @param array<string, mixed> $from
+     */
+    public static function who(array $from): string
+    {
+        $name = trim(((string) ($from['first_name'] ?? '')) . ' ' . ((string) ($from['last_name'] ?? '')));
+        $tags = array_filter([
+            ! empty($from['username']) ? '@' . $from['username'] : null,
+            'ID ' . (int) ($from['id'] ?? 0),
+        ]);
+
+        return $name !== '' ? $name . ' (' . implode(', ', $tags) . ')' : implode(', ', $tags);
+    }
+
+    /**
+     * @return string|null null: in the group now; else why not (USER_ALREADY_PARTICIPANT as well)
      *
      * @throws BotApiError a network or Telegram trouble: the request is asked about again later
      */
@@ -299,9 +585,7 @@ final class JoinRequestService
                     throw $e;
                 }
 
-                $reason = $e->reason();
-
-                return $reason === 'USER_ALREADY_PARTICIPANT' ? null : $reason;
+                return $e->reason();
             }
         }
     }
@@ -408,30 +692,63 @@ final class JoinRequestService
 
         $chats = $this->settings->state()['chats'];
         $status = (string) ($member['status'] ?? '');
+        $before = $chats[(string) $chat['id']] ?? null;
+        $title = self::cut($chat['title'] ?? null) ?? (string) $chat['id'];
 
         if (in_array($status, ['left', 'kicked'], true)) {
             unset($chats[(string) $chat['id']]);
+            $report = 'removed';
         } else {
-            $chats[(string) $chat['id']] = [
+            $now = [
                 'title' => self::cut($chat['title'] ?? null),
                 'username' => $chat['username'] ?? null,
                 'admin' => in_array($status, ['administrator', 'creator'], true),
                 'can_invite' => $status === 'creator' || ! empty($member['can_invite_users']),
+                'can_restrict' => $status === 'creator' || ! empty($member['can_restrict_members']),
                 'at' => now()->toIso8601String(),
             ];
+            $chats[(string) $chat['id']] = $now;
+
+            /* Another right changed: nothing new about letting people in or muting bots. */
+            $same = is_array($before)
+                && ($before['admin'] ?? null) === $now['admin']
+                && ($before['can_invite'] ?? null) === $now['can_invite']
+                && ($before['can_restrict'] ?? null) === $now['can_restrict'];
+
+            $report = match (true) {
+                $same => null,
+                ! $now['admin'] => 'member',
+                ! $now['can_invite'] => 'admin_no_right',
+                ! $now['can_restrict'] => 'admin_no_restrict',
+                default => 'admin',
+            };
         }
 
         $this->settings->setState(['chats' => $chats]);
+
+        if ($report !== null) {
+            $this->reporter->send("chat_{$report}", ['group' => $title]);
+        }
     }
 
     /**
+     * A trouble that asking again will not mend (the token revoked, another
+     * program took the bot) is reported once, not every minute.
+     *
      * @param callable(string): void $say
      */
     private function trouble(Throwable $e, callable $say): void
     {
-        $this->settings->setState(['error' => mb_substr($e->getMessage(), 0, 300), 'error_at' => now()->toIso8601String()]);
+        $was = $this->settings->state()['error'];
+        $error = mb_substr($e->getMessage(), 0, 300);
+
+        $this->settings->setState(['error' => $error, 'error_at' => now()->toIso8601String()]);
 
         $say('Bot API: ' . $e->getMessage());
+
+        if ($e instanceof BotApiError && ! $e->transient && $was !== $error) {
+            $this->reporter->send('bot_error', ['reason' => $e->reason()]);
+        }
     }
 
     private static function cut(mixed $value): ?string

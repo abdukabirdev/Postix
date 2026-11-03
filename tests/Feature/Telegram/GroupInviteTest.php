@@ -35,7 +35,9 @@ use App\Models\User;
 use danog\MadelineProto\RPCError\RateLimitError;
 use danog\MadelineProto\RPCErrorException;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -698,6 +700,9 @@ final class GroupInviteTest extends TestCase
         $settings = $this->app->make(GroupInviteSettings::class);
         $settings->save([...$settings->current(), 'excluded_accounts' => [2]]);
 
+        /* Our bot is not in the group: it cannot make its own link there, the group's own one is used. */
+        Http::fake(['*' => Http::response(['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: chat not found'])]);
+
         /* Our bot is on and asking Telegram; it has approved account 1. */
         TelegramSetting::set(JoinBotSettings::KEY, ['token' => '123456:' . str_repeat('a', 35), 'enabled' => true, 'bot' => ['id' => 5, 'username' => 'our_bot', 'name' => 'Bot']]);
         TelegramSetting::set(JoinBotSettings::STATE_KEY, ['polled_at' => now()->toIso8601String()]);
@@ -713,6 +718,220 @@ final class GroupInviteTest extends TestCase
         $this->assertCount(2, $joins);
         $this->assertCount(1, $calls);
         $this->assertSame(1, $totals['invited']);
+        $this->assertSame('chat not found', TelegramGroupInviteLog::query()->where('context->reason', 'no_bot_link')->sole()->context['rpc']);
+    }
+
+    public function test_an_account_not_in_the_group_asks_to_join_by_our_bots_link_and_the_bot_lets_it_in(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => '+GroupOwnHash', 'telegram_chat_id' => -1000000000777, 'is_active' => true]);
+        $this->hold(1, $this->person(1297, 'Ali'));
+
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'excluded_accounts' => [2]]);
+
+        TelegramSetting::set(JoinBotSettings::KEY, ['token' => '123456:' . str_repeat('a', 35), 'enabled' => true, 'bot' => ['id' => 5, 'username' => 'our_bot', 'name' => 'Bot']]);
+
+        $bot = new ArrayObject;
+        Http::fake(function (HttpRequest $request) use ($bot) {
+            $method = basename(parse_url($request->url(), PHP_URL_PATH));
+            $bot[] = ['method' => $method, 'params' => $request->data()];
+
+            return Http::response(match ($method) {
+                'createChatInviteLink' => ['ok' => true, 'result' => ['invite_link' => 'https://t.me/+BotLink_1']],
+                default => ['ok' => true, 'result' => true],
+            });
+        });
+
+        /* Not in the group until the bot let it in; the group's own link is never used. */
+        $messages = new class($bot)
+        {
+            public array $used = [];
+
+            public function __construct(private ArrayObject $bot) {}
+
+            public function checkChatInvite(mixed ...$args): array
+            {
+                $this->used[] = 'check:' . $args['hash'];
+                $in = collect($this->bot)->contains('method', 'approveChatJoinRequest');
+
+                return $in
+                    ? ['_' => 'chatInviteAlready', 'chat' => ['_' => 'channel', 'id' => 777, 'title' => 'Drivers']]
+                    : ['_' => 'chatInvite', 'title' => 'Drivers'];
+            }
+
+            public function importChatInvite(mixed ...$args): never
+            {
+                $this->used[] = 'import:' . $args['hash'];
+
+                throw RPCErrorException::make('INVITE_REQUEST_SENT', 400, '');
+            }
+        };
+
+        $calls = $this->fakeTelegram(invite: fn (array $users) => $this->added($users), messages: $messages);
+
+        $totals = $this->service->run();
+
+        $this->assertSame(['check:BotLink_1', 'import:BotLink_1', 'check:BotLink_1'], $messages->used);
+        $this->assertCount(1, $calls);
+        $this->assertSame(1, $totals['invited']);
+
+        /* The bot made one link that takes requests, and let account 1 in by its Telegram id. */
+        $link = collect($bot)->firstWhere('method', 'createChatInviteLink')['params'];
+        $this->assertSame([-1000000000777, true], [$link['chat_id'], $link['creates_join_request']]);
+        $this->assertSame(['chat_id' => -1000000000777, 'user_id' => 9001], collect($bot)->firstWhere('method', 'approveChatJoinRequest')['params']);
+        $this->assertSame(['-1000000000777' => 'https://t.me/+BotLink_1'], $this->app->make(JoinBotSettings::class)->links());
+
+        /* Written on the bot's page, reported to the owner, the group stays on. */
+        $this->assertSame([1, $group->id], [TelegramJoinRequest::query()->sole()->telegram_account_id, TelegramJoinRequest::query()->sole()->invite_group_id]);
+        $reports = collect($bot)->where('method', 'sendMessage')->pluck('params');
+        $this->assertSame([JoinBotSettings::DEFAULT_REPORT_CHAT], $reports->pluck('chat_id')->unique()->values()->all());
+        $this->assertTrue($reports->contains(fn (array $p) => str_contains($p['text'], '+998900000001')));
+        $this->assertSame(1, TelegramGroupInviteLog::query()->where('event', 'joined')->count());
+        $this->assertTrue($group->fresh()->is_active);
+    }
+
+    public function test_an_account_already_in_the_group_is_told_so_by_the_bots_link_and_asks_nothing(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'telegram_chat_id' => -1000000000777, 'is_active' => true]);
+        $this->hold(1, $this->person(1298, 'Ali'));
+
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'excluded_accounts' => [2]]);
+
+        TelegramSetting::set(JoinBotSettings::KEY, ['token' => '123456:' . str_repeat('a', 35), 'enabled' => true, 'bot' => ['id' => 5, 'username' => 'our_bot', 'name' => 'Bot']]);
+        TelegramSetting::set(JoinBotSettings::LINKS_KEY, ['bot_id' => 5, 'chats' => ['-1000000000777' => 'https://t.me/+Kept']]);
+        Http::fake(['*' => Http::response(['ok' => true, 'result' => true])]);
+
+        $messages = new class
+        {
+            public array $used = [];
+
+            public function checkChatInvite(mixed ...$args): array
+            {
+                $this->used[] = 'check:' . $args['hash'];
+
+                return ['_' => 'chatInviteAlready', 'chat' => ['_' => 'channel', 'id' => 777, 'title' => 'Drivers']];
+            }
+        };
+
+        $joins = new ArrayObject;
+        $calls = $this->fakeTelegram(
+            invite: fn (array $users) => $this->added($users),
+            join: function () use ($joins) {
+                $joins[] = true;
+            },
+            messages: $messages,
+        );
+
+        $this->service->run();
+
+        /* The kept link, no new one, no join request, no join by the group's @name. */
+        $this->assertSame(['check:Kept'], $messages->used);
+        $this->assertCount(0, $joins);
+        $this->assertCount(1, $calls);
+        Http::assertNothingSent();
+    }
+
+    public function test_a_bot_added_by_a_call_and_the_bots_already_in_the_group_may_not_write(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'telegram_chat_id' => -1000000000777, 'is_active' => true]);
+        $spam = $this->person(1301, 'Spam');
+        $this->hold(1, $spam);
+
+        $settings = $this->app->make(GroupInviteSettings::class);
+        $settings->save([...$settings->current(), 'excluded_accounts' => [2]]);
+
+        TelegramSetting::set(JoinBotSettings::KEY, ['token' => '123456:' . str_repeat('a', 35), 'enabled' => true, 'bot' => ['id' => 5, 'username' => 'our_bot', 'name' => 'Bot']]);
+        TelegramSetting::set(JoinBotSettings::LINKS_KEY, ['bot_id' => 5, 'chats' => ['-1000000000777' => 'https://t.me/+Kept']]);
+
+        $bot = new ArrayObject;
+        Http::fake(function (HttpRequest $request) use ($bot) {
+            $bot[] = ['method' => basename(parse_url($request->url(), PHP_URL_PATH)), 'params' => $request->data()];
+
+            return Http::response(['ok' => true, 'result' => true]);
+        });
+
+        $messages = new class
+        {
+            public function checkChatInvite(mixed ...$args): array
+            {
+                return ['_' => 'chatInviteAlready', 'chat' => ['_' => 'channel', 'id' => 777, 'title' => 'Drivers']];
+            }
+        };
+
+        /* The base did not know 1301 is a bot; Telegram's answer says so. 7001 sits in the group already, 7002 is an admin's bot. */
+        $this->fakeTelegram(
+            invite: fn (array $users) => [
+                ...$this->added($users),
+                'updates' => [...$this->added($users)['updates'], 'users' => [['_' => 'user', 'id' => 1301, 'bot' => true, 'first_name' => 'Spam', 'username' => 'spam_bot']]],
+            ],
+            messages: $messages,
+            bots: [['id' => 7001], ['id' => 7002, 'admin' => true]],
+        );
+
+        $this->service->run();
+
+        $muted = collect($bot)->where('method', 'restrictChatMember')->pluck('params');
+        $this->assertSame([7001, 1301], $muted->pluck('user_id')->all());
+        $this->assertSame([-1000000000777], $muted->pluck('chat_id')->unique()->values()->all());
+        $this->assertFalse($muted->first()['permissions']['can_send_messages']);
+        $this->assertNotContains(true, $muted->first()['permissions']);
+
+        /* Marked a bot: never tried anywhere again. Written in the log, reported to the owner. */
+        $this->assertTrue($spam->fresh()->is_bot);
+        $this->assertSame(2, TelegramGroupInviteLog::query()->where('event', 'bot_muted')->count());
+        $this->assertTrue(collect($bot)->where('method', 'sendMessage')->contains(fn (array $c) => str_contains($c['params']['text'], 'Spam (@spam_bot, ID 1301)')));
+    }
+
+    public function test_a_dead_link_of_a_group_our_accounts_are_in_does_not_switch_the_group_off(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => '+DeadHash', 'telegram_chat_id' => -1000000000777, 'is_active' => true]);
+        $this->hold(1, $this->person(1299, 'Ali'));
+
+        $messages = new class
+        {
+            public function importChatInvite(mixed ...$args): never
+            {
+                throw RPCErrorException::make('INVITE_HASH_EXPIRED', 400, '');
+            }
+
+            public function checkChatInvite(mixed ...$args): never
+            {
+                throw RPCErrorException::make('INVITE_HASH_EXPIRED', 400, '');
+            }
+        };
+
+        $calls = $this->fakeTelegram(invite: fn (array $users) => $this->added($users), messages: $messages);
+
+        $this->service->run();
+
+        /* This account could not get in; the group is still the one people are added into. */
+        $this->assertCount(0, $calls);
+        $this->assertTrue($group->fresh()->is_active);
+        $this->assertSame('INVITE_HASH_EXPIRED', $group->fresh()->last_error);
+        $this->assertSame($group->id, TelegramInviteGroup::current()?->id);
+        $this->assertTrue(TelegramGroupInviteLog::query()->where('context->reason', 'denied')->where('context->rpc', 'INVITE_HASH_EXPIRED')->exists());
+        $this->assertFalse(TelegramGroupInviteLog::query()->where('context->reason', 'group_off')->exists());
+    }
+
+    public function test_a_dead_link_of_a_group_nobody_has_been_in_switches_it_off(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => '+DeadHash', 'is_active' => true]);
+        $this->hold(1, $this->person(1300, 'Ali'));
+
+        $messages = new class
+        {
+            public function importChatInvite(mixed ...$args): never
+            {
+                throw RPCErrorException::make('INVITE_HASH_EXPIRED', 400, '');
+            }
+        };
+
+        $this->fakeTelegram(invite: fn (array $users) => $this->added($users), messages: $messages);
+
+        $this->service->run();
+
+        $this->assertFalse($group->fresh()->is_active);
     }
 
     public function test_an_account_asked_to_join_without_our_bot_cannot_invite_there(): void
@@ -1519,16 +1738,23 @@ final class GroupInviteTest extends TestCase
         ?array $list = null,
         ?int $members = null,
         ?callable $join = null,
+        ?object $messages = null,
+        array $bots = [],
     ): ArrayObject {
         $calls = new ArrayObject;
         $this->checks = new ArrayObject;
 
         $api = (new ReflectionClass(API::class))->newInstanceWithoutConstructor();
 
-        $api->channels = new class($invite, $calls, $this->checks, $member, $list, $members, $join)
+        if ($messages !== null) {
+            $api->messages = $messages;
+        }
+
+        $api->channels = new class($invite, $calls, $this->checks, $member, $list, $members, $join, $bots)
         {
             private int $members = 100;
 
+            /** @param list<array{id: int, admin?: bool}> $bots the group's bots */
             public function __construct(
                 private $invite,
                 private ArrayObject $calls,
@@ -1537,6 +1763,7 @@ final class GroupInviteTest extends TestCase
                 private ?array $list,
                 private ?int $full,
                 private $join,
+                private array $bots,
             ) {}
 
             /* As MadelineProto: not to be called directly. */
@@ -1586,6 +1813,17 @@ final class GroupInviteTest extends TestCase
 
             public function getParticipants(mixed ...$args): array
             {
+                if (($args['filter']['_'] ?? null) === 'channelParticipantsBots') {
+                    return [
+                        'count' => count($this->bots),
+                        'participants' => array_map(fn (array $bot) => [
+                            '_' => ! empty($bot['admin']) ? 'channelParticipantAdmin' : 'channelParticipant',
+                            'user_id' => $bot['id'],
+                        ], $this->bots),
+                        'users' => array_map(fn (array $bot) => ['_' => 'user', 'id' => $bot['id'], 'bot' => true, 'first_name' => 'Bot ' . $bot['id']], $this->bots),
+                    ];
+                }
+
                 if ($this->list === null) {
                     return ['count' => $this->members, 'participants' => []];
                 }

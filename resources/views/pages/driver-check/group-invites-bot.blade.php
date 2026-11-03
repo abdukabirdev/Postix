@@ -12,6 +12,8 @@
             groups: @js(route('api.telegram.group-invites.bot.groups')),
             connect: @js(route('api.telegram.group-invites.bot.connect')),
             disconnect: @js(route('api.telegram.group-invites.bot.disconnect')),
+            reports: @js(route('api.telegram.group-invites.bot.reports')),
+            reportTest: @js(route('api.telegram.group-invites.bot.reports.test')),
         },
         translations: @js(__('driver_check.invites')),
     })"
@@ -122,6 +124,49 @@
                             </div>
                         </div>
                     </form>
+                </x-driver-check.surface>
+
+                {{-- Reports: the bot tells about everything it does --}}
+                <x-driver-check.surface x-show="bot.connected" x-cloak class="overflow-hidden">
+                    <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+                        <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.bot.reports.title') }}</h2>
+                        <p class="mt-0.5 text-[12px] leading-snug text-gray-400">{{ __('driver_check.invites.bot.reports.hint') }}</p>
+                    </div>
+
+                    <form class="flex flex-col gap-3 px-4 pt-4 sm:flex-row sm:items-end" x-on:submit.prevent="saveReports()">
+                        <div class="sm:w-64">
+                            <x-driver-check.field :label="__('driver_check.invites.bot.reports.chat_id')">
+                                <x-driver-check.input inputmode="numeric" autocomplete="off" spellcheck="false" x-model="reportChat" placeholder="8028326577" />
+                            </x-driver-check.field>
+                        </div>
+
+                        <label class="flex h-9 cursor-pointer items-center gap-2 text-[12.5px] font-medium text-gray-700 dark:text-gray-200">
+                            <span class="relative inline-flex h-6 w-10 items-center">
+                                <input type="checkbox" class="peer sr-only" x-model="reportOn" :disabled="busy">
+                                <span class="absolute inset-0 rounded-full bg-gray-300 transition peer-checked:bg-brand-500 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 dark:bg-gray-700"></span>
+                                <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
+                            </span>
+                            <span>{{ __('driver_check.invites.bot.reports.enabled') }}</span>
+                        </label>
+
+                        <div class="flex gap-2">
+                            <x-driver-check.button type="submit" variant="primary" ::disabled="busy">
+                                {{ __('driver_check.invites.bot.reports.save') }}
+                            </x-driver-check.button>
+                            <x-driver-check.button x-on:click="testReport()" ::disabled="busy || !reports.enabled">
+                                {{ __('driver_check.invites.bot.reports.test') }}
+                            </x-driver-check.button>
+                        </div>
+                    </form>
+                    <p class="px-4 pb-4 pt-1.5 text-[11.5px] text-gray-400">{{ __('driver_check.invites.bot.reports.chat_hint') }}</p>
+
+                    <p
+                        class="flex items-start gap-1.5 border-t border-gray-100 px-4 py-2.5 text-[12.5px] dark:border-gray-800"
+                        :class="reportState().bad ? 'bg-error-50/60 text-error-700 dark:bg-error-500/10 dark:text-error-400' : 'text-gray-500'"
+                    >
+                        <span class="dc-dot mt-1.5 shrink-0" :class="reportState().tone"></span>
+                        <span x-text="reportState().text"></span>
+                    </p>
                 </x-driver-check.surface>
 
                 {{-- Today in numbers --}}
