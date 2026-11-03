@@ -114,7 +114,11 @@ export function registerShell(Alpine) {
                 const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || '')
                     || event.target?.isContentEditable;
 
-                if ((mod && event.key.toLowerCase() === 'k') || (!typing && event.key === '/')) {
+                /* By the physical key, not the letter: on a Russian layout K types «л». */
+                const keyK = event.code === 'KeyK' || event.key?.toLowerCase() === 'k';
+                const slash = event.code === 'Slash' || event.key === '/';
+
+                if ((mod && keyK) || (!typing && !mod && slash)) {
                     event.preventDefault();
                     this.show();
                 }
