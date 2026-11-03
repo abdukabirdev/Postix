@@ -32,8 +32,6 @@
             </x-slot:actions>
         </x-driver-check.page-header>
 
-        @include('pages.driver-check.partials.invites-nav')
-
         {{-- What the run does this moment --}}
         <x-driver-check.surface x-show="running" x-cloak class="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:gap-4">
             <span class="dc-dot shrink-0 animate-pulse text-success-500"></span>

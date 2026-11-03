@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('telegram.system.title'))
+@section('title', $part === 'alerts' ? __('driver_check.tree.pages.alerts') : __('telegram.system.title'))
 
 @section('content')
 
@@ -14,9 +14,8 @@
     <x-driver-check.shell>
 
         <x-driver-check.page-header
-            icon="bot"
-            :title="__('telegram.system.title')"
-            :description="__('telegram.system.description')"
+            :title="$part === 'alerts' ? __('driver_check.tree.pages.alerts') : __('telegram.system.title')"
+            :description="$part === 'alerts' ? __('telegram.system.alerts.description') : __('telegram.system.description')"
         >
             <x-slot:actions>
                 <x-driver-check.button x-on:click="load()" ::disabled="loading">
@@ -28,6 +27,7 @@
 
         <x-driver-check.error-alert :title="__('telegram.system.errors.title')" />
 
+        @if ($part === 'map')
         {{-- The count --}}
         <div
             class="flex items-start gap-2.5 rounded-2xl border border-gray-200 bg-gray-25 px-3.5 py-2.5 text-[13px] leading-relaxed text-gray-600 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
@@ -110,45 +110,18 @@
             </div>
         </x-driver-check.surface>
 
-        {{-- Processes --}}
-        <x-driver-check.surface class="p-4">
-            <div class="flex flex-col gap-3">
-                <div>
-                    <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ __('telegram.system.processes.title') }}</p>
-                    <p class="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">{{ __('telegram.system.processes.description') }}</p>
-                </div>
+        {{-- Whether each account's process is alive: Monitoring > Processes --}}
+        <p class="text-[12.5px] text-gray-600 dark:text-gray-300">
+            {{ __('driver_check.pages.system_processes') }}
+            <a href="{{ route('driver-check.watchdog') }}" class="font-medium text-brand-600 hover:underline dark:text-brand-400">{{ __('driver_check.tree.pages.processes') }} →</a>
+        </p>
+        @endif
 
-                <div class="flex flex-col divide-y divide-gray-100 dark:divide-gray-800">
-                    <template x-for="row in listeners" :key="row.key">
-                        <div class="flex items-center justify-between gap-3 py-2">
-                            <div class="min-w-0">
-                                <p class="dc-break text-[13px] font-medium text-gray-900 dark:text-white" x-text="row.name"></p>
-                                <p class="font-mono text-[11.5px] text-gray-500 dark:text-gray-400" x-text="row.key + (row.account ? ' · ' + row.account : '')"></p>
-                            </div>
-                            <span class="inline-flex shrink-0 items-center gap-1.5 text-[12.5px] text-gray-700 dark:text-gray-200">
-                                <span class="h-1.5 w-1.5 rounded-full" :class="row.is_enabled ? dotClass(row.running) : 'bg-gray-400'"></span>
-                                <span x-text="listenerState(row)"></span>
-                            </span>
-                        </div>
-                    </template>
-
-                    <p x-show="listeners.length === 0" class="py-2 text-[13px] text-gray-500" x-text="translations.processes.none"></p>
-                </div>
-
-                <div class="rounded-xl bg-gray-25 px-3 py-2 text-[12px] text-gray-600 dark:bg-white/[0.03] dark:text-gray-300">
-                    <p>{{ __('telegram.system.processes.run_all') }}</p>
-                    <code class="mt-1 block font-mono text-[11.5px]">php artisan telegram:listeners-watchdog --with-driver-check</code>
-                    <p class="mt-1.5 text-[11.5px] text-gray-500 dark:text-gray-400">{{ __('telegram.system.processes.run_note') }}</p>
-                </div>
-            </div>
-        </x-driver-check.surface>
-
+        @if ($part === 'alerts')
         {{-- Problems told to the developer --}}
         <x-driver-check.surface class="p-4">
             <div class="flex flex-col gap-3">
-                <div>
-                    <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ __('telegram.system.alerts.title') }}</p>
-                    <p class="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">{{ __('telegram.system.alerts.description') }}</p>
+                <div x-show="!alerts.configured" x-cloak>
                     <p
                         x-show="!alerts.configured"
                         x-cloak
@@ -192,6 +165,7 @@
                 </div>
             </div>
         </x-driver-check.surface>
+        @endif
 
     </x-driver-check.shell>
 </div>

@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('driver_check.menu.group_invites_spam'))
+@section('title', __('driver_check.tree.pages.spam_' . $part))
 
 @section('content')
 
@@ -19,8 +19,8 @@
     <x-driver-check.shell>
 
         <x-driver-check.page-header
-            :title="__('driver_check.menu.group_invites_spam')"
-            :description="__('driver_check.invites.spam.description')"
+            :title="__('driver_check.tree.pages.spam_' . $part)"
+            :description="$part === 'list' ? __('driver_check.invites.spam.description') : __('driver_check.pages.spam_messages')"
         >
             <x-slot:actions>
                 <x-driver-check.button
@@ -35,8 +35,6 @@
             </x-slot:actions>
         </x-driver-check.page-header>
 
-        @include('pages.driver-check.partials.invites-nav')
-
         <x-driver-check.error-alert :title="__('driver_check.invites.load_failed')" retry="load()" />
 
         <div x-show="!loaded && loading" class="dc-skeleton h-40 rounded-2xl bg-gray-100 dark:bg-white/[0.06]"></div>
@@ -44,6 +42,7 @@
         <template x-if="loaded">
             <div class="flex flex-col gap-5">
 
+                @if ($part === 'list')
                 {{-- Who deletes: the bot, watching or not --}}
                 <div
                     class="flex flex-col gap-2 rounded-2xl border px-4 py-3 text-[13px] sm:flex-row sm:items-center sm:justify-between"
@@ -63,6 +62,8 @@
                     </x-driver-check.button>
                 </div>
 
+                @endif
+
                 {{-- In numbers --}}
                 <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
                     <x-driver-check.stat-card :label="__('driver_check.invites.spam.stats.list')" icon="users">
@@ -79,6 +80,7 @@
                     </x-driver-check.stat-card>
                 </div>
 
+                @if ($part === 'list')
                 <div class="grid items-start gap-5 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
 
                     <div class="flex flex-col gap-5">
@@ -210,6 +212,9 @@
                     </x-driver-check.surface>
                 </div>
 
+                @endif
+
+                @if ($part === 'messages')
                 {{-- What the bot took --}}
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="flex flex-col gap-3 border-b border-gray-100 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
@@ -243,6 +248,7 @@
                         </template>
                     </ul>
                 </x-driver-check.surface>
+                @endif
             </div>
         </template>
     </x-driver-check.shell>

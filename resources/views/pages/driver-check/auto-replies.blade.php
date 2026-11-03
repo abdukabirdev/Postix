@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('telegram.auto_replies.title'))
+@section('title', __('driver_check.tree.pages.auto_' . $part))
 
 @php
     $placeholders = collect(\App\Application\Telegram\Services\AutoReplyRules::PLACEHOLDERS)
@@ -44,10 +44,11 @@
              Header
         ============================================================= --}}
         <x-driver-check.page-header
-            :title="__('telegram.auto_replies.title')"
-            :description="__('telegram.auto_replies.description')"
+            :title="__('driver_check.tree.pages.auto_' . $part)"
+            :description="$part === 'main' ? __('telegram.auto_replies.description') : __('driver_check.pages.auto_' . $part)"
         >
             <x-slot:actions>
+                @if ($part === 'main')
                 {{-- Whether the file is the default or edited by hand --}}
                 <span
                     x-show="!loading"
@@ -62,6 +63,7 @@
                 <x-driver-check.button icon="download" :href="route('api.telegram.auto-replies.download')" class="col-span-2 whitespace-nowrap sm:col-span-1">
                     {{ __('telegram.auto_replies.file.download') }}
                 </x-driver-check.button>
+                @endif
             </x-slot:actions>
         </x-driver-check.page-header>
 
@@ -84,6 +86,7 @@
             <span x-text="translations.file.broken.replace(':error', fileError)"></span>
         </div>
 
+        @if ($part === 'main')
         {{-- Try a message, against the form as it is now --}}
         <x-driver-check.surface class="p-4">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -168,12 +171,25 @@
             </div>
         </x-driver-check.surface>
 
-        <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+        @endif
 
+        <div @class([
+            'grid items-start gap-5',
+            'xl:grid-cols-[minmax(0,1fr)_340px]' => $part !== 'main',
+        ])>
+
+            @if ($part !== 'main')
             {{-- ========================================================
                  The kinds: what they write, what we answer
             ========================================================= --}}
             <section class="flex min-w-0 flex-col gap-5">
+                @if ($part !== 'keywords')
+                <div class="flex justify-end">
+                    @include('pages.driver-check.partials.auto-reply-language')
+                </div>
+                @endif
+
+                @if ($part === 'keywords')
                 <div class="flex flex-col gap-3">
                     <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                         <div class="min-w-0">
@@ -185,28 +201,7 @@
                             </p>
                         </div>
 
-                        {{-- The language being edited --}}
-                        <div
-                            class="dc-chips inline-flex max-w-full shrink-0 gap-0.5 self-start overflow-x-auto rounded-lg bg-gray-100 p-0.5 sm:self-auto dark:bg-white/[0.06]"
-                            role="group"
-                            aria-label="{{ __('telegram.auto_replies.sections.language') }}"
-                        >
-                            <template x-for="lang in languages" :key="'lang-' + lang">
-                                <button
-                                    type="button"
-                                    x-on:click="language = lang"
-                                    :aria-pressed="language === lang"
-                                    :class="language === lang
-                                        ? 'bg-white text-gray-950 shadow-sm dark:bg-gray-700 dark:text-white'
-                                        : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white'"
-                                    class="dc-tap inline-flex h-9 items-center gap-2 whitespace-nowrap rounded-md px-3 text-[13px] font-medium outline-none transition
-                                           focus-visible:ring-2 focus-visible:ring-brand-500/50 sm:h-8"
-                                >
-                                    <span class="font-mono text-[10px] font-semibold opacity-60" x-text="lang.toUpperCase()"></span>
-                                    <span x-text="languageNames[lang]"></span>
-                                </button>
-                            </template>
-                        </div>
+                        @include('pages.driver-check.partials.auto-reply-language')
                     </div>
 
                     {{-- Loading --}}
@@ -395,6 +390,9 @@
                     </div>
                 </div>
 
+                @endif
+
+                @if ($part === 'greetings')
                 {{-- ====================================================
                      Greetings: "Доброе утро" answered before the kind
                 ===================================================== --}}
@@ -581,6 +579,9 @@
                     </div>
                 </section>
 
+                @endif
+
+                @if ($part === 'reminders')
                 {{-- ====================================================
                      When they stay silent: one nudge per penalty
                 ===================================================== --}}
@@ -643,6 +644,9 @@
                     </div>
                 </section>
 
+                @endif
+
+                @if ($part === 'greetings')
                 {{-- ====================================================
                      Before the day's first penalty: we greet first
                 ===================================================== --}}
@@ -686,6 +690,9 @@
                     </div>
                 </section>
 
+                @endif
+
+                @if ($part === 'reminders')
                 {{-- ====================================================
                      The same level again soon: "это тоже"
                 ===================================================== --}}
@@ -754,14 +761,21 @@
                         </div>
                     </div>
                 </section>
+                @endif
             </section>
+            @endif
 
             {{-- ========================================================
                  Aside: the switch, when to answer, placeholders,
                  the file
             ========================================================= --}}
-            <aside class="flex flex-col gap-5 xl:sticky xl:top-28">
+            <aside @class([
+                'flex flex-col gap-5',
+                'lg:grid lg:grid-cols-2 lg:items-start' => $part === 'main',
+                'xl:sticky xl:top-20' => $part !== 'main',
+            ])>
 
+                @if ($part === 'main')
                 {{-- When to answer --}}
                 <x-driver-check.surface class="divide-y divide-gray-100 dark:divide-gray-800">
                     <h3 class="dc-eyebrow px-4 py-3">
@@ -837,6 +851,9 @@
                     </div>
                 </x-driver-check.surface>
 
+                @endif
+
+                @if ($part !== 'main')
                 {{-- Placeholders --}}
                 <x-driver-check.surface class="p-4">
                     <h3 class="dc-eyebrow">
@@ -867,6 +884,9 @@
                     </ul>
                 </x-driver-check.surface>
 
+                @endif
+
+                @if ($part === 'main')
                 {{-- The file --}}
                 <x-driver-check.surface class="p-4">
                     <h3 class="dc-eyebrow">
@@ -893,6 +913,7 @@
                         </x-driver-check.button>
                     </div>
                 </x-driver-check.surface>
+                @endif
             </aside>
         </div>
     </x-driver-check.shell>
@@ -909,7 +930,7 @@
         x-show="dirty() || saving || formError"
         x-cloak
         x-transition.opacity
-        class="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white/95 px-4 py-3 backdrop-blur
+        class="fixed inset-x-0 bottom-0 z-40 border-t lg:left-[264px] border-gray-200 bg-white/95 px-4 py-3 backdrop-blur
                dark:border-gray-800 dark:bg-gray-950/95"
     >
         <div class="mx-auto flex max-w-screen-2xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

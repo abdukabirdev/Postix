@@ -46,8 +46,6 @@
             </x-slot:actions>
         </x-driver-check.page-header>
 
-        @include('pages.driver-check.partials.invites-nav')
-
         <x-driver-check.error-alert :title="__('driver_check.invites.load_failed')" retry="load()" />
 
         <div x-show="!data && loading" class="grid gap-3 sm:grid-cols-2">

@@ -34,10 +34,10 @@ export function groupJoinGroupsPage(config) {
 
         endpoints: config.endpoints,
 
-        /** joined | queue; "other" is the queue page's switch. */
+        /** joined | queue; "other" (the rejected ones) is the queue with `other` set. */
         baseView: config.view,
 
-        showOther: false,
+        showOther: !!config.other,
 
         groups: [],
 

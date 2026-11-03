@@ -17,8 +17,8 @@
             :description="__('driver_check.sync.settings.text')"
         >
             <x-slot:actions>
-                <x-driver-check.button href="{{ route('driver-check.contact-report') }}" variant="primary" icon="chart">
-                    {{ __('driver_check.sync.history') }}
+                <x-driver-check.button href="{{ route('driver-check.contact-report') }}" variant="primary" icon="play">
+                    {{ __('driver_check.tree.pages.contact_overview') }}
                 </x-driver-check.button>
             </x-slot:actions>
         </x-driver-check.page-header>

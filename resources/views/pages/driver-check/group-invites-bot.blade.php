@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('driver_check.menu.group_invites_bot'))
+@section('title', __('driver_check.tree.pages.bot_' . $part))
 
 @section('content')
 
@@ -21,8 +21,8 @@
     <x-driver-check.shell>
 
         <x-driver-check.page-header
-            :title="__('driver_check.menu.group_invites_bot')"
-            :description="__('driver_check.invites.bot.description')"
+            :title="__('driver_check.tree.pages.bot_' . $part)"
+            :description="$part === 'connection' ? __('driver_check.invites.bot.description') : __('driver_check.pages.bot_' . $part)"
         >
             <x-slot:actions>
                 <x-driver-check.button
@@ -37,8 +37,6 @@
             </x-slot:actions>
         </x-driver-check.page-header>
 
-        @include('pages.driver-check.partials.invites-nav')
-
         <x-driver-check.error-alert :title="__('driver_check.invites.load_failed')" retry="load()" />
 
         <div x-show="!loaded && loading" class="dc-skeleton h-40 rounded-2xl bg-gray-100 dark:bg-white/[0.06]"></div>
@@ -46,6 +44,15 @@
         <template x-if="loaded">
             <div class="flex flex-col gap-5">
 
+                @if ($part !== 'connection')
+                {{-- The pages below need the bot itself first --}}
+                <p x-show="!bot.connected" x-cloak class="rounded-xl border border-warning-200 bg-warning-25 px-4 py-3 text-[13px] text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/[0.07] dark:text-warning-300">
+                    {{ __('driver_check.pages.bot_needed') }}
+                    <a href="{{ route('driver-check.group-invites.bot') }}" class="font-semibold underline-offset-2 hover:underline">{{ __('driver_check.tree.pages.bot_connection') }} →</a>
+                </p>
+                @endif
+
+                @if ($part === 'connection')
                 {{-- The bot: who it is, whether it is asking Telegram, the switch --}}
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -126,6 +133,9 @@
                     </form>
                 </x-driver-check.surface>
 
+                @endif
+
+                @if ($part === 'reports')
                 {{-- Reports: the bot tells about everything it does --}}
                 <x-driver-check.surface x-show="bot.connected" x-cloak class="overflow-hidden">
                     <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -169,6 +179,9 @@
                     </p>
                 </x-driver-check.surface>
 
+                @endif
+
+                @if ($part === 'requests')
                 {{-- Today in numbers --}}
                 <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
                     <x-driver-check.stat-card :label="__('driver_check.invites.bot.today_people')" icon="users">
@@ -186,6 +199,9 @@
                 </div>
                 <p class="-mt-3 text-[12px] text-gray-500" x-text="b.total_line.replace(':people', number(data.total.people)).replace(':new', number(data.total.new))"></p>
 
+                @endif
+
+                @if ($part === 'connection')
                 {{-- Our groups: where the bot may let people in --}}
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -230,6 +246,9 @@
                     </div>
                 </x-driver-check.surface>
 
+                @endif
+
+                @if ($part === 'requests')
                 {{-- The requests --}}
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="flex flex-col gap-3 border-b border-gray-100 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
@@ -264,6 +283,7 @@
                         </template>
                     </ul>
                 </x-driver-check.surface>
+                @endif
             </div>
         </template>
     </x-driver-check.shell>

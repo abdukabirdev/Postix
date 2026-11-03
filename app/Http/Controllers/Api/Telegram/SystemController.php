@@ -73,7 +73,7 @@ final class SystemController extends Controller
             ['key' => 'scheduled_messages', 'movable' => true, 'accounts' => $this->scheduledAccounts($account), 'link' => '/driver-check/scheduled-messages'],
 
             /* Their own accounts, not the listeners': a pool the panel manages. */
-            ['key' => 'contact_sync', 'movable' => false, 'accounts' => [], 'link' => '/driver-check/contacts'],
+            ['key' => 'contact_sync', 'movable' => false, 'accounts' => [], 'link' => '/driver-check/contact-report'],
             ['key' => 'phone_resolver', 'movable' => false, 'accounts' => [], 'link' => '/driver-check/sessions'],
             ['key' => 'group_join', 'movable' => false, 'accounts' => [], 'link' => '/driver-check/group-join'],
         ];

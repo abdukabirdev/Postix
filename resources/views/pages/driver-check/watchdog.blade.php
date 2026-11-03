@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('telegram.watchdog.title'))
+@section('title', $part === 'driver-check' ? __('driver_check.tree.pages.driver_check_process') : __('telegram.watchdog.title'))
 
 @section('content')
 
@@ -20,9 +20,10 @@
              Header: the buttons act on every account, Driver Check included
         ============================================================= --}}
         <x-driver-check.page-header
-            :title="__('telegram.watchdog.title')"
-            :description="__('telegram.watchdog.description')"
+            :title="$part === 'driver-check' ? __('driver_check.tree.pages.driver_check_process') : __('telegram.watchdog.title')"
+            :description="$part === 'driver-check' ? __('driver_check.pages.driver_check_process') : __('telegram.watchdog.description')"
         >
+            @if ($part === 'all')
             <x-slot:actions>
                 {{-- Refresh and the destructive stop first, the one primary (start) last --}}
                 <x-driver-check.button
@@ -51,8 +52,10 @@
                     {{ __('telegram.listeners.processes.start') }}
                 </x-driver-check.button>
             </x-slot:actions>
+            @endif
         </x-driver-check.page-header>
 
+        @if ($part === 'all')
         {{-- ============================================================
              Overall state: the one loud thing on the page
         ============================================================= --}}
@@ -127,13 +130,22 @@
             <div class="flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 px-4 py-3 dark:border-gray-800">
                 <p class="text-[12px] leading-relaxed text-gray-500 dark:text-gray-400">{{ __('telegram.listeners.processes.hint') }}</p>
 
-                <a
-                    href="{{ url('/driver-check/listeners') }}"
-                    class="text-[13px] font-medium text-brand-600 hover:underline dark:text-brand-400"
-                >{{ __('telegram.listeners.processes.manage') }}</a>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+                    <a
+                        href="{{ route('driver-check.watchdog.driver-check') }}"
+                        class="text-[13px] font-medium text-brand-600 hover:underline dark:text-brand-400"
+                    >{{ __('driver_check.tree.pages.driver_check_process') }} →</a>
+                    <a
+                        href="{{ url('/driver-check/listeners') }}"
+                        class="text-[13px] font-medium text-brand-600 hover:underline dark:text-brand-400"
+                    >{{ __('telegram.listeners.processes.manage') }}</a>
+                </div>
             </div>
         </x-driver-check.surface>
 
+        @endif
+
+        @if ($part === 'driver-check')
         {{-- ============================================================
              Driver Check's own details: the part that was the whole page
         ============================================================= --}}
@@ -411,6 +423,7 @@
             </div>
         </template>
         </div>
+        @endif
     </x-driver-check.shell>
 
     {{-- ================================================================

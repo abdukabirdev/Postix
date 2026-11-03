@@ -56,40 +56,6 @@
         </x-driver-check.page-header>
 
         {{-- ============================================================
-             Operation | Sales
-        ============================================================= --}}
-        <nav
-            class="dc-chips inline-flex w-full gap-0.5 self-start rounded-lg bg-gray-100 p-0.5 sm:w-auto dark:bg-white/[0.06]"
-            aria-label="{{ __('telegram.operators.form.role') }}"
-        >
-            @foreach (['all', ...\App\Models\Telegram\OperationUser::ROLES] as $tab)
-                <a
-                    href="{{ match ($tab) {
-                        'all' => route('driver-check.people'),
-                        \App\Models\Telegram\OperationUser::ROLE_SALES => route('driver-check.sales'),
-                        default => route('driver-check.operators'),
-                    } }}"
-                    @if ($tab === $role) aria-current="page" @endif
-                    class="dc-tap inline-flex h-10 flex-1 items-center justify-center gap-2 rounded-md px-4 text-[13px] font-medium
-                           transition sm:h-8 sm:flex-none
-                           {{ $tab === $role
-                               ? 'bg-white text-gray-950 shadow-sm dark:bg-gray-700 dark:text-white'
-                               : 'text-gray-500 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white' }}"
-                >
-                    {{ __("telegram.operators.tabs.{$tab}") }}
-
-                    <span
-                        class="inline-flex h-5 min-w-5 items-center justify-center rounded px-1.5 text-[11px] font-semibold tabular-nums
-                               {{ $tab === $role
-                                   ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/15 dark:text-brand-300'
-                                   : 'bg-gray-200/70 text-gray-600 dark:bg-white/[0.08] dark:text-gray-300' }}"
-                        x-text="number(stats.roles[@js($tab)])"
-                    >0</span>
-                </a>
-            @endforeach
-        </nav>
-
-        {{-- ============================================================
              Counters
         ============================================================= --}}
         <section class="grid grid-cols-2 gap-3 lg:grid-cols-4">

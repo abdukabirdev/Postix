@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('driver_check.menu.group_join'))
+@section('title', __('driver_check.tree.pages.join_' . $part))
 
 @section('content')
 
@@ -19,8 +19,8 @@
     <x-driver-check.shell>
 
         <x-driver-check.page-header
-            :title="__('driver_check.join.status_title')"
-            :description="__('driver_check.join.description')"
+            :title="$part === 'status' ? __('driver_check.join.status_title') : __('driver_check.tree.pages.join_' . $part)"
+            :description="$part === 'status' ? __('driver_check.join.description') : __('driver_check.pages.join_' . $part)"
         >
             <x-slot:actions>
                 <x-driver-check.button
@@ -50,6 +50,7 @@
         <template x-if="status">
             <div class="flex flex-col gap-5">
 
+                @if ($part === 'status')
                 {{-- The watchdog --}}
                 <x-driver-check.surface class="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                     <div class="flex items-start gap-3">
@@ -96,8 +97,11 @@
                     </a>
                 </section>
 
-                <div class="grid gap-5 xl:grid-cols-2">
+                @endif
 
+                <div class="grid gap-5">
+
+                    @if ($part === 'status')
                     {{-- Workers --}}
                     <x-driver-check.surface class="flex flex-col overflow-hidden">
                         <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -138,6 +142,9 @@
                         </ul>
                     </x-driver-check.surface>
 
+                    @endif
+
+                    @if ($part === 'keywords')
                     {{-- Keywords --}}
                     <x-driver-check.surface class="flex flex-col overflow-hidden">
                         <div class="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -208,8 +215,10 @@
                             </div>
                         </form>
                     </x-driver-check.surface>
+                    @endif
                 </div>
 
+                @if ($part === 'log')
                 {{-- Log --}}
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -234,6 +243,7 @@
                         </template>
                     </ul>
                 </x-driver-check.surface>
+                @endif
             </div>
         </template>
     </x-driver-check.shell>

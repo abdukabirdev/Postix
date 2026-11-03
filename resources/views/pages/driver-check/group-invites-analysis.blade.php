@@ -38,8 +38,6 @@
             </x-slot:actions>
         </x-driver-check.page-header>
 
-        @include('pages.driver-check.partials.invites-nav')
-
         <x-driver-check.error-alert :title="__('driver_check.invites.load_failed')" retry="load()" />
 
         <x-driver-check.chips items="periods()" selected="days" action="setPeriod" />

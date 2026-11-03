@@ -79,250 +79,38 @@ class MenuHelper
     /**
      * Menu for driverCheck role.
      *
-     * This role works independently from departments. What the checks
-     * produced comes first; the pages that configure them (who gets the
-     * reports, which chats are watched, which accounts do the work) are
-     * kept apart underneath, since they are opened far less often, and
-     * the ones that show whether the machinery runs at all come last.
+     * This role works independently from departments. The map itself lives
+     * in DriverCheckNav (zone -> section -> subsection -> page); here every
+     * section becomes one flat group of its pages, for the postix layouts.
      */
     public static function getDriverCheckGroups(): array
     {
-        /*
-         * Six sections, each one question:
-         *   check      - what did the checks find?
-         *   people     - who gets the reports?
-         *   bot        - what does the bot write, and when?
-         *   telegram   - which accounts and chats does it work through?
-         *   contacts   - the group members saved into the accounts' contacts
-         *   monitoring - is the machinery alive?
-         */
-        return [
-            [
-                'title' => __('driver_check.sections.check'),
-                'items' => [
-                    [
-                        'icon' => 'statistics',
-                        'name' => __('telegram.menu.items.operation_users'),
-                        'path' => '/driver-check/operation-users',
-                    ],
-                    [
-                        'icon' => 'user-profile',
-                        'name' => __('telegram.menu.items.drivers'),
-                        'path' => '/driver-check/drivers',
-                    ],
-                    [
-                        'icon' => 'phone',
-                        'name' => __('telegram.menu.items.resolved_phones'),
-                        'path' => '/driver-check/resolved-phones',
-                    ],
-                    [
-                        'icon' => 'support-ticket',
-                        'name' => __('telegram.menu.items.penalties'),
-                        'path' => '/driver-check/penalties',
-                    ],
-                ],
-            ],
-            [
-                'title' => __('driver_check.sections.people'),
-                'items' => [
-                    [
-                        'icon' => 'user-profile',
-                        'name' => __('telegram.menu.items.people'),
-                        'path' => '/driver-check/people',
-                    ],
-                    [
-                        'icon' => 'operators',
-                        'name' => __('telegram.menu.items.operators'),
-                        'path' => '/driver-check/operators',
-                    ],
-                    [
-                        'icon' => 'ecommerce',
-                        'name' => __('telegram.menu.items.sales'),
-                        'path' => '/driver-check/sales',
-                    ],
-                ],
-            ],
-            [
-                'title' => __('driver_check.sections.bot'),
-                'items' => [
-                    [
-                        'icon' => 'support-ticket',
-                        'name' => __('telegram.menu.items.penalty_settings'),
-                        'path' => '/driver-check/penalties/settings',
-                    ],
-                    [
-                        'icon' => 'ai-assistant',
-                        'name' => __('telegram.menu.items.auto_replies'),
-                        'path' => '/driver-check/auto-replies',
-                    ],
-                    [
-                        'icon' => 'user-profile',
-                        'name' => __('telegram.menu.items.personal_answers'),
-                        'path' => '/driver-check/personal-answers',
-                    ],
-                    [
-                        'icon' => 'calendar',
-                        'name' => __('telegram.menu.items.scheduled_messages'),
-                        'path' => '/driver-check/scheduled-messages',
-                    ],
-                ],
-            ],
-            [
-                'title' => __('driver_check.sections.telegram'),
-                'items' => [
-                    [
-                        'icon' => 'authentication',
-                        'name' => __('telegram.menu.items.sessions'),
-                        'path' => '/driver-check/sessions',
-                    ],
-                    [
-                        'icon' => 'chat',
-                        'name' => __('telegram.menu.items.chats'),
-                        'path' => '/driver-check/chats',
-                    ],
-                    [
-                        'icon' => 'send',
-                        'name' => __('telegram.menu.items.file_routes'),
-                        'path' => '/driver-check/file-routes',
-                    ],
-                    [
-                        'icon' => 'authentication',
-                        'name' => __('telegram.menu.items.listeners'),
-                        'path' => '/driver-check/listeners',
-                    ],
-                    [
-                        'icon' => 'bot',
-                        'name' => __('telegram.menu.items.system'),
-                        'path' => '/driver-check/system',
-                    ],
-                ],
-            ],
-            [
-                'title' => __('driver_check.sections.contacts'),
-                'items' => [
-                    [
-                        'icon' => 'user-profile',
-                        'name' => __('driver_check.menu.contacts'),
-                        'path' => '/driver-check/contacts',
-                    ],
-                    [
-                        'icon' => 'authentication',
-                        'name' => __('driver_check.menu.groups'),
-                        'path' => '/driver-check/contact-sync',
-                    ],
-                    [
-                        'icon' => 'phone',
-                        'name' => __('driver_check.menu.accounts'),
-                        'path' => '/driver-check/contact-accounts',
-                    ],
-                    [
+        $groups = [];
+
+        foreach (DriverCheckNav::tree() as $section) {
+            $items = [];
+
+            foreach ($section['groups'] as $group) {
+                foreach ($group['items'] as $item) {
+                    if ($item['also']) {
+                        continue;
+                    }
+
+                    $items[] = [
                         'icon' => 'task',
-                        'name' => __('driver_check.menu.contact_settings'),
-                        'path' => '/driver-check/contact-settings',
-                    ],
-                ],
-            ],
-            [
-                'title' => __('driver_check.sections.invites'),
-                'items' => [
-                    [
-                        'icon' => 'dashboard',
-                        'name' => __('driver_check.menu.group_invites'),
-                        'path' => '/driver-check/group-invites',
-                    ],
-                    [
-                        'icon' => 'chat',
-                        'name' => __('driver_check.menu.group_invites_groups'),
-                        'path' => '/driver-check/group-invites/groups',
-                    ],
-                    [
-                        'icon' => 'user-profile',
-                        'name' => __('driver_check.menu.group_invites_people'),
-                        'path' => '/driver-check/group-invites/people',
-                    ],
-                    [
-                        'icon' => 'phone',
-                        'name' => __('driver_check.menu.group_invites_accounts'),
-                        'path' => '/driver-check/group-invites/accounts',
-                    ],
-                    [
-                        'icon' => 'task',
-                        'name' => __('driver_check.menu.group_invites_log'),
-                        'path' => '/driver-check/group-invites/log',
-                    ],
-                    [
-                        'icon' => 'statistics',
-                        'name' => __('driver_check.menu.group_invites_analysis'),
-                        'path' => '/driver-check/group-invites/analysis',
-                    ],
-                    [
-                        'icon' => 'task',
-                        'name' => __('driver_check.menu.group_invites_settings'),
-                        'path' => '/driver-check/group-invites/settings',
-                    ],
-                    [
-                        'icon' => 'bot',
-                        'name' => __('driver_check.menu.group_invites_bot'),
-                        'path' => '/driver-check/group-invites/bot',
-                    ],
-                    [
-                        'icon' => 'task',
-                        'name' => __('driver_check.menu.group_invites_spam'),
-                        'path' => '/driver-check/group-invites/spam',
-                    ],
-                ],
-            ],
-            [
-                'title' => __('driver_check.sections.monitoring'),
-                'items' => [
-                    [
-                        'icon' => 'dashboard',
-                        'name' => __('telegram.menu.items.watchdog'),
-                        'path' => '/driver-check/watchdog',
-                    ],
-                    [
-                        'icon' => 'task',
-                        'name' => __('telegram.menu.items.queue'),
-                        'path' => '/driver-check/queue',
-                    ],
-                    [
-                        'icon' => 'statistics',
-                        'name' => __('driver_check.menu.contact_report'),
-                        'path' => '/driver-check/contact-report',
-                    ],
-                ],
-            ],
-            [
-                'title' => __('driver_check.sections.join'),
-                'items' => [
-                    [
-                        'icon' => 'dashboard',
-                        'name' => __('driver_check.menu.group_join'),
-                        'path' => '/driver-check/group-join',
-                    ],
-                    [
-                        'icon' => 'chat',
-                        'name' => __('driver_check.menu.group_join_joined'),
-                        'path' => '/driver-check/group-join/joined',
-                    ],
-                    [
-                        'icon' => 'calendar',
-                        'name' => __('driver_check.menu.group_join_queue'),
-                        'path' => '/driver-check/group-join/queue',
-                    ],
-                    [
-                        'icon' => 'user-profile',
-                        'name' => __('driver_check.menu.group_join_people'),
-                        'path' => '/driver-check/group-join/people',
-                    ],
-                    [
-                        'icon' => 'task',
-                        'name' => __('driver_check.menu.group_join_settings'),
-                        'path' => '/driver-check/group-join/settings',
-                    ],
-                ],
-            ],
-        ];
+                        'name' => $item['name'],
+                        'path' => $item['path'],
+                    ];
+                }
+            }
+
+            $groups[] = [
+                'title' => $section['title'],
+                'items' => $items,
+            ];
+        }
+
+        return $groups;
     }
 
     public static function getMenuGroups(

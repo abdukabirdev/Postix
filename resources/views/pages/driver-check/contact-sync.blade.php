@@ -33,8 +33,8 @@
                     <x-driver-check.icon name="refresh" class="h-4 w-4" ::class="loading && 'animate-spin'" />
                 </x-driver-check.button>
 
-                <x-driver-check.button href="{{ route('driver-check.contact-report') }}" variant="primary" icon="chart">
-                    {{ __('driver_check.sync.history') }}
+                <x-driver-check.button href="{{ route('driver-check.contact-report') }}" variant="primary" icon="play">
+                    {{ __('driver_check.tree.pages.contact_overview') }}
                 </x-driver-check.button>
             </x-slot:actions>
         </x-driver-check.page-header>

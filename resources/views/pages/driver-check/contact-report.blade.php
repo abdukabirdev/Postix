@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('driver_check.report.title'))
+@section('title', $part === 'runs' ? __('driver_check.tree.pages.contact_runs') : __('driver_check.tree.pages.contact_overview'))
 
 @section('content')
 
@@ -22,8 +22,8 @@
 
         {{-- Header: refresh, what to run, then the one primary - run it again --}}
         <x-driver-check.page-header
-            :title="__('driver_check.report.title')"
-            :description="__('driver_check.report.description')"
+            :title="$part === 'runs' ? __('driver_check.tree.pages.contact_runs') : __('driver_check.tree.pages.contact_overview')"
+            :description="$part === 'runs' ? __('driver_check.pages.contact_runs') : __('driver_check.report.description')"
         >
             <x-slot:actions>
                 <x-driver-check.button
@@ -36,6 +36,7 @@
                     <x-driver-check.icon name="refresh" class="h-4 w-4" ::class="reportLoading && 'animate-spin'" />
                 </x-driver-check.button>
 
+                @if ($part === 'overview')
                 <div x-show="groups.length > 1" x-cloak>
                     <x-driver-check.select
                         x-model="scope"
@@ -59,6 +60,7 @@
                 <x-driver-check.button variant="danger" icon="stop" x-show="schedule?.running" x-cloak x-on:click="stop()" ::disabled="stopping">
                     <span x-text="stopping ? t.stopping : t.stop"></span>
                 </x-driver-check.button>
+                @endif
             </x-slot:actions>
         </x-driver-check.page-header>
 
@@ -67,6 +69,7 @@
         <template x-if="report">
             <div class="flex flex-col gap-5">
 
+                @if ($part === 'overview')
                 {{-- The state of the daily run: the one line that says "fine" or "look here" --}}
                 <section class="flex items-start gap-3 rounded-2xl border p-4" :class="bannerClass()">
                     <span class="dc-dot mt-1.5" :class="dotClass()"></span>
@@ -122,8 +125,11 @@
                     </x-driver-check.stat-card>
                 </section>
 
-                <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
+                @endif
 
+                <div class="grid items-start gap-5">
+
+                    @if ($part === 'runs')
                     {{-- History of runs / day by day --}}
                     <x-driver-check.surface class="overflow-hidden">
                         <div class="flex items-center justify-between gap-3 border-b border-gray-100 px-4 py-2.5 dark:border-gray-800">
@@ -271,8 +277,9 @@
                             </table>
                         </div>
                     </x-driver-check.surface>
+                    @else
 
-                    <div class="flex flex-col gap-5">
+                    <div class="grid items-start gap-5 lg:grid-cols-2">
 
                         {{-- The last run, in words --}}
                         <x-driver-check.surface class="overflow-hidden">
@@ -323,6 +330,11 @@
                             </ul>
                         </x-driver-check.surface>
                     </div>
+
+                    <a href="{{ route('driver-check.contact-report.runs') }}" class="text-[13px] font-medium text-brand-600 hover:underline dark:text-brand-400">
+                        {{ __('driver_check.tree.pages.contact_runs') }} →
+                    </a>
+                    @endif
                 </div>
             </div>
         </template>

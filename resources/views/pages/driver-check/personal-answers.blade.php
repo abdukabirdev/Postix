@@ -402,7 +402,7 @@
         x-show="dirty() || saving || formError"
         x-cloak
         x-transition.opacity
-        class="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white/95 px-4 py-3 
+        class="fixed inset-x-0 bottom-0 z-40 border-t lg:left-[264px] border-gray-200 bg-white/95 px-4 py-3 
                backdrop-blur dark:border-gray-800 dark:bg-gray-900/95"
     >
         <div class="mx-auto flex max-w-screen-2xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

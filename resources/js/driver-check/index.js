@@ -39,6 +39,7 @@ import { groupInvitesSettingsPage } from './group-invites-settings';
 import { groupInvitesBotPage } from './group-invites-bot';
 import { groupInvitesSpamPage } from './group-invites-spam';
 import { statusType } from './status';
+import { controlJoinSwitch, controlQueueCard } from './control';
 
 /*
 |--------------------------------------------------------------------------
@@ -1237,6 +1238,8 @@ export function registerDriverCheck(Alpine) {
     Alpine.data('dcListeners', listenersPage);
     Alpine.data('dcSystem', systemPage);
     Alpine.data('dcListenerProcesses', listenerProcessesBlock);
+    Alpine.data('dcControlQueue', controlQueueCard);
+    Alpine.data('dcControlJoin', controlJoinSwitch);
     Alpine.data('dcSessions', sessionsPage);
     Alpine.data('dcPenalties', penaltiesPage);
     Alpine.data('dcPenaltySettings', penaltySettingsPage);

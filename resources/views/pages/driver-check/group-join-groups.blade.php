@@ -1,8 +1,19 @@
 @extends('layouts.driver-check')
 
 @php
+    /* joined | queue | other (the rejected and the gone ones, a page of their own) */
     $joined = $view === 'joined';
-    $title = $joined ? __('driver_check.menu.group_join_joined') : __('driver_check.menu.group_join_queue');
+    $other = $view === 'other';
+    $title = match ($view) {
+        'joined' => __('driver_check.menu.group_join_joined'),
+        'other' => __('driver_check.join.groups.other_title'),
+        default => __('driver_check.menu.group_join_queue'),
+    };
+    $description = match ($view) {
+        'joined' => __('driver_check.join.groups.joined_text'),
+        'other' => __('driver_check.join.groups.other_text'),
+        default => __('driver_check.join.groups.queue_text'),
+    };
 @endphp
 
 @section('title', $title)
@@ -11,7 +22,8 @@
 
 <div
     x-data="dcGroupJoinGroups({
-        view: @js($view),
+        view: @js($other ? 'queue' : $view),
+        other: @js($other),
         endpoints: {
             groups: @js(route('api.telegram.group-join.groups')),
             people_page: @js(route('driver-check.group-join.people')),
@@ -23,7 +35,7 @@
 
         <x-driver-check.page-header
             :title="$title"
-            :description="$joined ? __('driver_check.join.groups.joined_text') : __('driver_check.join.groups.queue_text')"
+            :description="$description"
         >
             <x-slot:actions>
                 <x-driver-check.button
@@ -46,15 +58,10 @@
             <div class="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
                 <div class="flex flex-wrap items-center justify-between gap-3">
                     <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
-                        <span x-text="view === 'other' ? t.groups.other_title : @js($title)"></span>
+                        {{ $title }}
                         <span x-show="meta" class="ml-1 font-normal tabular-nums text-gray-400" x-text="number(meta?.total ?? 0)"></span>
                     </h2>
 
-                    @unless ($joined)
-                        <x-driver-check.button size="sm" variant="ghost" x-on:click="toggleOther()">
-                            <span x-text="showOther ? t.groups.show_queue : t.groups.show_other"></span>
-                        </x-driver-check.button>
-                    @endunless
                 </div>
 
                 {{-- Filters --}}
@@ -108,7 +115,7 @@
             </div>
 
             <p x-show="!loading && groups.length === 0" x-cloak class="px-4 py-12 text-center text-[13px] text-gray-500 dark:text-gray-400">
-                {{ $joined ? __('driver_check.join.groups.empty_joined') : __('driver_check.join.groups.empty_queue') }}
+                {{ $joined ? __('driver_check.join.groups.empty_joined') : ($other ? __('driver_check.join.groups.empty_other') : __('driver_check.join.groups.empty_queue')) }}
             </p>
 
             <ul class="divide-y divide-gray-100 dark:divide-gray-800">

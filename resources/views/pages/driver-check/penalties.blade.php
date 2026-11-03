@@ -60,7 +60,7 @@
         >
             <x-slot:actions>
                 <a
-                    href="{{ route('driver-check.penalties.settings') }}"
+                    href="{{ route('driver-check.penalties.sending') }}"
                     class="dc-tap col-span-2 inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3
                            text-[13px] font-medium text-gray-700 transition hover:border-gray-400 sm:col-span-1 sm:h-9
                            dark:border-gray-700 dark:bg-gray-950 dark:text-gray-200 dark:hover:border-gray-600"
@@ -87,7 +87,7 @@
                     <span x-text="loading ? ui.loading : ui.refresh"></span>
                 </x-driver-check.button>
 
-                <x-driver-check.button variant="primary" icon="sliders" :href="route('driver-check.penalties.settings')">
+                <x-driver-check.button variant="primary" icon="sliders" :href="route('driver-check.penalties.sending')">
                     {{ __('telegram.penalties.open_settings') }}
                 </x-driver-check.button>
             </x-slot:actions>
@@ -102,7 +102,7 @@
         >
             <x-driver-check.icon name="alert" class="h-4 w-4 shrink-0" />
             <span class="min-w-0 flex-1">{{ __('telegram.penalties.settings.off_banner') }}</span>
-            <a href="{{ route('driver-check.penalties.settings') }}" class="font-semibold underline-offset-2 hover:underline">
+            <a href="{{ route('driver-check.penalties.sending') }}" class="font-semibold underline-offset-2 hover:underline">
                 {{ __('telegram.penalties.off_link') }}
             </a>
         </div>

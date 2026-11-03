@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('telegram.listeners.title'))
+@section('title', $part === 'duties' ? __('driver_check.tree.pages.listener_duties') : __('telegram.listeners.title'))
 
 @section('content')
 
@@ -20,9 +20,8 @@
 
         {{-- Header --}}
         <x-driver-check.page-header
-            icon="bot"
-            :title="__('telegram.listeners.title')"
-            :description="__('telegram.listeners.description')"
+            :title="$part === 'duties' ? __('driver_check.tree.pages.listener_duties') : __('telegram.listeners.title')"
+            :description="$part === 'duties' ? __('telegram.listeners.owners.description') : __('telegram.listeners.description')"
         >
             <x-slot:actions>
                 <x-driver-check.button x-on:click="load()" ::disabled="loading">
@@ -34,12 +33,15 @@
                     <span x-text="loading ? ui.loading : ui.refresh"></span>
                 </x-driver-check.button>
 
+                @if ($part === 'list')
                 <x-driver-check.button variant="primary" icon="plus" x-on:click="openCreate()">
                     {{ __('telegram.listeners.create') }}
                 </x-driver-check.button>
+                @endif
             </x-slot:actions>
         </x-driver-check.page-header>
 
+        @if ($part === 'list')
         <div
             class="flex items-start gap-2.5 rounded-2xl border border-gray-200 bg-gray-25 px-3.5 py-2.5 text-[13px] leading-relaxed text-gray-600 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
         >
@@ -47,21 +49,22 @@
             <p>{{ __('telegram.listeners.notice') }}</p>
         </div>
 
+        @endif
+
         <x-driver-check.error-alert :title="__('telegram.listeners.errors.title')" />
 
+        @if ($part === 'list')
         <p class="text-[12.5px] text-gray-600 dark:text-gray-300">
             {{ __('telegram.listeners.processes.moved') }}
             <a href="{{ url('/driver-check/watchdog') }}" class="font-medium text-brand-600 hover:underline dark:text-brand-400">{{ __('telegram.listeners.processes.moved_link') }}</a>
         </p>
 
+        @endif
+
+        @if ($part === 'duties')
         {{-- Who does what --}}
         <x-driver-check.surface class="p-4">
             <div class="flex flex-col gap-4">
-                <div>
-                    <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ __('telegram.listeners.owners.title') }}</p>
-                    <p class="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">{{ __('telegram.listeners.owners.description') }}</p>
-                </div>
-
                 <div class="flex flex-col divide-y divide-gray-100 dark:divide-gray-800">
                     {{-- What stays with Driver Check --}}
                     <div class="flex flex-col gap-1 py-3 first:pt-0 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
@@ -188,6 +191,9 @@
             </div>
         </x-driver-check.surface>
 
+        @endif
+
+        @if ($part === 'list')
         {{-- Listeners --}}
         <div class="flex flex-col gap-3">
             <x-driver-check.skeleton-cards />
@@ -254,6 +260,7 @@
             :title="__('telegram.listeners.empty.title')"
             :description="__('telegram.listeners.empty.description')"
         />
+        @endif
     </x-driver-check.shell>
 
     {{-- Create / edit dialog --}}

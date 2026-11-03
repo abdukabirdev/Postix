@@ -1658,11 +1658,12 @@ final class GroupInviteTest extends TestCase
         $role = Role::query()->create(['name' => 'driverCheck']);
         $this->actingAs(User::query()->create(['name' => 'Checker', 'role_id' => $role->id]));
 
-        foreach (['', '/groups', '/people', '/accounts', '/log', '/analysis', '/settings', '/bot'] as $page) {
+        /* The pages of the section and of the group bot, each in the left menu. */
+        foreach (['', '/groups', '/people', '/accounts', '/log', '/analysis', '/settings', '/bot', '/bot/reports', '/bot/requests', '/spam', '/spam/messages'] as $page) {
             $this->get('/driver-check/group-invites' . $page)
                 ->assertOk()
-                ->assertSee(__('driver_check.menu.group_invites_people'))
-                ->assertSee(__('driver_check.menu.group_invites_bot'));
+                ->assertSee(__('driver_check.tree.pages.invites_people'))
+                ->assertSee(__('driver_check.tree.pages.bot_connection'));
         }
 
         foreach (['', '/groups', '/people', '/accounts', '/logs', '/analysis', '/settings', '/bot', '/bot/groups'] as $endpoint) {

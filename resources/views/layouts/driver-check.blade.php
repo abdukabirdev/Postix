@@ -1,81 +1,26 @@
 <!DOCTYPE html>
 @php
-    use App\Helpers\MenuHelper;
+    use App\Helpers\DriverCheckNav;
 
     /*
      * The driver-check layout: its own shell, apart from layouts/app (postix).
      * Pages `@extends('layouts.driver-check')` and fill `content`.
+     *
+     * The map of the panel is DriverCheckNav: the left menu (zones, sections,
+     * subsections, pages), the strip of the open section's pages on a phone
+     * and the palette are all drawn from it.
      */
     $dcUser = auth()->user();
 
-    $dcIcons = [
-        '/driver-check/operation-users' => 'users',
-        '/driver-check/drivers' => 'truck',
-        '/driver-check/resolved-phones' => 'phone',
-        '/driver-check/penalties' => 'flag',
-        '/driver-check/operators' => 'operator',
-        '/driver-check/sales' => 'trending',
-        '/driver-check/penalties/settings' => 'sliders-h',
-        '/driver-check/auto-replies' => 'bot',
-        '/driver-check/personal-answers' => 'message',
-        '/driver-check/scheduled-messages' => 'clock',
-        '/driver-check/listeners' => 'bot',
-        '/driver-check/chats' => 'send',
-        '/driver-check/file-routes' => 'route',
-        '/driver-check/sessions' => 'key',
-        '/driver-check/watchdog' => 'pulse',
-        '/driver-check/queue' => 'layers',
-        '/driver-check/contact-sync' => 'sync',
-        '/driver-check/contacts' => 'book',
-        '/driver-check/contact-report' => 'chart',
-        '/driver-check/contact-settings' => 'sliders-h',
-        '/driver-check/contact-accounts' => 'phone',
-        '/driver-check/group-invites' => 'pulse',
-        '/driver-check/group-invites/groups' => 'send',
-        '/driver-check/group-invites/people' => 'users',
-        '/driver-check/group-invites/accounts' => 'phone',
-        '/driver-check/group-invites/log' => 'layers',
-        '/driver-check/group-invites/analysis' => 'chart',
-        '/driver-check/group-invites/settings' => 'sliders-h',
-        '/driver-check/group-invites/bot' => 'bot',
-        '/driver-check/group-invites/spam' => 'shield',
-        '/driver-check/group-join' => 'pulse',
-        '/driver-check/group-join/joined' => 'check-circle',
-        '/driver-check/group-join/queue' => 'clock',
-        '/driver-check/group-join/people' => 'users',
-        '/driver-check/group-join/settings' => 'sliders-h',
-    ];
-
-    $dcPath = '/' . ltrim(request()->path(), '/');
-    $dcCurrent = null;
-    $dcGroups = [];
-    $dcPalette = [];
-
-    foreach (MenuHelper::getDriverCheckGroups() as $groupIndex => $group) {
-        $items = [];
-
-        foreach ($group['items'] as $item) {
-            $item['dc'] = $dcIcons[$item['path']] ?? 'hash';
-            $item['group_index'] = $groupIndex;
-            $items[] = $item;
-
-            $matches = $dcPath === $item['path'] || str_starts_with($dcPath, $item['path'] . '/');
-
-            if ($matches && ($dcCurrent === null || strlen($item['path']) > strlen($dcCurrent['path']))) {
-                $dcCurrent = $item;
-            }
-
-            $dcPalette[] = ['name' => $item['name'], 'group' => $group['title'], 'path' => url($item['path']), 'icon' => $item['dc']];
-        }
-
-        $dcGroups[] = ['title' => $group['title'], 'items' => $items];
-    }
-
-    $dcActive = $dcCurrent['group_index'] ?? null;
+    $dcZones = DriverCheckNav::zones();
+    $dcHere = DriverCheckNav::locate();
     $dcProfilePath = '/driver-check/profile';
-    $dcOnProfile = $dcPath === $dcProfilePath;
 
-    $dcPalette[] = ['name' => __('driver_check.profile.title'), 'group' => __('driver_check.nav.account'), 'path' => url($dcProfilePath), 'icon' => 'user'];
+    $dcPalette = array_merge(
+        [['name' => __('driver_check.tree.home'), 'group' => __('driver_check.tree.home_about'), 'path' => url(DriverCheckNav::HOME), 'icon' => 'command']],
+        DriverCheckNav::palette(),
+        [['name' => __('driver_check.profile.title'), 'group' => __('driver_check.nav.account'), 'path' => url($dcProfilePath), 'icon' => 'user']],
+    );
 
     $dcName = $dcUser->name ?? 'User';
     $dcInitials = mb_strtoupper(mb_substr(preg_replace('/[^\p{L}\p{N} ]/u', '', $dcName) ?: 'U', 0, 1));
@@ -160,25 +105,17 @@
     {{-- ================= Top bar ================= --}}
     <header class="dc-bar" x-data="{ userOpen: false }" x-on:keydown.escape.window="userOpen = false">
         <div class="dc-bar__row">
+            {{-- Menu (phone): the map slides in from the left --}}
+            <button type="button" class="dc-iconbtn -ml-1 lg:hidden" x-on:click="$store.dcShell.menuOpen = true" aria-label="{{ __('driver_check.nav.menu') }}">
+                <x-driver-check.icon name="menu" class="h-5 w-5" />
+            </button>
+
             <a href="{{ url('/driver-check') }}" class="dc-brand" aria-label="Driver Check">
                 <span class="dc-brand__mark">
                     <svg viewBox="0 0 24 24" class="h-4 w-4" fill="none" stroke="currentColor" stroke-width="2.6"><path stroke-linecap="round" stroke-linejoin="round" d="m5 12.5 4.2 4.2L19 7"/></svg>
                 </span>
                 <span class="hidden sm:inline">Driver Check</span>
             </a>
-
-            {{-- Sections (desktop) --}}
-            <nav class="hidden items-center gap-1 lg:flex" aria-label="{{ __('driver_check.nav.sections') }}">
-                @foreach ($dcGroups as $i => $group)
-                    <a
-                        href="{{ url($group['items'][0]['path']) }}"
-                        class="dc-tab"
-                        @if ($dcActive === $i) aria-current="true" @endif
-                    >
-                        {{ $group['title'] }}
-                    </a>
-                @endforeach
-            </nav>
 
             <div class="flex-1"></div>
 
@@ -263,41 +200,41 @@
                 </div>
             </div>
 
-            {{-- Sections (phone) --}}
-            <button type="button" class="dc-iconbtn lg:hidden" x-on:click="$store.dcShell.menuOpen = true" aria-label="{{ __('driver_check.nav.menu') }}">
-                <x-driver-check.icon name="menu" class="h-5 w-5" />
-            </button>
         </div>
     </header>
 
-    {{-- ================= Second tier: pages of the open section ================= --}}
-    <div class="dc-sub sticky z-[89]" style="top: var(--dc-bar-h)">
-        <nav class="dc-sub__row" aria-label="{{ __('driver_check.nav.pages') }}">
-            @if ($dcActive !== null)
-                @foreach ($dcGroups[$dcActive]['items'] as $item)
-                    <a
-                        href="{{ url($item['path']) }}"
-                        class="dc-link"
-                        @if ($dcCurrent && $dcCurrent['path'] === $item['path']) aria-current="page" @endif
-                    >
-                        <x-driver-check.icon :name="$item['dc']" class="h-[15px] w-[15px] opacity-70" />
-                        {{ $item['name'] }}
-                    </a>
-                @endforeach
-            @else
-                <a href="{{ url('/driver-check') }}" class="dc-link">
-                    <x-driver-check.icon name="arrow-left" class="h-[15px] w-[15px] opacity-70" />
-                    {{ __('driver_check.nav.back') }}
-                </a>
-                <span class="dc-link" aria-current="page">{{ $dcOnProfile ? __('driver_check.profile.title') : trim($__env->yieldContent('title', '')) }}</span>
-            @endif
-        </nav>
-    </div>
+    {{-- ================= Left menu + page ================= --}}
+    <div class="dc-frame">
+        <aside class="dc-side hidden lg:block">
+            @include('layouts.driver-check.nav')
+        </aside>
 
-    {{-- ================= Page ================= --}}
-    <main class="dc-page">
-        @yield('content')
-    </main>
+        <div class="min-w-0">
+            {{-- Phone: the pages of the open section, side by side --}}
+            @if ($dcHere)
+                <div class="dc-sub sticky z-[89] lg:hidden" style="top: var(--dc-bar-h)">
+                    <nav class="dc-sub__row" aria-label="{{ __('driver_check.nav.pages') }}">
+                        @foreach ($dcHere['section']['groups'] as $group)
+                            @foreach ($group['items'] as $item)
+                                @continue($item['also'])
+                                <a
+                                    href="{{ url($item['path']) }}"
+                                    class="dc-link"
+                                    @if ($dcHere['item']['path'] === $item['path']) aria-current="page" @endif
+                                >
+                                    {{ $item['name'] }}
+                                </a>
+                            @endforeach
+                        @endforeach
+                    </nav>
+                </div>
+            @endif
+
+            <main class="dc-page">
+                @yield('content')
+            </main>
+        </div>
+    </div>
 
     {{-- ================= Command palette ================= --}}
     <div
@@ -362,7 +299,7 @@
         </div>
     </div>
 
-    {{-- ================= Section menu (phone) ================= --}}
+    {{-- ================= Menu (phone) ================= --}}
     <div
         x-data
         x-show="$store.dcShell.menuOpen"
@@ -377,38 +314,27 @@
         <aside
             x-show="$store.dcShell.menuOpen"
             x-transition:enter="transition ease-out duration-200"
-            x-transition:enter-start="translate-x-full"
+            x-transition:enter-start="-translate-x-full"
             x-transition:enter-end="translate-x-0"
             x-transition:leave="transition ease-in duration-150"
             x-transition:leave-start="translate-x-0"
-            x-transition:leave-end="translate-x-full"
-            class="absolute inset-y-0 right-0 flex w-[min(340px,88vw)] flex-col overflow-y-auto bg-[var(--dc-ink)] text-[var(--dc-ink-text)]"
+            x-transition:leave-end="-translate-x-full"
+            class="absolute inset-y-0 left-0 flex w-[min(320px,88vw)] flex-col bg-[var(--dc-surface)]"
         >
-            <div class="flex h-[var(--dc-bar-h)] shrink-0 items-center justify-between border-b border-white/10 px-4">
+            <div class="flex h-[var(--dc-bar-h)] shrink-0 items-center justify-between bg-[var(--dc-ink)] px-4">
                 <span class="text-sm font-semibold text-white">Driver Check</span>
                 <button type="button" class="dc-iconbtn" x-on:click="$store.dcShell.menuOpen = false" aria-label="{{ __('telegram.ui.close') }}">
                     <x-driver-check.icon name="close" class="h-5 w-5" />
                 </button>
             </div>
 
-            <div class="flex-1 px-2 py-3">
-                @foreach ($dcGroups as $i => $group)
-                    <p class="px-3 pb-1.5 pt-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--dc-ink-dim)]">{{ $group['title'] }}</p>
-                    @foreach ($group['items'] as $item)
-                        <a
-                            href="{{ url($item['path']) }}"
-                            class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition {{ $dcCurrent && $dcCurrent['path'] === $item['path'] ? 'bg-white/10 text-white' : 'hover:bg-white/[0.06]' }}"
-                        >
-                            <x-driver-check.icon :name="$item['dc']" class="h-[18px] w-[18px] opacity-70" />
-                            {{ $item['name'] }}
-                        </a>
-                    @endforeach
-                @endforeach
+            <div class="flex-1 overflow-y-auto" data-drawer>
+                @include('layouts.driver-check.nav')
             </div>
 
-            <div class="shrink-0 border-t border-white/10 p-2">
-                <a href="{{ url($dcProfilePath) }}" class="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium hover:bg-white/[0.06]">
-                    <x-driver-check.icon name="user" class="h-[18px] w-[18px] opacity-70" />
+            <div class="shrink-0 border-t border-[var(--dc-line)] p-2">
+                <a href="{{ url($dcProfilePath) }}" class="dc-nav__home">
+                    <x-driver-check.icon name="user" class="dc-nav__icon" />
                     {{ __('driver_check.profile.title') }}
                 </a>
             </div>

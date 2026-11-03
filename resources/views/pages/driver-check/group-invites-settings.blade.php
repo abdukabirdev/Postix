@@ -20,8 +20,6 @@
             :description="__('driver_check.invites.settings.description')"
         />
 
-        @include('pages.driver-check.partials.invites-nav')
-
         <x-driver-check.error-alert :title="__('driver_check.invites.load_failed')" retry="load()" />
 
         <div x-show="loading && !form" class="dc-skeleton h-96 max-w-4xl rounded-2xl bg-gray-100 dark:bg-white/[0.06]"></div>

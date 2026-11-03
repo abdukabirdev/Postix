@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('telegram.file_routes.title'))
+@section('title', $part === 'log' ? __('driver_check.tree.pages.file_log') : __('driver_check.tree.pages.file_routes'))
 
 @section('content')
 
@@ -19,9 +19,8 @@
 
         {{-- Header --}}
         <x-driver-check.page-header
-            icon="send"
-            :title="__('telegram.file_routes.title')"
-            :description="__('telegram.file_routes.description')"
+            :title="$part === 'log' ? __('driver_check.tree.pages.file_log') : __('driver_check.tree.pages.file_routes')"
+            :description="$part === 'log' ? __('telegram.file_routes.recent.description') : __('telegram.file_routes.description')"
         >
             <x-slot:actions>
                 <x-driver-check.button x-on:click="load()" ::disabled="loading">
@@ -33,12 +32,15 @@
                     <span x-text="loading ? ui.loading : ui.refresh"></span>
                 </x-driver-check.button>
 
+                @if ($part === 'kinds')
                 <x-driver-check.button variant="primary" icon="plus" x-on:click="openCreate()">
                     {{ __('telegram.file_routes.create') }}
                 </x-driver-check.button>
+                @endif
             </x-slot:actions>
         </x-driver-check.page-header>
 
+        @if ($part === 'kinds')
         {{-- How a file finds its groups --}}
         <div
             class="flex items-start gap-2.5 rounded-2xl border border-gray-200 bg-gray-25 px-3.5 py-2.5 text-[13px] leading-relaxed text-gray-600 dark:border-gray-800 dark:bg-white/[0.02] dark:text-gray-300"
@@ -53,8 +55,11 @@
             </div>
         </div>
 
+        @endif
+
         <x-driver-check.error-alert :title="__('telegram.file_routes.errors.title')" />
 
+        @if ($part === 'kinds')
         {{-- Kinds --}}
         <x-driver-check.surface class="overflow-hidden">
             {{-- Table (lg and up) --}}
@@ -207,6 +212,9 @@
             />
         </x-driver-check.surface>
 
+        @endif
+
+        @if ($part === 'log')
         {{-- Recent forwards --}}
         <x-driver-check.surface class="overflow-hidden">
             <div class="border-b border-gray-200 px-4 py-3 dark:border-gray-800">
@@ -272,6 +280,7 @@
                 class="px-4 py-8 text-center text-[13px] text-gray-500 dark:text-gray-400"
             >{{ __('telegram.file_routes.recent.empty') }}</p>
         </x-driver-check.surface>
+        @endif
     </x-driver-check.shell>
 
     {{-- Create / edit dialog --}}

@@ -31,8 +31,6 @@
             </x-slot:actions>
         </x-driver-check.page-header>
 
-        @include('pages.driver-check.partials.invites-nav')
-
         <x-driver-check.error-alert :title="__('driver_check.invites.load_failed')" retry="load()" />
 
         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

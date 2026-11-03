@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers\View\DriverCheck;
 
+use App\Helpers\DriverCheckNav;
 use App\Http\Controllers\Controller;
 use App\Models\Telegram\OperationUser;
 
@@ -14,6 +15,33 @@ use App\Models\Telegram\OperationUser;
  */
 final class DriverCheckController extends Controller
 {
+    /**
+     * The home page: the whole map of the panel, zone by zone.
+     */
+    public function home()
+    {
+        return view(
+            'pages.driver-check.home',
+            ['zones' => DriverCheckNav::zones()]
+        );
+    }
+
+    /**
+     * Every start and stop of the panel on one page; each block is the same
+     * one its own section's page shows.
+     */
+    public function control()
+    {
+        return view(
+            'pages.driver-check.control'
+        );
+    }
+
+    /*
+     * Some pages are one view showing one `part` of it: the same data and
+     * the same component, one job per page.
+     */
+
     public function operationUsers()
     {
         return view(
@@ -69,14 +97,48 @@ final class DriverCheckController extends Controller
     public function penaltySettings()
     {
         return view(
-            'pages.driver-check.penalty-settings'
+            'pages.driver-check.penalty-settings',
+            ['part' => 'texts']
+        );
+    }
+
+    public function penaltySending()
+    {
+        return view(
+            'pages.driver-check.penalty-settings',
+            ['part' => 'sending']
         );
     }
 
     public function autoReplies()
     {
         return view(
-            'pages.driver-check.auto-replies'
+            'pages.driver-check.auto-replies',
+            ['part' => 'main']
+        );
+    }
+
+    public function autoRepliesKeywords()
+    {
+        return view(
+            'pages.driver-check.auto-replies',
+            ['part' => 'keywords']
+        );
+    }
+
+    public function autoRepliesGreetings()
+    {
+        return view(
+            'pages.driver-check.auto-replies',
+            ['part' => 'greetings']
+        );
+    }
+
+    public function autoRepliesReminders()
+    {
+        return view(
+            'pages.driver-check.auto-replies',
+            ['part' => 'reminders']
         );
     }
 
@@ -97,21 +159,48 @@ final class DriverCheckController extends Controller
     public function fileRoutes()
     {
         return view(
-            'pages.driver-check.file-routes'
+            'pages.driver-check.file-routes',
+            ['part' => 'kinds']
+        );
+    }
+
+    public function fileRoutesLog()
+    {
+        return view(
+            'pages.driver-check.file-routes',
+            ['part' => 'log']
         );
     }
 
     public function listeners()
     {
         return view(
-            'pages.driver-check.listeners'
+            'pages.driver-check.listeners',
+            ['part' => 'list']
+        );
+    }
+
+    public function listenerDuties()
+    {
+        return view(
+            'pages.driver-check.listeners',
+            ['part' => 'duties']
         );
     }
 
     public function system()
     {
         return view(
-            'pages.driver-check.system'
+            'pages.driver-check.system',
+            ['part' => 'map']
+        );
+    }
+
+    public function alerts()
+    {
+        return view(
+            'pages.driver-check.system',
+            ['part' => 'alerts']
         );
     }
 
@@ -132,7 +221,16 @@ final class DriverCheckController extends Controller
     public function watchdog()
     {
         return view(
-            'pages.driver-check.watchdog'
+            'pages.driver-check.watchdog',
+            ['part' => 'all']
+        );
+    }
+
+    public function watchdogDriverCheck()
+    {
+        return view(
+            'pages.driver-check.watchdog',
+            ['part' => 'driver-check']
         );
     }
 
@@ -153,7 +251,16 @@ final class DriverCheckController extends Controller
     public function contactReport()
     {
         return view(
-            'pages.driver-check.contact-report'
+            'pages.driver-check.contact-report',
+            ['part' => 'overview']
+        );
+    }
+
+    public function contactReportRuns()
+    {
+        return view(
+            'pages.driver-check.contact-report',
+            ['part' => 'runs']
         );
     }
 
@@ -223,21 +330,64 @@ final class DriverCheckController extends Controller
     public function groupInvitesBot()
     {
         return view(
-            'pages.driver-check.group-invites-bot'
+            'pages.driver-check.group-invites-bot',
+            ['part' => 'connection']
+        );
+    }
+
+    public function groupInvitesBotReports()
+    {
+        return view(
+            'pages.driver-check.group-invites-bot',
+            ['part' => 'reports']
+        );
+    }
+
+    public function groupInvitesBotRequests()
+    {
+        return view(
+            'pages.driver-check.group-invites-bot',
+            ['part' => 'requests']
         );
     }
 
     public function groupInvitesSpam()
     {
         return view(
-            'pages.driver-check.group-invites-spam'
+            'pages.driver-check.group-invites-spam',
+            ['part' => 'list']
+        );
+    }
+
+    public function groupInvitesSpamMessages()
+    {
+        return view(
+            'pages.driver-check.group-invites-spam',
+            ['part' => 'messages']
         );
     }
 
     public function groupJoin()
     {
         return view(
-            'pages.driver-check.group-join'
+            'pages.driver-check.group-join',
+            ['part' => 'status']
+        );
+    }
+
+    public function groupJoinLog()
+    {
+        return view(
+            'pages.driver-check.group-join',
+            ['part' => 'log']
+        );
+    }
+
+    public function groupJoinKeywords()
+    {
+        return view(
+            'pages.driver-check.group-join',
+            ['part' => 'keywords']
         );
     }
 
@@ -254,6 +404,15 @@ final class DriverCheckController extends Controller
         return view(
             'pages.driver-check.group-join-groups',
             ['view' => 'queue']
+        );
+    }
+
+    /** The rejected groups and the ones gone, apart from the queue. */
+    public function groupJoinRejected()
+    {
+        return view(
+            'pages.driver-check.group-join-groups',
+            ['view' => 'other']
         );
     }
 

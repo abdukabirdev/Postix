@@ -177,13 +177,21 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
 
         /*
          * /driver-check
-         * Redirect to the first page.
+         * The home page: the map of the whole panel (App\Helpers\DriverCheckNav).
          */
-        Route::get('/', function () {
-            return redirect()->route(
-                'driver-check.operation-users'
-            );
-        })->name('driver-check.dashboard');
+        Route::get(
+            '/',
+            [DriverCheckController::class, 'home']
+        )->name('driver-check.dashboard');
+
+        /*
+         * The control desk: every start and stop button of the panel on one
+         * page (each one is also on its own section's page).
+         */
+        Route::get(
+            '/control',
+            [DriverCheckController::class, 'control']
+        )->name('driver-check.control');
 
         /*
          * The signed-in person's own profile.
@@ -248,6 +256,12 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             [DriverCheckController::class, 'penaltySettings']
         )->name('driver-check.penalties.settings');
 
+        /* The other half of the penalty settings: the switches, hours, retries. */
+        Route::get(
+            '/penalties/sending',
+            [DriverCheckController::class, 'penaltySending']
+        )->name('driver-check.penalties.sending');
+
         /*
          * Auto replies: what an operator's or a sales manager's private
          * message is answered with. One JSON file, edited here.
@@ -256,6 +270,14 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/auto-replies',
             [DriverCheckController::class, 'autoReplies']
         )->name('driver-check.auto-replies');
+
+        /* The same file, one part of it per page. */
+        foreach (['keywords', 'greetings', 'reminders'] as $replyPart) {
+            Route::get(
+                "/auto-replies/{$replyPart}",
+                [DriverCheckController::class, 'autoReplies' . ucfirst($replyPart)]
+            )->name("driver-check.auto-replies.{$replyPart}");
+        }
 
         /*
          * Personal answers: a person's own voice messages, GIFs and texts
@@ -286,6 +308,11 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             [DriverCheckController::class, 'fileRoutes']
         )->name('driver-check.file-routes');
 
+        Route::get(
+            '/file-routes/log',
+            [DriverCheckController::class, 'fileRoutesLog']
+        )->name('driver-check.file-routes.log');
+
         /*
          * Scheduled messages: what the listener's account writes into
          * groups, and when.
@@ -303,6 +330,12 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             [DriverCheckController::class, 'listeners']
         )->name('driver-check.listeners');
 
+        /* Who does which job: Driver Check or one of the listeners. */
+        Route::get(
+            '/listeners/duties',
+            [DriverCheckController::class, 'listenerDuties']
+        )->name('driver-check.listeners.duties');
+
         /*
          * How it works: every independent logic, who does it now, the problems.
          */
@@ -310,6 +343,12 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/system',
             [DriverCheckController::class, 'system']
         )->name('driver-check.system');
+
+        /* The problems the developer alerts reported. */
+        Route::get(
+            '/alerts',
+            [DriverCheckController::class, 'alerts']
+        )->name('driver-check.alerts');
 
         /*
          * Monitoring: the listener under its watchdog, and the queue
@@ -319,6 +358,12 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/watchdog',
             [DriverCheckController::class, 'watchdog']
         )->name('driver-check.watchdog');
+
+        /* Driver Check's own chain: watchdog, listener, worker, account. */
+        Route::get(
+            '/watchdog/driver-check',
+            [DriverCheckController::class, 'watchdogDriverCheck']
+        )->name('driver-check.watchdog.driver-check');
 
         Route::get(
             '/queue',
@@ -345,6 +390,11 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/contact-report',
             [DriverCheckController::class, 'contactReport']
         )->name('driver-check.contact-report');
+
+        Route::get(
+            '/contact-report/runs',
+            [DriverCheckController::class, 'contactReportRuns']
+        )->name('driver-check.contact-report.runs');
 
         Route::get(
             '/contact-settings',
@@ -375,6 +425,22 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             )->name("driver-check.group-invites.{$invitePage}");
         }
 
+        /* The join bot and the spam list, one job per page. */
+        Route::get(
+            '/group-invites/bot/reports',
+            [DriverCheckController::class, 'groupInvitesBotReports']
+        )->name('driver-check.group-invites.bot.reports');
+
+        Route::get(
+            '/group-invites/bot/requests',
+            [DriverCheckController::class, 'groupInvitesBotRequests']
+        )->name('driver-check.group-invites.bot.requests');
+
+        Route::get(
+            '/group-invites/spam/messages',
+            [DriverCheckController::class, 'groupInvitesSpamMessages']
+        )->name('driver-check.group-invites.spam.messages');
+
         /*
          * Join group: the marked accounts find groups and join them by
          * themselves. The status, the joined groups, the ones waiting,
@@ -394,6 +460,21 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/group-join/queue',
             [DriverCheckController::class, 'groupJoinQueue']
         )->name('driver-check.group-join.queue');
+
+        Route::get(
+            '/group-join/rejected',
+            [DriverCheckController::class, 'groupJoinRejected']
+        )->name('driver-check.group-join.rejected');
+
+        Route::get(
+            '/group-join/log',
+            [DriverCheckController::class, 'groupJoinLog']
+        )->name('driver-check.group-join.log');
+
+        Route::get(
+            '/group-join/keywords',
+            [DriverCheckController::class, 'groupJoinKeywords']
+        )->name('driver-check.group-join.keywords');
 
         Route::get(
             '/group-join/people',

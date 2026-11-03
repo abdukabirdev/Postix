@@ -1,6 +1,6 @@
 @extends('layouts.driver-check')
 
-@section('title', __('telegram.penalty_settings.title'))
+@section('title', $part === 'texts' ? __('driver_check.tree.pages.penalty_texts') : __('driver_check.tree.pages.penalty_sending'))
 
 @php
     $placeholders = collect(\App\Application\Telegram\Services\ClientCheckRules::PLACEHOLDERS)
@@ -37,11 +37,8 @@
              Header
         ============================================================= --}}
         <x-driver-check.page-header
-            icon="sliders"
-            tone="brand"
-            :eyebrow="__('telegram.menu.groups.settings')"
-            :title="__('telegram.penalty_settings.title')"
-            :description="__('telegram.penalty_settings.description')"
+            :title="$part === 'texts' ? __('driver_check.tree.pages.penalty_texts') : __('driver_check.tree.pages.penalty_sending')"
+            :description="$part === 'texts' ? __('telegram.penalty_settings.description') : __('driver_check.pages.penalty_sending')"
         >
             <x-slot:actions>
                 <span
@@ -69,6 +66,8 @@
             <button type="button" class="ml-2 font-semibold underline" x-on:click="load()">{{ __('telegram.ui.refresh') }}</button>
         </div>
 
+        @if ($part === 'texts')
+        {{-- What to write: the ladder of texts, how one is chosen, the placeholders --}}
         <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
 
             {{-- ========================================================
@@ -389,11 +388,77 @@
             </section>
 
             {{-- ========================================================
-                 Aside: the switches, how a text is chosen, placeholders,
-                 timings
+                 Aside: how a text is chosen, placeholders
             ========================================================= --}}
-            <aside class="flex flex-col gap-4 xl:sticky xl:top-28">
+            <aside class="flex flex-col gap-4 xl:sticky xl:top-20">
 
+                {{-- How a text is chosen --}}
+                <x-driver-check.surface class="p-4">
+                    <h3 class="dc-eyebrow">
+                        {{ __('telegram.penalty_settings.sections.how') }}
+                    </h3>
+                    <p class="mt-2 text-[12px] leading-relaxed text-gray-600 dark:text-gray-300">
+                        {{ __('telegram.penalty_settings.sections.how_text') }}
+                    </p>
+                    <div class="mt-3 grid grid-cols-2 gap-2">
+                        <x-driver-check.button size="sm" :href="route('driver-check.operators')" icon="operator">
+                            {{ __('telegram.operators.tabs.operation') }}
+                        </x-driver-check.button>
+                        <x-driver-check.button size="sm" :href="route('driver-check.sales')" icon="users">
+                            {{ __('telegram.operators.tabs.sales') }}
+                        </x-driver-check.button>
+                    </div>
+                </x-driver-check.surface>
+
+                {{-- Placeholders --}}
+                <x-driver-check.surface class="p-4">
+                    <h3 class="dc-eyebrow">
+                        {{ __('telegram.penalty_settings.sections.placeholders') }}
+                    </h3>
+                    <p class="mt-1 text-[12px] leading-snug text-gray-500 dark:text-gray-400">
+                        {{ __('telegram.penalty_settings.sections.placeholders_hint') }}
+                    </p>
+
+                    <ul class="mt-3 flex flex-col gap-0.5">
+                        <template x-for="item in placeholders" :key="item.name">
+                            <li>
+                                <button
+                                    type="button"
+                                    x-on:click="insertPlaceholder(item.name)"
+                                    class="dc-tap flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition
+                                           hover:bg-brand-25 dark:hover:bg-brand-500/[0.07]"
+                                >
+                                    <code
+                                        class="shrink-0 rounded-md bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-700
+                                               dark:bg-white/[0.06] dark:text-gray-300"
+                                        x-text="'{' + item.name + '}'"
+                                    ></code>
+                                    <span class="truncate text-[12px] text-gray-500 dark:text-gray-400" x-text="item.hint"></span>
+                                </button>
+                            </li>
+                        </template>
+                    </ul>
+                </x-driver-check.surface>
+
+                <div class="flex justify-end">
+                    <x-driver-check.button
+                        size="sm"
+                        variant="ghost"
+                        icon="refresh"
+                        x-show="customised"
+                        x-cloak
+                        x-on:click="reset()"
+                        ::disabled="saving"
+                    >
+                        <span x-text="resetArmed ? translations.actions.reset_confirm : translations.actions.reset"></span>
+                    </x-driver-check.button>
+                </div>
+            </aside>
+        </div>
+        @else
+        {{-- How and when to send: the switches, the working hours, the retries --}}
+        <div class="grid items-start gap-5 lg:grid-cols-2">
+            <div class="flex flex-col gap-4">
                 {{-- Delivery: saved at once, these are the "stop now" buttons --}}
                 <x-driver-check.surface class="divide-y divide-gray-100 dark:divide-gray-800">
                     <h3 class="dc-eyebrow px-4 pb-2 pt-4">
@@ -463,6 +528,9 @@
                     @endforeach
                 </x-driver-check.surface>
 
+            </div>
+
+            <div class="flex flex-col gap-4">
                 {{-- Working hours: penalties outside them are ignored --}}
                 <x-driver-check.surface class="p-4">
                     <div class="flex items-start justify-between gap-3">
@@ -521,54 +589,6 @@
                     >{{ __('telegram.penalty_settings.hours.clear') }}</button>
                 </x-driver-check.surface>
 
-                {{-- How a text is chosen --}}
-                <x-driver-check.surface class="p-4">
-                    <h3 class="dc-eyebrow">
-                        {{ __('telegram.penalty_settings.sections.how') }}
-                    </h3>
-                    <p class="mt-2 text-[12px] leading-relaxed text-gray-600 dark:text-gray-300">
-                        {{ __('telegram.penalty_settings.sections.how_text') }}
-                    </p>
-                    <div class="mt-3 grid grid-cols-2 gap-2">
-                        <x-driver-check.button size="sm" :href="route('driver-check.operators')" icon="operator">
-                            {{ __('telegram.operators.tabs.operation') }}
-                        </x-driver-check.button>
-                        <x-driver-check.button size="sm" :href="route('driver-check.sales')" icon="users">
-                            {{ __('telegram.operators.tabs.sales') }}
-                        </x-driver-check.button>
-                    </div>
-                </x-driver-check.surface>
-
-                {{-- Placeholders --}}
-                <x-driver-check.surface class="p-4">
-                    <h3 class="dc-eyebrow">
-                        {{ __('telegram.penalty_settings.sections.placeholders') }}
-                    </h3>
-                    <p class="mt-1 text-[12px] leading-snug text-gray-500 dark:text-gray-400">
-                        {{ __('telegram.penalty_settings.sections.placeholders_hint') }}
-                    </p>
-
-                    <ul class="mt-3 flex flex-col gap-0.5">
-                        <template x-for="item in placeholders" :key="item.name">
-                            <li>
-                                <button
-                                    type="button"
-                                    x-on:click="insertPlaceholder(item.name)"
-                                    class="dc-tap flex w-full items-center justify-between gap-3 rounded-lg px-2 py-1.5 text-left transition
-                                           hover:bg-brand-25 dark:hover:bg-brand-500/[0.07]"
-                                >
-                                    <code
-                                        class="shrink-0 rounded-md bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-700
-                                               dark:bg-white/[0.06] dark:text-gray-300"
-                                        x-text="'{' + item.name + '}'"
-                                    ></code>
-                                    <span class="truncate text-[12px] text-gray-500 dark:text-gray-400" x-text="item.hint"></span>
-                                </button>
-                            </li>
-                        </template>
-                    </ul>
-                </x-driver-check.surface>
-
                 {{-- Timing --}}
                 <x-driver-check.surface class="p-4">
                     <h3 class="dc-eyebrow">
@@ -608,21 +628,9 @@
                     </div>
                 </x-driver-check.surface>
 
-                <div class="flex justify-end">
-                    <x-driver-check.button
-                        size="sm"
-                        variant="ghost"
-                        icon="refresh"
-                        x-show="customised"
-                        x-cloak
-                        x-on:click="reset()"
-                        ::disabled="saving"
-                    >
-                        <span x-text="resetArmed ? translations.actions.reset_confirm : translations.actions.reset"></span>
-                    </x-driver-check.button>
-                </div>
-            </aside>
+            </div>
         </div>
+        @endif
     </x-driver-check.shell>
 
     {{-- ================================================================
@@ -632,7 +640,7 @@
         x-show="dirty() || saving || formError"
         x-cloak
         x-transition.opacity
-        class="fixed inset-x-0 bottom-0 z-40 border-t border-gray-200 bg-white/95 px-4 py-3
+        class="fixed inset-x-0 bottom-0 z-40 border-t lg:left-[264px] border-gray-200 bg-white/95 px-4 py-3
                backdrop-blur dark:border-gray-800 dark:bg-gray-900/95"
     >
         <div class="mx-auto flex max-w-screen-2xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">

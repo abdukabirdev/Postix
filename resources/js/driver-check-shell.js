@@ -61,6 +61,34 @@ export function registerShell(Alpine) {
         paletteOpen: false,
     });
 
+    /*
+     * The left menu: one section open at a time, the one of the open page
+     * first. The open page's link is scrolled into view when the menu is
+     * longer than the screen.
+     */
+    Alpine.data('dcNav', (current) => ({
+        open: current,
+
+        init() {
+            this.$nextTick(() => {
+                const box = this.$root.closest('.dc-side, [data-drawer]');
+                const link = this.$root.querySelector('[aria-current="page"]');
+
+                if (box && link && link.offsetTop > box.clientHeight - 80) {
+                    box.scrollTop = link.offsetTop - box.clientHeight / 2;
+                }
+            });
+        },
+
+        isOpen(key) {
+            return this.open === key;
+        },
+
+        toggle(key) {
+            this.open = this.open === key ? null : key;
+        },
+    }));
+
     Alpine.data('dcPalette', (items) => ({
         items,
         query: '',
