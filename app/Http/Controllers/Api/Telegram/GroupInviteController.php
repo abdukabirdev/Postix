@@ -71,9 +71,11 @@ final class GroupInviteController extends Controller
         $accounts = TelegramAccount::query()->where('is_authorized', true)->pluck('id');
         $taking = $accounts->reject(fn (int $id) => in_array($id, $config['excluded_accounts'], true));
 
+        /* The button's run, or the lists an invite run reads before and after itself. */
         $lastLeft = TelegramGroupInviteLog::query()
-            ->where('event', 'finished')
-            ->where('context->left_check', true)
+            ->where(fn ($q) => $q
+                ->where(fn ($q) => $q->where('event', 'finished')->where('context->left_check', true))
+                ->orWhere(fn ($q) => $q->where('event', TelegramGroupInviteLog::EVENT_CHECK)->whereNotNull('context->auto')))
             ->latest('id')
             ->first();
 
@@ -209,8 +211,8 @@ final class GroupInviteController extends Controller
 
     /**
      * "Who left": one account reads each group's members list, whoever it
-     * does not settle is looked up one by one, nobody invited. Pressed by
-     * hand, once a week or so.
+     * does not settle is looked up one by one, nobody invited. Every invite
+     * run reads the lists by itself; the button adds the look-up one by one.
      */
     public function checkLeft(): JsonResponse
     {

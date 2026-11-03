@@ -233,6 +233,10 @@ export function inviteHelpers(t) {
                     return error ? `${text} · ${this.errorLabel(error)}` : text;
                 }
                 case 'check':
+                    if (c.mode === 'left' && c.auto) {
+                        return (c.auto === 'after' ? e.check_left_after : e.check_left_before).replace(':summary', this.summaryText(c));
+                    }
+
                     if (c.mode === 'left' && c.list) {
                         return (c.whole ? e.check_left_list : e.check_left_part)
                             .replace(':read', this.number(c.read ?? 0))

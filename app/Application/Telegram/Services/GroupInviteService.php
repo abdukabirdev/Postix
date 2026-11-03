@@ -77,7 +77,9 @@ use Throwable;
  * Nobody added is watched after that. "Who left" ($whoLeft) has one account
  * read each group's members list: whoever added is not on it is left,
  * whoever left and is on it again is back in. A list Telegram does not
- * give whole leaves the people off it to a look-up one by one.
+ * give whole leaves the people off it to a look-up one by one. Every
+ * invite run reads the lists too, before it invites and when it is done
+ * (the lists only: the look-up one by one is the button's).
  * The group's member count is read when an account comes to it and when
  * it is done with it.
  *
@@ -426,6 +428,8 @@ final class GroupInviteService
 
             /* Whoever the lists could not settle is looked up by the account that added them; not by one in trouble already. */
             $usedAccountIds = array_values(array_unique([...$excluded, ...array_keys($this->troubled)]));
+        } elseif (! $checkOnly) {
+            $this->leftAround('before', $config, $say, $excluded, $totals);
         }
 
         /** @var array<int, int> account id => when its short flood wait is over */
@@ -522,6 +526,10 @@ final class GroupInviteService
             if (($meta['rest_kind'] ?? null) === self::KIND_WAIT && $left > 0 && $left <= self::WAIT_COME_BACK) {
                 $comeBack[$account->id] = time() + $left + 1;
             }
+        }
+
+        if (! $checkOnly && ! $this->stopping()) {
+            $this->leftAround('after', $config, $say, $excluded, $totals);
         }
 
         $this->log(
@@ -1715,6 +1723,45 @@ final class GroupInviteService
         $this->now['totals']['stayed'] = (int) ($this->now['totals']['stayed'] ?? 0) + $found['stayed'];
 
         return $found;
+    }
+
+    /**
+     * "Who left" around an invite run: before it, so the run starts from
+     * where the groups stand, and after it, so what it did shows at once.
+     * The members lists only, seconds a group; whoever a list does not
+     * settle (hidden, too big) waits for the button, which looks them up
+     * one by one. Whoever stayed is not counted into the run: it is about
+     * inviting, and the second reading would count them twice.
+     *
+     * @param array<string, mixed> $config
+     * @param list<int>            $excluded accounts left out in the panel
+     * @param array<string, int>   $totals
+     */
+    private function leftAround(string $when, array $config, callable $say, array $excluded, array &$totals): void
+    {
+        $found = ['accounts' => 0, 'left' => 0, 'stayed' => 0, 'back' => 0];
+        $stayed = (int) ($this->now['totals']['stayed'] ?? 0);
+
+        $say("Who left, {$when} the invite");
+
+        $this->leftByList($config, $say, $excluded, $found);
+
+        $this->now['totals']['stayed'] = $stayed;
+        $totals['left'] += $found['left'];
+        $totals['back'] += $found['back'];
+
+        /* No group with anybody added yet, or no account free to read. */
+        if ($found['accounts'] === 0) {
+            return;
+        }
+
+        $this->log(TelegramGroupInviteLog::EVENT_CHECK, "Who left {$when} the invite: {$found['stayed']} still in, {$found['left']} left, {$found['back']} back", null, null, [
+            'mode' => 'left',
+            'auto' => $when,
+            'left' => $found['left'],
+            'stayed' => $found['stayed'],
+            'back' => $found['back'],
+        ]);
     }
 
     /**

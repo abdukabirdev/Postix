@@ -1477,6 +1477,80 @@ final class GroupInviteTest extends TestCase
         $this->assertSame([false, 3, 500, 1], [$line->context['whole'], $line->context['read'], $line->context['members'], $line->context['unchecked']]);
     }
 
+    public function test_an_invite_run_reads_who_left_before_it_invites_and_when_it_is_done(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $addedAt = now()->subDays(7);
+
+        foreach ([2701, 2702] as $id) {
+            TelegramGroupInvite::query()->create([
+                'invite_group_id' => $group->id,
+                'scraped_user_id' => $this->person($id, "P{$id}")->id,
+                'telegram_account_id' => 1,
+                'status' => TelegramGroupInvite::STATUS_INVITED,
+                'attempted_at' => $addedAt,
+                'checked_at' => $addedAt,
+            ]);
+        }
+
+        $this->hold(1, $this->person(2703, 'New'));
+
+        /* 2702 is gone; 2703 is on the list once the run has added them. */
+        $calls = $this->fakeTelegram(
+            invite: fn (array $users) => $this->added($users),
+            list: [2701, 2703],
+        );
+
+        $totals = $this->service->run();
+
+        $this->assertSame([[2703]], $calls->getArrayCopy());
+        $this->assertSame([1, 1, 0], [$totals['invited'], $totals['left'], $totals['stayed']]);
+
+        $rows = TelegramGroupInvite::query()->with('user')->get()->keyBy(fn ($row) => $row->user->telegram_user_id);
+        $this->assertSame(
+            [TelegramGroupInvite::STATUS_INVITED, TelegramGroupInvite::STATUS_LEFT, TelegramGroupInvite::STATUS_INVITED],
+            [$rows[2701]->status, $rows[2702]->status, $rows[2703]->status],
+        );
+        $this->assertTrue($rows[2703]->checked_at->isToday());
+
+        $auto = TelegramGroupInviteLog::query()
+            ->where('event', TelegramGroupInviteLog::EVENT_CHECK)
+            ->orderBy('id')
+            ->get()
+            ->filter(fn ($line) => isset($line->context['auto']))
+            ->map(fn ($line) => [$line->context['auto'], $line->context['left'], $line->context['stayed']])
+            ->values()
+            ->all();
+
+        $this->assertSame([['before', 1, 1], ['after', 0, 2]], $auto);
+
+        /* The overview's last "who left" is the one after the run. */
+        $overview = $this->app->make(GroupInviteController::class)->show()->getData(true);
+        $this->assertSame([0, 2], [$overview['last_left_check']['left'], $overview['last_left_check']['stayed']]);
+    }
+
+    public function test_a_check_run_does_not_read_the_members_lists(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        TelegramGroupInvite::query()->create([
+            'invite_group_id' => $group->id,
+            'scraped_user_id' => $this->person(2801, 'P2801')->id,
+            'telegram_account_id' => 1,
+            'status' => TelegramGroupInvite::STATUS_INVITED,
+            'attempted_at' => now()->subDays(7),
+            'checked_at' => now()->subDays(7),
+        ]);
+
+        $this->fakeTelegram(invite: fn (array $users) => $this->added($users), list: []);
+
+        $totals = $this->service->run(checkOnly: true);
+
+        $this->assertSame(0, $totals['left']);
+        $this->assertSame(TelegramGroupInvite::STATUS_INVITED, TelegramGroupInvite::query()->sole()->status);
+        $this->assertFalse(TelegramGroupInviteLog::query()->where('event', TelegramGroupInviteLog::EVENT_CHECK)->exists());
+    }
+
     public function test_the_analysis_tells_after_how_many_calls_each_kind_of_stop_comes(): void
     {
         foreach ([10, 20, 60] as $calls) {
