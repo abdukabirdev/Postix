@@ -75,6 +75,7 @@ final class ContactSyncController extends Controller
                     'held' => $held->has($account->id),
                     'held_reason' => $held->get($account->id)?->disabled_reason,
                     'held_at' => $held->get($account->id)?->disabled_at,
+                    'held_until' => $held->has($account->id) ? AppApplicationTelegramServicesContactSyncService::restEnd($held->get($account->id))?->toIso8601String() : null,
                     'added' => (int) ($stats->added ?? 0),
                     'failed' => (int) ($stats->failed ?? 0),
                     'skipped' => (int) ($stats->skipped ?? 0),
@@ -97,11 +98,21 @@ final class ContactSyncController extends Controller
          */
         $skipUsernames = (bool) app(\App\Application\Telegram\Services\ContactSyncSettings::class)->current()['skip_usernames'];
 
-        $people = Cache::remember('contact-sync:people-totals:' . (int) $skipUsernames, 30, fn (): array => [
-            'users' => TelegramScrapedUser::query()->forContacts()->count(),
+        /*
+         * Everybody found, the same base the group invites count; the
+         * sync's own groups go first, the other groups after them.
+         */
+        $base = app(\App\Application\Telegram\Services\GroupInviteBase::class);
+
+        $people = Cache::remember('contact-sync:people-totals:v2:' . (int) $skipUsernames, 30, fn (): array => [
+            'users' => $base->people()->count(),
+            'users_own_groups' => $base->people()->forContacts()->count(),
             /* Those with a public @username stay in the database: they wait for nobody. */
-            'unassigned' => TelegramScrapedUser::query()
-                ->where('is_bot', false)
+            'unassigned' => $base->people()
+                ->whereDoesntHave('contact')
+                ->when($skipUsernames, fn ($q) => $q->withoutUsername())
+                ->count(),
+            'unassigned_first' => $base->people()
                 ->forContacts()
                 ->whereDoesntHave('contact')
                 ->when($skipUsernames, fn ($q) => $q->withoutUsername())
@@ -142,9 +153,11 @@ final class ContactSyncController extends Controller
             ] : null,
             'totals' => [
                 'users' => $people['users'],
+                'users_own_groups' => $people['users_own_groups'],
                 'added' => (int) $perAccount->sum('added'),
                 'failed' => (int) $perAccount->sum('failed'),
                 'unassigned' => $people['unassigned'],
+                'unassigned_first' => $people['unassigned_first'],
             ],
             'accounts' => $accounts,
             'groups' => $groups,

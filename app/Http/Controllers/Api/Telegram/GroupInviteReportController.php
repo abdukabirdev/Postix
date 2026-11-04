@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\GroupInviteReport;
+use App\Http\Controllers\Api\Telegram\Concerns\ChecksReportToken;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -21,23 +22,16 @@ use Illuminate\Http\Request;
  */
 final class GroupInviteReportController extends Controller
 {
-    private const MIN_TOKEN = 32;
+    use ChecksReportToken;
 
     public function __invoke(Request $request, GroupInviteReport $report): JsonResponse
     {
-        $token = (string) config('services.telegram.report_token');
-        $given = (string) ($request->bearerToken() ?? $request->header('X-Report-Token', ''));
+        $this->checkReportToken($request);
 
-        abort_if(strlen($token) < self::MIN_TOKEN || ! hash_equals($token, $given), 404);
-
-        $data = $request->validate([
-            'days' => ['nullable', 'integer', 'min:1', 'max:14'],
-            'lines' => ['nullable', 'integer', 'min:0', 'max:1000'],
-            'run_id' => ['nullable', 'string', 'max:36'],
-        ]);
+        $query = $this->reportQuery($request);
 
         return response()->json(
-            $report->build((int) ($data['days'] ?? 3), (int) ($data['lines'] ?? 200), $data['run_id'] ?? null),
+            $report->build($query['days'], $query['lines'], $query['run_id']),
             200,
             [],
             JSON_UNESCAPED_UNICODE,

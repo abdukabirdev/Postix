@@ -17,7 +17,7 @@ const notify = (message, success = true) => {
 };
 
 /** What the form holds; compared as text, the inputs hand back strings. */
-const FIELDS = ['enabled', 'schedule_at', 'daily_limit', 'skip_usernames', 'delay_min', 'delay_max', 'nick_base', 'excluded_accounts'];
+const FIELDS = ['enabled', 'schedule_at', 'daily_limit', 'skip_usernames', 'delay_min', 'delay_max', 'parallel', 'nick_base', 'excluded_accounts'];
 
 export function contactSettingsPage(config) {
     const s = config.translations;
@@ -118,6 +118,7 @@ export function contactSettingsPage(config) {
                     daily_limit: Number(this.form.daily_limit),
                     delay_min: Number(this.form.delay_min),
                     delay_max: Number(this.form.delay_max),
+                    parallel: Number(this.form.parallel),
                 });
 
                 this.apply(json);

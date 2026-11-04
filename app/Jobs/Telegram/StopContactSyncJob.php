@@ -79,20 +79,24 @@ class StopContactSyncJob implements ShouldQueue
         $this->signal($pid, 15);
 
         if (! $this->released($lock, SignalStop::GRACE + 15)) {
-            $worker = isset($now['worker_pid']) ? (int) $now['worker_pid'] : 0;
+            $workers = self::workers($now);
 
-            if ($worker > 0 && $this->isSync($worker)) {
-                $this->signal($worker, 9);
+            foreach ($workers as $worker) {
+                if ($worker['worker_pid'] > 0 && $this->isSync($worker['worker_pid'])) {
+                    $this->signal($worker['worker_pid'], 9);
+                }
             }
 
             $this->signal($pid, 9);
             $this->released($lock, 10);
 
-            /* Killed on a session that hangs: its MadelineProto worker goes too. */
-            $account = isset($now['account_id']) ? TelegramAccount::query()->find((int) $now['account_id']) : null;
+            /* Killed on sessions that hang: their MadelineProto workers go too. */
+            foreach ($workers as $worker) {
+                $account = TelegramAccount::query()->find($worker['account_id']);
 
-            if ($account !== null) {
-                SessionSleep::kill((string) $account->session_path, ['account_id' => $account->id]);
+                if ($account !== null) {
+                    SessionSleep::kill((string) $account->session_path, ['account_id' => $account->id]);
+                }
             }
         }
 
@@ -112,9 +116,9 @@ class StopContactSyncJob implements ShouldQueue
      */
     private function cleanUp(array $now, int $pid): void
     {
-        $accountId = isset($now['account_id']) ? (int) $now['account_id'] : null;
+        $accountIds = array_column(self::workers($now), 'account_id');
 
-        /* A group's "fetch people" may hold an account right now: then only the run's own one is given back. */
+        /* A group's "fetch people" may hold an account right now: then only the run's own ones are given back. */
         $fetching = TelegramScrapeGroup::query()
             ->pluck('id')
             ->contains(fn ($id) => TelegramProcessLock::isHeld(TelegramSyncContactsCommand::membersLock((int) $id)));
@@ -122,7 +126,7 @@ class StopContactSyncJob implements ShouldQueue
         TelegramAccountProcess::query()
             ->where('process', ProcessEnum::ContactSync->value)
             ->where('is_busy', true)
-            ->when($fetching, fn ($q) => $q->where('telegram_account_id', $accountId ?? 0))
+            ->when($fetching, fn ($q) => $q->whereIn('telegram_account_id', $accountIds === [] ? [0] : $accountIds))
             ->update(['is_busy' => false, 'busy_at' => null]);
 
         /* Only the sync takes people for an account: with it gone, whoever is still "taking" is nobody's. */
@@ -155,7 +159,28 @@ class StopContactSyncJob implements ShouldQueue
         TelegramSetting::set(ContactSyncService::NOW_KEY, null);
         TelegramSetting::set(ContactSyncService::STOP_KEY, null);
 
-        Log::warning('Contact sync stop: the stuck run was killed', ['pid' => $pid, 'account_id' => $accountId]);
+        Log::warning('Contact sync stop: the stuck run was killed', ['pid' => $pid, 'accounts' => $accountIds]);
+    }
+
+    /**
+     * The accounts the run held and their workers, as it wrote them down:
+     * several at once, or the one of a run from before that.
+     *
+     * @param array<string, mixed> $now
+     *
+     * @return list<array{account_id: int, worker_pid: int}>
+     */
+    private static function workers(array $now): array
+    {
+        $workers = isset($now['workers']) && is_array($now['workers'])
+            ? $now['workers']
+            : [['account_id' => $now['account_id'] ?? null, 'worker_pid' => $now['worker_pid'] ?? null]];
+
+        return collect($workers)
+            ->filter(fn ($worker) => is_array($worker) && ! empty($worker['account_id']))
+            ->map(fn (array $worker) => ['account_id' => (int) $worker['account_id'], 'worker_pid' => (int) ($worker['worker_pid'] ?? 0)])
+            ->values()
+            ->all();
     }
 
     /** The pid in the lock file is the sync's still, not a process that got the number since. */

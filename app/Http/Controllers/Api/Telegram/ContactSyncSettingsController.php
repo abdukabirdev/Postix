@@ -28,6 +28,7 @@ final class ContactSyncSettingsController extends Controller
     {
         [$limitMin, $limitMax] = ContactSyncSettings::LIMITS['daily_limit'];
         [$delayMin, $delayMax] = ContactSyncSettings::LIMITS['delay_min'];
+        [$parallelMin, $parallelMax] = ContactSyncSettings::LIMITS['parallel'];
 
         $data = $request->validate([
             'enabled' => ['required', 'boolean'],
@@ -36,12 +37,15 @@ final class ContactSyncSettingsController extends Controller
             'skip_usernames' => ['required', 'boolean'],
             'delay_min' => ['required', 'integer', "min:{$delayMin}", "max:{$delayMax}"],
             'delay_max' => ['required', 'integer', "min:{$delayMin}", "max:{$delayMax}", 'gte:delay_min'],
+            /* Not required: a page from before the setting sends none, and the saved one stays. */
+            'parallel' => ['sometimes', 'integer', "min:{$parallelMin}", "max:{$parallelMax}"],
             'nick_base' => ['nullable', 'string', 'max:60'],
             'excluded_accounts' => ['nullable', 'array'],
             'excluded_accounts.*' => ['integer', 'exists:telegram_accounts,id'],
         ]);
 
         $data['nick_base'] = (string) ($data['nick_base'] ?? '');
+        $data['parallel'] ??= $this->settings->current()['parallel'];
         $data['excluded_accounts'] = $data['excluded_accounts'] ?? [];
 
         return response()->json($this->payload($this->settings->save($data)) + [

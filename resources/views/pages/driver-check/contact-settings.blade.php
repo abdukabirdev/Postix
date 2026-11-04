@@ -90,6 +90,10 @@
                             <x-driver-check.field :label="__('driver_check.sync.settings.delay_max')">
                                 <x-driver-check.input type="number" inputmode="numeric" x-model="form.delay_max" ::min="form.delay_min" ::max="limits.delay_min?.[1]" required />
                             </x-driver-check.field>
+
+                            <x-driver-check.field :label="__('driver_check.sync.settings.parallel')" :hint="__('driver_check.sync.settings.parallel_hint')">
+                                <x-driver-check.input type="number" inputmode="numeric" x-model="form.parallel" ::min="limits.parallel?.[0]" ::max="limits.parallel?.[1]" required />
+                            </x-driver-check.field>
                         </section>
 
                         {{-- Who takes part --}}

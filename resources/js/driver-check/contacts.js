@@ -67,7 +67,7 @@ export function contactsPage(config) {
         }),
 
         stats: {
-            people: 0, added: 0, pending: 0, failed: 0, skipped: 0, unassigned: 0, by_link: 0, today: 0,
+            people: 0, people_own_groups: 0, people_other_groups: 0, waiting_first: 0, added: 0, pending: 0, failed: 0, skipped: 0, unassigned: 0, by_link: 0, today: 0,
         },
 
         /** What the group and account filters choose from, sent with the list. */

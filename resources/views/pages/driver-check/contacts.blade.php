@@ -40,6 +40,9 @@
         <section class="grid grid-cols-2 gap-3 xl:grid-cols-4">
             <x-driver-check.stat-card :label="__('driver_check.contacts.stats.people')" icon="users">
                 <span x-text="number(stats.people)">0</span>
+                <x-slot:hint>
+                    <span x-text="@js(__('driver_check.contacts.stats.people_hint')).replace(':own', number(stats.people_own_groups)).replace(':other', number(stats.people_other_groups))"></span>
+                </x-slot:hint>
             </x-driver-check.stat-card>
 
             <x-driver-check.stat-card :label="__('driver_check.contacts.stats.added')" icon="check-circle">
@@ -53,7 +56,8 @@
             <x-driver-check.stat-card :label="__('driver_check.contacts.stats.waiting')" icon="clock">
                 <span x-text="number(waiting())">0</span>
                 <x-slot:hint>
-                    <span x-text="@js(__('driver_check.contacts.stats.waiting_hint')).replace(':failed', number(stats.failed)).replace(':by_link', number(stats.by_link))"></span>
+                    <span class="block" x-text="@js(__('driver_check.contacts.stats.waiting_first_hint')).replace(':first', number(stats.waiting_first))"></span>
+                    <span class="block" x-text="@js(__('driver_check.contacts.stats.waiting_hint')).replace(':failed', number(stats.failed)).replace(':by_link', number(stats.by_link))"></span>
                 </x-slot:hint>
             </x-driver-check.stat-card>
         </section>

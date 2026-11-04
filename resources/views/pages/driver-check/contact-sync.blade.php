@@ -52,7 +52,15 @@
 
                 {{-- Totals --}}
                 <section class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-                    @foreach (['users', 'added', 'failed'] as $key)
+                    {{-- The whole base, as the group invites count it; the sync's own groups go first --}}
+                    <x-driver-check.stat-card :label="__('telegram.contact_sync.totals.users')">
+                        <span x-text="number(status.totals.users)"></span>
+                        <x-slot:hint>
+                            <span x-text="t.totals.users_hint.replace(':own', number(status.totals.users_own_groups ?? 0)).replace(':other', number(Math.max(0, status.totals.users - (status.totals.users_own_groups ?? 0))))"></span>
+                        </x-slot:hint>
+                    </x-driver-check.stat-card>
+
+                    @foreach (['added', 'failed'] as $key)
                         <x-driver-check.stat-card :label="__('telegram.contact_sync.totals.' . $key)">
                             <span x-text="number(status.totals.{{ $key }})"></span>
                         </x-driver-check.stat-card>
@@ -62,7 +70,8 @@
                     <x-driver-check.stat-card :label="__('telegram.contact_sync.totals.unassigned')">
                         <span x-text="number(status.totals.unassigned)"></span>
                         <x-slot:hint>
-                            <span x-text="accountsNeeded()"></span>
+                            <span class="block" x-text="t.totals.unassigned_first.replace(':first', number(status.totals.unassigned_first ?? 0))"></span>
+                            <span class="block" x-text="accountsNeeded()"></span>
                         </x-slot:hint>
                     </x-driver-check.stat-card>
                 </section>

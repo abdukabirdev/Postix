@@ -423,6 +423,305 @@ final class ContactSyncTest extends TestCase
         $this->assertTrue(\App\Models\Telegram\TelegramContactSyncLog::query()->where('run_id', 'run-1')->where('event', 'disabled')->where('telegram_account_id', 1)->exists());
     }
 
+    public function test_an_account_adds_only_people_of_the_pages_it_reads_and_stops_reading_when_its_day_is_full(): void
+    {
+        $this->workerTables();
+
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        /* From an earlier read: gone from the group since, the session would not know them. */
+        $this->invokeService('storeMembers', [$group, [['id' => 600, 'first_name' => 'Gone']], []]);
+
+        $api = $this->fakeApi([
+            ['count' => 3, 'participants' => [['_' => 'channelParticipant', 'user_id' => 601], ['_' => 'channelParticipant', 'user_id' => 602]], 'users' => [['id' => 601, 'first_name' => 'Ali'], ['id' => 602, 'first_name' => 'Vali']]],
+            ['count' => 3, 'participants' => [['_' => 'channelParticipant', 'user_id' => 603]], 'users' => [['id' => 603, 'first_name' => 'Soli']]],
+        ]);
+
+        $config = ['daily_limit' => 2, 'skip_usernames' => false, 'delay_min' => 0, 'delay_max' => 0, 'nick_base' => ''];
+
+        $result = $this->invokeService('runAccount', [$api, $this->account(1), collect([$group]), $config, static function (string $line): void {}]);
+
+        $this->assertSame([601, 602], $api->contacts->added, 'the newest members first, nobody it has not just read');
+        $this->assertSame(2, $result['added']);
+        $this->assertSame([0], $api->channels->offsets, 'its day is full: the rest of the list is not read');
+        $this->assertNull($group->fresh()->last_synced_at, 'read in part: the group is read whole by collect()');
+        $this->assertFalse(TelegramAccountContact::query()->whereHas('user', fn ($q) => $q->where('telegram_user_id', 600))->exists(), 'the one who left is not tried');
+    }
+
+    public function test_once_its_own_groups_have_nobody_left_an_account_takes_the_people_of_the_other_groups(): void
+    {
+        $this->workerTables();
+
+        $own = TelegramScrapeGroup::create(['link' => 'mine', 'last_synced_at' => now()]);
+        $other = TelegramScrapeGroup::create(['link' => 'theirs', 'type' => TelegramScrapeGroup::TYPE_DATABASE]);
+        $empty = TelegramScrapeGroup::create(['link' => 'nobody', 'type' => TelegramScrapeGroup::TYPE_DATABASE]);
+
+        /* Its own group: everybody has an owner. Join group's group: two people wait. */
+        $this->invokeService('storeMembers', [$own, [['id' => 1401, 'first_name' => 'Done']], []]);
+        $this->invokeService('claim', [$this->account(2), TelegramScrapedUser::query()->where('telegram_user_id', 1401)->sole(), false]);
+        $this->invokeService('storeMembers', [$other, [['id' => 1402, 'first_name' => 'Ali'], ['id' => 1403, 'first_name' => 'Vali']], []]);
+
+        $this->assertTrue($this->invokeService('othersWait', [false]));
+
+        $api = $this->fakeApi([
+            ['count' => 2, 'participants' => [['_' => 'channelParticipant', 'user_id' => 1402], ['_' => 'channelParticipant', 'user_id' => 1403]], 'users' => [['id' => 1402, 'first_name' => 'Ali'], ['id' => 1403, 'first_name' => 'Vali']]],
+        ]);
+
+        $config = ['daily_limit' => 5, 'skip_usernames' => false, 'delay_min' => 0, 'delay_max' => 0, 'nick_base' => ''];
+
+        $result = $this->invokeService('runAccount', [$api, $this->account(1), collect([$own->fresh()]), $config, static function (string $line): void {}]);
+
+        $this->assertSame([1402, 1403], $api->contacts->added, 'the other group\'s people, after its own');
+        $this->assertSame(2, $result['added']);
+        $this->assertSame([0], $api->channels->offsets, 'its own group with nobody left is not read; the empty other one neither');
+        $this->assertNull($other->fresh()->last_error);
+    }
+
+    public function test_the_last_page_is_read_to_its_end_and_the_group_marked_read(): void
+    {
+        $this->workerTables();
+
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $api = $this->fakeApi([
+            ['count' => 1, 'participants' => [['_' => 'channelParticipant', 'user_id' => 701]], 'users' => [['id' => 701, 'first_name' => 'Ali']]],
+        ]);
+
+        $config = ['daily_limit' => 1, 'skip_usernames' => false, 'delay_min' => 0, 'delay_max' => 0, 'nick_base' => ''];
+
+        $this->invokeService('runAccount', [$api, $this->account(1), collect([$group]), $config, static function (string $line): void {}]);
+
+        $this->assertSame([701], $api->contacts->added);
+        $this->assertNotNull($group->fresh()->last_synced_at, 'the day filled on the last page: the list was whole');
+        $this->assertSame(1, $group->fresh()->members_count);
+    }
+
+    public function test_who_was_not_on_the_latest_read_of_a_group_does_not_wait_for_an_account(): void
+    {
+        (include database_path('migrations/2026_10_17_100000_create_telegram_account_contacts_state_tables.php'))->up();
+
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $this->travelTo(now()->subDays(3));
+        $this->invokeService('storeMembers', [$group, [['id' => 801, 'first_name' => 'Gone']], []]);
+        $this->travelBack();
+
+        $group->update(['last_synced_at' => now()]);
+
+        $this->assertFalse($this->invokeService('hasUnclaimed', [collect([$group->fresh()]), false]), 'left the group: nobody to wait for');
+
+        $this->invokeService('storeMembers', [$group, [['id' => 801, 'first_name' => 'Back']], []]);
+
+        $this->assertTrue($this->invokeService('hasUnclaimed', [collect([$group->fresh()]), false]), 'on the list again');
+        $this->assertSame(1, DB::table('telegram_scrape_group_user')->count());
+    }
+
+    public function test_a_read_that_shows_no_phone_keeps_the_phone_known(): void
+    {
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+
+        $this->invokeService('storeMembers', [$group, [['id' => 901, 'first_name' => 'Ali', 'phone' => '998901112233']], []]);
+        $this->invokeService('storeMembers', [$group, [['id' => 901, 'first_name' => 'Alijon']], []]);
+
+        $user = TelegramScrapedUser::query()->sole();
+
+        $this->assertSame('998901112233', $user->phone);
+        $this->assertSame('Alijon', $user->first_name);
+    }
+
+    public function test_a_flood_wait_is_a_rest_that_ends_by_itself_and_a_dead_session_is_not(): void
+    {
+        $this->workerTables();
+
+        /* A dead session is marked on the account too. */
+        Schema::table('telegram_accounts', function (Blueprint $table) {
+            $table->boolean('is_authorized')->default(true);
+            $table->string('status')->nullable();
+            $table->timestamp('last_checked_at')->nullable();
+            $table->string('last_error', 500)->nullable();
+        });
+
+        $service = $this->app->make(ContactSyncService::class);
+        $hold = new ReflectionMethod($service, 'hold');
+
+        $hold->invoke($service, $this->account(1), new FloodWaitError('FLOOD_WAIT_120', 120, 420, 'contacts.addContact'));
+        $hold->invoke($service, $this->account(2), new \RuntimeException('AUTH_KEY_UNREGISTERED'));
+
+        $flooded = $this->state(1);
+        $dead = $this->state(2);
+
+        $this->assertFalse((bool) $flooded->is_available);
+        $this->assertEqualsWithDelta(now()->addSeconds(120 + 300)->getTimestamp(), ContactSyncService::restEnd($flooded)->getTimestamp(), 5, 'the wait Telegram asked for and a margin');
+        $this->assertNull(ContactSyncService::restEnd($dead), 'held until somebody enables it');
+
+        (new ReflectionMethod($service, 'endRests'))->invoke($service);
+        $this->assertFalse((bool) $this->state(1)->is_available, 'not over yet');
+
+        $this->travel(10)->minutes();
+
+        (new ReflectionMethod($service, 'endRests'))->invoke($service);
+
+        $this->assertTrue((bool) $this->state(1)->is_available, 'rested: back in the sync');
+        $this->assertFalse((bool) $this->state(2)->is_available);
+        $this->assertTrue(\App\Models\Telegram\TelegramContactSyncLog::query()->where('event', 'back')->exists());
+    }
+
+    public function test_a_hold_from_before_the_rests_ends_by_its_reason(): void
+    {
+        $this->workerTables();
+
+        foreach ([1 => ContactSyncService::FAILURES, 2 => 'PHONE_NUMBER_BANNED'] as $id => $reason) {
+            \App\Models\Telegram\TelegramAccountProcess::query()->create([
+                'telegram_account_id' => $id,
+                'process' => 'contact_sync',
+                'is_available' => false,
+                'disabled_at' => now()->subHours(ContactSyncService::REST_HOURS + 1),
+                'disabled_reason' => $reason,
+            ]);
+        }
+
+        $service = $this->app->make(ContactSyncService::class);
+        (new ReflectionMethod($service, 'endRests'))->invoke($service);
+
+        $this->assertTrue((bool) $this->state(1)->is_available, 'a streak of refusals a day ago: back');
+        $this->assertFalse((bool) $this->state(2)->is_available, 'a banned number: not by itself');
+    }
+
+    public function test_a_session_that_hangs_rests_once_and_is_held_the_second_time(): void
+    {
+        $this->workerTables();
+
+        $service = $this->app->make(ContactSyncService::class);
+        $stuck = new ReflectionMethod($service, 'stuck');
+        $say = static function (string $line): void {};
+
+        $stuck->invoke($service, $this->account(1), $say);
+        $this->assertNotNull(ContactSyncService::restEnd($this->state(1)), 'the first time: a rest');
+
+        $this->travel(ContactSyncService::REST_HOURS + 1)->hours();
+        (new ReflectionMethod($service, 'endRests'))->invoke($service);
+        $this->assertTrue((bool) $this->state(1)->is_available);
+
+        $stuck->invoke($service, $this->account(1), $say);
+        $this->assertFalse((bool) $this->state(1)->is_available);
+        $this->assertNull(ContactSyncService::restEnd($this->state(1)), 'again within days: held until enabled');
+    }
+
+    public function test_a_run_frees_the_accounts_a_process_that_died_left_busy(): void
+    {
+        $this->workerTables();
+
+        \App\Models\Telegram\TelegramAccountProcess::query()->create(['telegram_account_id' => 1, 'process' => 'contact_sync', 'is_busy' => true, 'busy_at' => now()->subDay()]);
+        \App\Models\Telegram\TelegramAccountProcess::query()->create(['telegram_account_id' => 2, 'process' => 'group_invite', 'is_busy' => true, 'busy_at' => now()]);
+
+        $person = TelegramScrapedUser::create(['telegram_user_id' => 1201]);
+        $this->invokeService('claim', [$this->account(1), $person, false]);
+
+        $service = $this->app->make(ContactSyncService::class);
+        (new ReflectionMethod($service, 'releaseStuck'))->invoke($service);
+
+        $this->assertFalse((bool) $this->state(1)->is_busy);
+        $this->assertSame(0, TelegramAccountContact::query()->count(), 'the person it was taking is nobody\'s again');
+        $this->assertTrue((bool) \App\Models\Telegram\TelegramAccountProcess::query()->where('telegram_account_id', 2)->value('is_busy'), 'another process\'s own is not touched');
+
+        $this->assertSame([2], (new ReflectionMethod($service, 'busyElsewhere'))->invoke($service), 'and the sync does not take it while it is open there');
+    }
+
+    public function test_the_run_follows_workers_running_at_once(): void
+    {
+        $this->workerTables();
+
+        $service = $this->app->make(ContactSyncService::class);
+        (new \ReflectionProperty($service, 'runId'))->setValue($service, 'run-1');
+
+        $start = static function (int $accountId, string $script) use ($service): void {
+            $process = new \Symfony\Component\Process\Process([PHP_BINARY, '-r', $script]);
+            $process->start();
+
+            $workers = (new \ReflectionProperty($service, 'workers'))->getValue($service);
+            $workers[$accountId] = ['process' => $process, 'account' => \App\Models\Telegram\TelegramAccount::query()->findOrFail($accountId), 'output' => '', 'buffer' => ''];
+            (new \ReflectionProperty($service, 'workers'))->setValue($service, $workers);
+        };
+
+        $result = ['added' => 2, 'failed' => 0, 'members' => 5, 'new' => 1, 'read' => [7], 'queue' => [8]];
+
+        /* A PHP string literal of the text, newlines and quotes escaped: one line on any command line. */
+        $literal = static fn (string $text): string => '"' . addcslashes($text, "\0..\37\"\\\$") . '"';
+
+        $start(1, 'echo ' . $literal("  added 11\n  add") . '; usleep(100000); echo ' . $literal("ed 12\n" . ContactSyncService::RESULT_MARK . json_encode($result) . "\n") . ';');
+        $start(2, 'echo ' . $literal("  added 21\n") . '; exit(1);');
+
+        $lines = [];
+        $ended = [];
+        $say = function (string $line) use (&$lines): void {
+            $lines[] = $line;
+        };
+
+        for ($i = 0; $i < 100 && count($ended) < 2; $i++) {
+            usleep(100_000);
+            $ended = [...$ended, ...(new ReflectionMethod($service, 'poll'))->invoke($service, $say)];
+        }
+
+        $this->assertCount(2, $ended);
+        $this->assertContains($result, $ended, 'what a worker did, read from its last line');
+        $this->assertContains(null, $ended, 'one that died without a result');
+        $this->assertContains('#1   added 12', $lines, 'a line cut in two comes out whole, with its account');
+        $this->assertContains('#2   added 21', $lines);
+        $this->assertSame([], (new \ReflectionProperty($service, 'workers'))->getValue($service));
+    }
+
+    public function test_the_developer_report_answers_only_to_its_token_and_shows_holds_and_rests(): void
+    {
+        $this->workerTables();
+
+        Schema::table('telegram_accounts', function (Blueprint $table) {
+            $table->boolean('is_authorized')->default(true);
+            $table->string('status')->nullable();
+            $table->string('session_path')->nullable();
+        });
+
+        $url = '/api/telegram/report/contact-sync';
+        $token = str_repeat('b2', 20);
+
+        $group = TelegramScrapeGroup::create(['link' => 'drivers']);
+        $this->invokeService('storeMembers', [$group, [['id' => 1301, 'first_name' => 'Ali']], []]);
+        $this->invokeService('claim', [$this->account(1), TelegramScrapedUser::query()->sole(), false]);
+        $this->invokeService('finishClaim', [$this->account(1), TelegramScrapedUser::query()->sole(), TelegramAccountContact::STATUS_ADDED]);
+
+        (new ReflectionMethod($service = $this->app->make(ContactSyncService::class), 'hold'))
+            ->invoke($service, $this->account(2), new FloodWaitError('FLOOD_WAIT_600', 600, 420, 'contacts.addContact'));
+
+        config(['services.telegram.report_token' => null]);
+        $this->getJson($url, ['Authorization' => "Bearer {$token}"])->assertNotFound();
+
+        config(['services.telegram.report_token' => $token]);
+        $this->getJson($url, ['Authorization' => 'Bearer ' . strrev($token)])->assertNotFound();
+
+        $response = $this->getJson("{$url}?days=2&lines=20", ['Authorization' => "Bearer {$token}"])->assertOk();
+
+        $this->assertStringNotContainsString('998900000001', $response->getContent());
+
+        $accounts = collect($response->json('accounts'))->keyBy('id');
+        $this->assertSame([1, 1], [$accounts[1]['added'], $accounts[1]['added_today']]);
+        $this->assertSame('FLOOD_WAIT_600', $accounts[2]['sync_state']['disabled_reason']);
+        $this->assertNotNull($accounts[2]['sync_state']['rest_until'], 'resting till a time, not for good');
+        $this->assertSame(1, $response->json('days.' . now()->format('Y-m-d') . '.added'));
+        $this->assertSame(1, $response->json('holds')['flood: FLOOD_WAIT_N'] ?? null);
+        $this->assertSame('drivers', $response->json('groups.0.link'));
+    }
+
+    public function test_the_stop_job_reads_every_worker_of_a_run(): void
+    {
+        $workers = new ReflectionMethod(\App\Jobs\Telegram\StopContactSyncJob::class, 'workers');
+
+        $this->assertSame(
+            [['account_id' => 3, 'worker_pid' => 30], ['account_id' => 4, 'worker_pid' => 40]],
+            $workers->invoke(null, ['workers' => [['account_id' => 3, 'worker_pid' => 30], ['account_id' => 4, 'worker_pid' => 40]]]),
+        );
+        $this->assertSame([['account_id' => 5, 'worker_pid' => 50]], $workers->invoke(null, ['account_id' => 5, 'worker_pid' => 50]), 'a run of one account at a time');
+        $this->assertSame([], $workers->invoke(null, ['account_id' => null]));
+    }
+
     public function test_links_are_normalised(): void
     {
         foreach (['https://t.me/taxi_group', 't.me/taxi_group', '@taxi_group', ' taxi_group '] as $input) {
@@ -464,6 +763,11 @@ final class ContactSyncTest extends TestCase
             'delay_min' => 0,
             'delay_max' => 0,
         ]);
+    }
+
+    private function state(int $accountId): \App\Models\Telegram\TelegramAccountProcess
+    {
+        return \App\Models\Telegram\TelegramAccountProcess::query()->where('telegram_account_id', $accountId)->where('process', 'contact_sync')->sole();
     }
 
     private function account(int $id): \App\Models\Telegram\TelegramAccount

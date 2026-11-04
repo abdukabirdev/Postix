@@ -96,7 +96,7 @@ final class ContactCatalogTest extends TestCase
         $all = $this->catalog();
 
         $this->assertSame(2, $all['meta']['total'], 'bots are left out unless asked for');
-        $this->assertSame(['people' => 2, 'added' => 1, 'pending' => 0, 'failed' => 0, 'skipped' => 0, 'unassigned' => 0, 'by_link' => 1, 'today' => 1], $all['stats']);
+        $this->assertSame(['people' => 2, 'people_own_groups' => 2, 'people_other_groups' => 0, 'waiting_first' => 0, 'added' => 1, 'pending' => 0, 'failed' => 0, 'skipped' => 0, 'unassigned' => 0, 'by_link' => 1, 'today' => 1], $all['stats']);
 
         $row = collect($all['data'])->firstWhere('telegram_user_id', 10);
         $this->assertSame('added', $row['status']);

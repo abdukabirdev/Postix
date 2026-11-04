@@ -1500,6 +1500,8 @@ return [
             'failed' => 'Xato bilan',
             'unassigned' => 'Hali akkauntsiz',
             'accounts_needed' => 'bir kunda: :n ta akkaunt, :limit tadan',
+            'users_hint' => '«Kontaktlar uchun» guruhlaridan: :own · boshqa guruhlardan: :other',
+            'unassigned_first' => 'avval «Kontaktlar uchun» guruhlari: :first, keyin boshqalari',
         ],
         'groups' => [
             'title' => 'Guruhlar',
@@ -1551,6 +1553,8 @@ return [
             'joined' => 'Qo\'shildi',
             'disabled' => 'O\'chirilgan',
             'stop' => '«To\'xtatish» bosildi',
+            'released' => '«Band» olib tashlandi',
+            'back' => 'Dam olib qaytdi',
         ],
         'messages' => [
             'already_running' => 'Sinxronizatsiya allaqachon ketmoqda.',

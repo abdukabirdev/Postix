@@ -68,7 +68,7 @@ final class ContactSyncRunsTest extends TestCase
         config()->set('services.telegram.contact_sync', ['daily_limit' => 40, 'delay_min' => 1, 'delay_max' => 2, 'schedule_at' => '04:10']);
 
         $this->assertSame(
-            ['enabled' => true, 'schedule_at' => '04:10', 'daily_limit' => 40, 'skip_usernames' => true, 'delay_min' => 1, 'delay_max' => 2, 'nick_base' => '', 'excluded_accounts' => []],
+            ['enabled' => true, 'schedule_at' => '04:10', 'daily_limit' => 40, 'skip_usernames' => true, 'delay_min' => 1, 'delay_max' => 2, 'parallel' => 3, 'nick_base' => '', 'excluded_accounts' => []],
             $this->settings()->current(),
         );
         $this->assertFalse($this->settings()->isSaved());

@@ -1512,6 +1512,8 @@ return [
             'failed' => 'Failed',
             'unassigned' => 'Not assigned yet',
             'accounts_needed' => 'in one day: :n accounts at :limit each',
+            'users_hint' => 'from the «For contacts» groups: :own · from the other groups: :other',
+            'unassigned_first' => 'the «For contacts» groups first: :first, then the others',
         ],
         'groups' => [
             'title' => 'Groups',
@@ -1563,6 +1565,8 @@ return [
             'joined' => 'Joined',
             'disabled' => 'Disabled',
             'stop' => 'Stop pressed',
+            'released' => 'Freed «busy»',
+            'back' => 'Back after rest',
         ],
         'messages' => [
             'already_running' => 'A sync is already running.',

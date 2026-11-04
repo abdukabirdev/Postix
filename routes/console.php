@@ -19,7 +19,8 @@ Schedule::command('telegram:sync-contacts --trigger=schedule')
     ->everyMinute()
     ->when(fn () => app(\App\Application\Telegram\Services\ContactSyncSettings::class)->dueNow())
     ->runInBackground()
-    ->withoutOverlapping();
+    /* An hour, not the default day: the command's own lock keeps one run at a time, and a mutex left by a reboot would skip the next day's run. */
+    ->withoutOverlapping(60);
 
 // The accounts invite their own contacts into the groups of the panel.
 // The time, the batch and the daily cap live there; the scheduler only asks

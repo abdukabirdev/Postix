@@ -106,7 +106,7 @@
                                             </div>
                                             <p x-show="account.is_primary" x-cloak class="mt-1 max-w-xs text-[11.5px] leading-snug text-gray-400" x-text="t.listener_hint"></p>
                                             <div x-show="account.held" x-cloak class="mt-1 flex items-center gap-2 text-[11.5px] text-error-600 dark:text-error-400">
-                                                <span class="dc-break" x-text="t.held_reason + ': ' + (account.held_reason || dash)"></span>
+                                                <span class="dc-break" x-text="t.held_reason + ': ' + (account.held_reason || dash) + (account.held_until ? ' · ' + t.held_until.replace(':time', date(account.held_until)) : '')"></span>
                                                 <button type="button" class="font-medium underline" x-on:click="enable(account)" :disabled="locked" x-text="t.enable"></button>
                                             </div>
                                         </td>

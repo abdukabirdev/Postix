@@ -12,7 +12,7 @@
 */
 
 import { requestJson } from './monitoring';
-import { EM_DASH, formatNumber, formatPhone, formatRelative } from './format';
+import { EM_DASH, formatDate, formatNumber, formatPhone, formatRelative } from './format';
 
 const POLL_MS = 4000;
 
@@ -207,6 +207,8 @@ export function contactAccountsPage(config) {
 
         number: formatNumber,
         relative: formatRelative,
+
+        date: formatDate,
         phone: formatPhone,
     };
 }

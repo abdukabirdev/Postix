@@ -65,6 +65,8 @@ final class ContactAccountsController extends Controller
                     'excluded' => in_array($account->id, $excluded, true),
                     'held' => $held->has($account->id),
                     'held_reason' => $held->get($account->id)?->disabled_reason,
+                    /* A rest ends by itself; null: held until enabled here. */
+                    'held_until' => $held->has($account->id) ? AppApplicationTelegramServicesContactSyncService::restEnd($held->get($account->id))?->toIso8601String() : null,
                     'in_database' => $inDatabase,
                     'in_account' => $inAccount,
                     'agree' => match (true) {

@@ -24,10 +24,12 @@ final class ContactSyncSettings
         'daily_limit' => [1, 1000],
         'delay_min' => [0, 300],
         'delay_max' => [0, 300],
+        /* Accounts adding at once, each at its own pace. */
+        'parallel' => [1, 10],
     ];
 
     /**
-     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, parallel: int, nick_base: string, excluded_accounts: list<int>}
      */
     public function defaults(): array
     {
@@ -41,6 +43,7 @@ final class ContactSyncSettings
             'skip_usernames' => true,
             'delay_min' => (int) ($config['delay_min'] ?? 3),
             'delay_max' => (int) ($config['delay_max'] ?? 5),
+            'parallel' => (int) ($config['parallel'] ?? 3),
             'nick_base' => '',
             /* The Driver Check account out of the box; see excluded(). */
             'excluded_accounts' => self::listenerIds(),
@@ -51,7 +54,7 @@ final class ContactSyncSettings
      * The saved values over the defaults, each one made safe again: a hand
      * edited row must not be able to start a run with a negative limit.
      *
-     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, parallel: int, nick_base: string, excluded_accounts: list<int>}
      */
     public function current(): array
     {
@@ -108,7 +111,7 @@ final class ContactSyncSettings
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, nick_base: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, daily_limit: int, skip_usernames: bool, delay_min: int, delay_max: int, parallel: int, nick_base: string, excluded_accounts: list<int>}
      */
     private function normalise(array $input): array
     {

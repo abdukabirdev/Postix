@@ -353,7 +353,7 @@ final class GroupJoinTest extends TestCase
         $this->assertTrue($this->invokeService('take', [TelegramScrapeGroup::class, $group->id]));
     }
 
-    public function test_the_people_land_in_the_shared_tables_and_stay_out_of_the_contacts_pages(): void
+    public function test_the_people_land_in_the_shared_tables_and_count_on_the_contacts_pages_apart(): void
     {
         $first = $this->group('first');
         $second = $this->group('second');
@@ -388,7 +388,8 @@ final class GroupJoinTest extends TestCase
 
         $totals = $this->app->make(ContactSyncController::class)->show()->getData(true)['data'];
 
-        $this->assertSame(1, $totals['totals']['users']);
+        /* Everybody found counts (the bot aside), as on the group invites' page (2026-11-04); the sync's own groups' people apart. Its groups list stays its own. */
+        $this->assertSame([2, 1], [$totals['totals']['users'], $totals['totals']['users_own_groups']]);
         $this->assertSame(['contacts_group'], array_column($totals['groups'], 'link'));
     }
 

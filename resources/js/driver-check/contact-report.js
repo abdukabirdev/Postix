@@ -49,6 +49,8 @@ const EVENT_TONES = {
     failed: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
     flood: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
     stop: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
+    released: 'bg-warning-50 text-warning-700 dark:bg-warning-500/10 dark:text-warning-400',
+    back: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
     finished: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
 };
 

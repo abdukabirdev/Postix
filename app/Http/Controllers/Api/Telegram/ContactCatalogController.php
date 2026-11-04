@@ -221,22 +221,36 @@ final class ContactCatalogController extends Controller
             ->groupBy('status')
             ->pluck('total', 'status');
 
-        /* The contact sync's people: the table is shared with Join group, whose people are left out. */
-        $people = (int) Cache::remember('contact-catalog:people', 30, fn () => TelegramScrapedUser::query()
-            ->where('is_bot', false)
-            ->forContacts()
-            ->count());
+        /*
+         * Everybody found, in whatever group - the same base the group
+         * invites count (2026-11-04: the two pages said 77k and 197k). The
+         * sync saves the people of its own groups first, the rest after.
+         */
+        $base = app(\App\Application\Telegram\Services\GroupInviteBase::class);
+
+        [$people, $ownGroups] = Cache::remember('contact-catalog:people:v2', 30, fn () => [
+            $base->people()->count(),
+            $base->people()->forContacts()->count(),
+        ]);
         $held = (int) $byStatus->sum();
 
-        $linked = $byLink ? (int) Cache::remember('contact-catalog:by-link', 30, fn () => TelegramScrapedUser::query()
-            ->where('is_bot', false)
-            ->forContacts()
+        $linked = $byLink ? (int) Cache::remember('contact-catalog:by-link:v2', 30, fn () => $base->people()
             ->whereDoesntHave('contact')
             ->withUsername()
             ->count()) : 0;
 
+        /* Who waits in the sync's own groups: they go first. */
+        $waitingFirst = (int) Cache::remember('contact-catalog:waiting-first:' . (int) $byLink, 30, fn () => $base->people()
+            ->forContacts()
+            ->whereDoesntHave('contact')
+            ->when($byLink, fn ($q) => $q->withoutUsername())
+            ->count());
+
         return [
-            'people' => $people,
+            'people' => (int) $people,
+            'people_own_groups' => (int) $ownGroups,
+            'people_other_groups' => max(0, (int) $people - (int) $ownGroups),
+            'waiting_first' => $waitingFirst,
             'added' => (int) ($byStatus[TelegramAccountContact::STATUS_ADDED] ?? 0),
             'pending' => (int) ($byStatus[TelegramAccountContact::STATUS_PENDING] ?? 0),
             'failed' => (int) ($byStatus[TelegramAccountContact::STATUS_FAILED] ?? 0),
