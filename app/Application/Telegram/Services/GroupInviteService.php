@@ -293,6 +293,9 @@ final class GroupInviteService
     /** @var list<int>|null our own accounts' Telegram ids: never invited */
     private ?array $ownIds = null;
 
+    /** @var list<int>|null accounts that may still invite: whoever one of them added waits for it */
+    private ?array $inviters = null;
+
     /** @var array<int, string> groups whose members this run cannot look up, with why */
     private array $blind = [];
 
@@ -353,6 +356,7 @@ final class GroupInviteService
         $this->denied = [];
         $this->invitedInto = [];
         $this->ownIds = null;
+        $this->inviters = null;
         $this->blind = [];
         $this->touched = [];
         $this->counted = [];
@@ -753,7 +757,10 @@ final class GroupInviteService
     /**
      * People this account can still invite into this group: in its contacts,
      * not a bot, not refusing everybody, not already tried for the group.
-     * Those already added into some group first.
+     * Those it added into some group itself first, then the other proven,
+     * then the rest - when its proven are done it goes on with the rest of
+     * its contacts. Whoever another account that may still invite added is
+     * that account's (see mine()).
      *
      * @return Collection<int, TelegramScrapedUser>
      */
@@ -771,31 +778,113 @@ final class GroupInviteService
                     ->select('scraped_user_id'),
             );
 
-        return $this->untried($group)
-            ->whereIn('id', $ids)
-            ->orderByDesc('can_add_to_group')
-            ->orderBy('id')
-            ->limit(max(1, $limit))
-            ->get();
+        return $this->ownFirst(
+            $this->untried($group)->whereIn('id', $ids),
+            $account,
+            $limit,
+            fn (Builder $q) => $q->orderByDesc('can_add_to_group')->orderBy('id'),
+        );
     }
 
     /**
-     * People of the common base with a public @username, for any account
-     * whose own contacts have run out. Those already added somewhere first,
-     * then the newest: their names are the likeliest to still be theirs.
+     * People of the common base with a public @username, for an account
+     * whose own contacts have run out. Those it added itself first, then
+     * the other proven, then the newest: their names are the likeliest to
+     * still be theirs.
      *
      * @return Collection<int, TelegramScrapedUser>
      */
-    public function usernameCandidates(TelegramInviteGroup $group, int $limit): Collection
+    public function usernameCandidates(TelegramAccount $account, TelegramInviteGroup $group, int $limit): Collection
     {
         $this->releaseStale($group);
 
-        return $this->untried($group)
-            ->withUsername()
-            ->orderByDesc('can_add_to_group')
-            ->orderByDesc('id')
-            ->limit(max(1, $limit))
+        return $this->ownFirst(
+            $this->untried($group)->withUsername(),
+            $account,
+            $limit,
+            fn (Builder $q) => $q->orderByDesc('can_add_to_group')->orderByDesc('id'),
+        );
+    }
+
+    /**
+     * A person added before is invited again by the account that added
+     * them (the owner, 2026-11-04): Telegram has let that one add them, a
+     * privacy "who may add me" may well stop another, and a refusal marks
+     * the person as one nobody can add. So whoever another account added
+     * waits for it - unless that account can no longer invite (logged out,
+     * excluded, taken out of the invites, a listener), then they are
+     * anybody's. A rest or a busy session ends: they wait.
+     *
+     * Those this account added itself first, then $order over the rest
+     * (the other proven, then everybody else). Two plain queries, not one
+     * sorted by a subquery: the base is large and $order walks an index.
+     *
+     * @param Builder<TelegramScrapedUser>                                   $query
+     * @param \Closure(Builder<TelegramScrapedUser>): Builder<TelegramScrapedUser> $order
+     *
+     * @return Collection<int, TelegramScrapedUser>
+     */
+    private function ownFirst(Builder $query, TelegramAccount $account, int $limit, \Closure $order): Collection
+    {
+        $limit = max(1, $limit);
+
+        $own = $order((clone $query)->whereIn('id', TelegramGroupInvite::query()
+            ->where('telegram_account_id', $account->id)
+            ->whereIn('status', TelegramGroupInvite::ADDED)
+            ->select('scraped_user_id')))
+            ->limit($limit)
             ->get();
+
+        if ($own->count() >= $limit) {
+            return $own;
+        }
+
+        $others = array_values(array_diff($this->inviters(), [$account->id]));
+
+        $rest = $order($query)
+            ->when($own->isNotEmpty(), fn ($q) => $q->whereNotIn('id', $own->modelKeys()))
+            ->when($others !== [], fn ($q) => $q->whereNotExists(fn ($sub) => $sub->selectRaw('1')
+                ->from('telegram_group_invites as gi')
+                ->whereColumn('gi.scraped_user_id', 'telegram_scraped_users.id')
+                ->whereIn('gi.status', TelegramGroupInvite::ADDED)
+                ->whereIn('gi.telegram_account_id', $others)))
+            ->limit($limit - $own->count())
+            ->get();
+
+        return $own->concat($rest)->values();
+    }
+
+    /**
+     * Accounts that may still invite: those the pool gives the invites
+     * (authorized, with a session, not a listener nor the Driver Check
+     * account, not held by the group join, not excluded, not taken out of
+     * the invites), resting or busy right now or not.
+     *
+     * @return list<int>
+     */
+    private function inviters(): array
+    {
+        if ($this->inviters !== null) {
+            return $this->inviters;
+        }
+
+        $primary = config('services.telegram.driver_check_account_id');
+
+        return $this->inviters = TelegramAccount::query()
+            ->where('is_authorized', true)
+            ->whereNotNull('session_path')
+            ->where('session_path', '!=', '')
+            ->whereNotIn('id', ListenerAccounts::rowIds())
+            ->whereNotIn('id', GroupJoinSettings::dedicatedIds())
+            ->when($primary !== null && $primary !== '', fn ($q) => $q->where('id', '!=', (int) $primary))
+            ->whereNotIn('id', array_map('intval', (array) $this->settings->current()['excluded_accounts']))
+            ->whereNotIn('id', TelegramAccountProcess::query()
+                ->where('process', ProcessEnum::GroupInvite->value)
+                ->where('is_available', false)
+                ->select('telegram_account_id'))
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
     }
 
     /**
@@ -1182,7 +1271,7 @@ final class GroupInviteService
             $claimed = $this->claim(
                 $account,
                 $group,
-                $this->usernameCandidates($group, min($size, $left)),
+                $this->usernameCandidates($account, $group, min($size, $left)),
                 (string) Str::uuid(),
                 TelegramGroupInvite::VIA_USERNAME,
             );
@@ -2410,7 +2499,7 @@ final class GroupInviteService
         }
 
         return $this->usernamesLeft($account, $config) > 0
-            && $open->contains(fn (TelegramInviteGroup $group) => $this->usernameCandidates($group, 1)->isNotEmpty());
+            && $open->contains(fn (TelegramInviteGroup $group) => $this->usernameCandidates($account, $group, 1)->isNotEmpty());
     }
 
     /**
@@ -2987,6 +3076,9 @@ final class GroupInviteService
             }
 
             $this->pool->disable($account, ProcessEnum::GroupInvite, mb_substr($code, 0, 500));
+
+            /* Whoever it added no longer waits for it. */
+            $this->inviters = null;
 
             $this->log('disabled', $code, $account->id, $groupId, [
                 'kind' => self::KIND_DEAD,

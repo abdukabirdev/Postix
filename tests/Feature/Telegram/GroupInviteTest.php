@@ -236,7 +236,7 @@ final class GroupInviteTest extends TestCase
             'attempted_at' => now(),
         ]);
 
-        $this->assertSame([402, 401], $this->service->usernameCandidates($group, 20)->pluck('telegram_user_id')->all());
+        $this->assertSame([402, 401], $this->service->usernameCandidates($account, $group, 20)->pluck('telegram_user_id')->all());
 
         $batch = (string) Str::uuid();
         $this->service->claim($account, $group, collect([$older, $newer]), $batch, TelegramGroupInvite::VIA_USERNAME);
@@ -1243,6 +1243,82 @@ final class GroupInviteTest extends TestCase
         $this->service->run();
 
         $this->assertSame([[2202]], $calls->getArrayCopy());
+    }
+
+    public function test_whoever_an_account_added_before_is_invited_again_by_it_and_its_other_contacts_follow(): void
+    {
+        $old = TelegramInviteGroup::query()->create(['link' => 'old', 'is_active' => false]);
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        [$one, $two] = [TelegramAccount::query()->find(1), TelegramAccount::query()->find(2)];
+
+        $added = function (TelegramScrapedUser $person, int $account, string $status = TelegramGroupInvite::STATUS_LEFT) use ($old): void {
+            TelegramGroupInvite::query()->create([
+                'invite_group_id' => $old->id,
+                'scraped_user_id' => $person->id,
+                'telegram_account_id' => $account,
+                'status' => $status,
+                'attempted_at' => now()->subDay(),
+            ]);
+            $person->update(['can_add_to_group' => true]);
+        };
+
+        /* Account 1's contacts: one it added, one account 2 added (by @username), one nobody added yet. */
+        $this->hold(1, $own = $this->person(2501, 'Own'));
+        $this->hold(1, $theirs = $this->person(2502, 'Theirs', false, 'theirs'));
+        $this->hold(1, $this->person(2503, 'Fresh'));
+        $added($own, 1);
+        $added($theirs, 2, TelegramGroupInvite::STATUS_INVITED);
+
+        /* Its own proven first, then the rest of its contacts; account 2's person waits for account 2. */
+        $this->assertSame([2501, 2503], $this->service->candidates($one, $group, 10)->pluck('telegram_user_id')->all());
+        $this->assertSame([2502], $this->service->usernameCandidates($two, $group, 10)->pluck('telegram_user_id')->all());
+        $this->assertSame([], $this->service->usernameCandidates($one, $group, 10)->pluck('telegram_user_id')->all());
+
+        /* Account 2 is taken out of the invites (its session died): its people are anybody's. */
+        TelegramAccountProcess::query()->create([
+            'telegram_account_id' => 2,
+            'process' => ProcessEnum::GroupInvite->value,
+            'is_available' => false,
+            'disabled_reason' => 'AUTH_KEY_UNREGISTERED',
+        ]);
+        $this->service->run(checkOnly: true);
+
+        $this->assertSame([2501, 2502, 2503], $this->service->candidates($one, $group, 10)->pluck('telegram_user_id')->all());
+    }
+
+    public function test_proven_is_only_whom_our_call_added(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $row = fn (TelegramScrapedUser $person, string $status) => TelegramGroupInvite::query()->create([
+            'invite_group_id' => $group->id,
+            'scraped_user_id' => $person->id,
+            'telegram_account_id' => 1,
+            'status' => $status,
+            'attempted_at' => now(),
+        ]);
+
+        $added = $this->person(2601, 'Added');
+        $left = $this->person(2602, 'Left');
+        $notAdded = $this->person(2603, 'NotAdded');
+        $already = $this->person(2604, 'Already');
+        $noRow = $this->person(2605, 'NoRow');
+        $refused = $this->person(2606, 'Refused');
+
+        foreach ([$added, $left, $notAdded, $already, $noRow] as $person) {
+            $person->update(['can_add_to_group' => true]);
+        }
+        $refused->update(['can_add_to_group' => false, 'add_to_group_error' => 'USER_PRIVACY_RESTRICTED']);
+
+        $row($added, TelegramGroupInvite::STATUS_INVITED);
+        $row($left, TelegramGroupInvite::STATUS_LEFT);
+        $row($notAdded, TelegramGroupInvite::STATUS_NOT_ADDED);
+        $row($already, TelegramGroupInvite::STATUS_ALREADY);
+        $row($refused, TelegramGroupInvite::STATUS_FAILED);
+
+        (include database_path('migrations/2026_11_04_100000_proven_only_if_added_telegram_group_invites.php'))->up();
+
+        $flags = TelegramScrapedUser::query()->orderBy('telegram_user_id')->pluck('can_add_to_group', 'telegram_user_id')->all();
+        $this->assertSame([2601 => true, 2602 => true, 2603 => null, 2604 => null, 2605 => null, 2606 => false], $flags);
     }
 
     public function test_the_base_tells_who_can_who_cannot_who_was_tried_and_who_not_yet(): void
