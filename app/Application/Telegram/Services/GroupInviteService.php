@@ -217,13 +217,6 @@ final class GroupInviteService
     /** A clean day raises a lowered cap by this, one call at least. */
     private const CAP_GROWTH = 1.25;
 
-    /**
-     * Batches in a row where nobody was added and people were left out
-     * without a word: the account rests until the next run, the second
-     * time in a day until tomorrow.
-     */
-    private const MAX_EMPTY_BATCHES = 5;
-
     /** How long an account that asked to join waits for our bot to approve it, seconds. */
     private const BOT_APPROVAL_WAIT = 90;
 
@@ -412,6 +405,15 @@ final class GroupInviteService
             'excluded_accounts' => $config['excluded_accounts'],
         ]);
 
+        $this->releaseStuck();
+
+        if (($back = $this->endEmptyRests()) !== []) {
+            $this->log('released', 'Rests for "nobody added in a row" are over, the rule is gone: #' . implode(', #', $back), null, null, [
+                'accounts' => $back,
+                'kind' => 'empty',
+            ]);
+        }
+
         if ($groups->isEmpty() && ! $checkOnly) {
             $this->log('finished', 'No active groups, nothing to do', null, null, ['reason' => 'no_groups', ...$totals]);
             $this->finish();
@@ -542,6 +544,38 @@ final class GroupInviteService
         $this->finish();
 
         return $totals;
+    }
+
+    /**
+     * One run at a time (the command holds its lock), and only the run
+     * takes accounts for the invites: an account still marked busy for
+     * them when a run starts was left so by a run that died - killed, out
+     * of memory - before it could give it back. Nothing else frees it, so
+     * without this it would never be taken again.
+     */
+    private function releaseStuck(): void
+    {
+        $stuck = TelegramAccountProcess::query()
+            ->where('process', ProcessEnum::GroupInvite->value)
+            ->where('is_busy', true)
+            ->pluck('telegram_account_id')
+            ->map(fn ($id) => (int) $id)
+            ->sort()
+            ->values()
+            ->all();
+
+        if ($stuck === []) {
+            return;
+        }
+
+        TelegramAccountProcess::query()
+            ->where('process', ProcessEnum::GroupInvite->value)
+            ->whereIn('telegram_account_id', $stuck)
+            ->update(['is_busy' => false, 'busy_at' => null]);
+
+        $this->log('released', 'Accounts a run that died had left busy: #' . implode(', #', $stuck), null, null, [
+            'accounts' => $stuck,
+        ]);
     }
 
     /**
@@ -1061,7 +1095,6 @@ final class GroupInviteService
         bool $checkOnly = false,
     ): array {
         $result = ['calls' => 0, ...self::ZERO];
-        $empty = 0;
 
         $checked = $this->checkSent($api, $account, $config, $say);
         self::add($result, $checked);
@@ -1102,26 +1135,11 @@ final class GroupInviteService
             }
 
             /*
-             * Batch after batch nobody added, people left out without a
-             * word: Telegram may be holding the account quietly. A batch
-             * whose people Telegram refused outright (privacy, already in
-             * the group, only a mutual contact) says nothing about the
-             * account - it was unlucky with the people: it neither counts
-             * nor breaks the row. A batch split to find who refused is
-             * still one batch.
+             * Nobody added batch after batch does not stop the account
+             * (2026-11-04, the owner: "не трогай даже если никого не
+             * добавит"): it works through its share like any other; only
+             * Telegram's own floods and the caps stop it.
              */
-            if ($done['invited'] > 0) {
-                $empty = 0;
-            } elseif ($done['quiet'] > 0) {
-                $empty++;
-            }
-
-            if ($empty >= self::MAX_EMPTY_BATCHES) {
-                $this->restEmpty($account, $empty, $say);
-
-                break;
-            }
-
             if (! $this->capReached($account, $config)) {
                 $this->pause($config);
             }
@@ -1281,7 +1299,17 @@ final class GroupInviteService
 
                 if ($kind === self::KIND_GROUP_GONE || $kind === self::KIND_GROUP_DENIED) {
                     $this->releasePeople($group, collect([$part, ...$parts])->flatten(1));
-                    $kind === self::KIND_GROUP_GONE
+
+                    /*
+                     * One account's "no such group" for a group our accounts
+                     * are in (its id is known) is that account's own session
+                     * - on 2026-11-02 one new account's CHANNEL_INVALID
+                     * switched the group off for a whole night. It stops
+                     * this account only; a group gone for real is left by
+                     * the run once three accounts cannot add there (deny).
+                     * Full is full for all.
+                     */
+                    $kind === self::KIND_GROUP_GONE && (! $group->telegram_chat_id || $code === 'USERS_TOO_MUCH')
                         ? $this->groupGone($group, $code, $account->id)
                         : $this->deny($account, $group, $code);
                     $say("  {$group->link}: {$code}");
@@ -2411,35 +2439,36 @@ final class GroupInviteService
     }
 
     /**
-     * Nobody added batch after batch. The first time in a day the account
-     * may only have been unlucky: it sits out until the next run. The
-     * second time it rests until tomorrow, as a quiet hold does not end
-     * within hours.
+     * The rests "nobody added batch after batch" gave before that rule was
+     * taken out (2026-11-04): over now, the account works again.
      *
-     * @param callable(string): void $say
+     * @return list<int> the accounts let back
      */
-    private function restEmpty(TelegramAccount $account, int $batches, callable $say): void
+    private function endEmptyRests(): array
     {
-        $again = TelegramGroupInviteLog::query()
-            ->where('telegram_account_id', $account->id)
-            ->where('event', 'rest')
-            ->where('created_at', '>=', now()->startOfDay())
-            ->exists();
+        $back = [];
 
-        $next = $again ? null : $this->settings->nextRun();
+        TelegramAccountProcess::query()
+            ->where('process', ProcessEnum::GroupInvite->value)
+            ->whereNotNull('meta')
+            ->get()
+            ->each(function (TelegramAccountProcess $state) use (&$back): void {
+                $meta = (array) $state->meta;
 
-        /* A minute before the run starts: it finds the account rested. */
-        $seconds = $next !== null
-            ? max(60, $next->timestamp - now()->timestamp - 60)
-            : now()->addDay()->startOfDay()->timestamp - now()->timestamp + random_int(300, 1800);
+                if (($meta['rest_kind'] ?? null) !== 'empty' || self::secondsUntil($meta['rest_until'] ?? null) <= 0) {
+                    return;
+                }
 
-        $this->rest($account, $seconds, 'empty', 'NOBODY_ADDED', context: [
-            'step' => self::STEP_INVITE,
-            'empty_batches' => $batches,
-            'again_today' => $again,
-        ]);
+                unset($meta['rest_until'], $meta['rest_kind'], $meta['rest_reason']);
 
-        $say("  {$batches} batches without anybody added, the account rests " . ($next !== null ? 'until the next run' : 'until tomorrow'));
+                $state->update(['meta' => $meta]);
+
+                $back[] = (int) $state->telegram_account_id;
+            });
+
+        sort($back);
+
+        return $back;
     }
 
     /**

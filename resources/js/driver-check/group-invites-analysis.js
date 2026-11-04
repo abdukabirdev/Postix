@@ -110,7 +110,7 @@ export function groupInvitesAnalysisPage(config) {
                 .replace(':not_added', this.number(point.not_added))
                 .replace(':failed', this.number(point.failed))
                 .replace(':left', this.number(point.left))
-                .replace(':calls', this.number(point.calls))
+                .replace(':tried', this.number(point.tried ?? 0))
                 .replace(':stops', this.number(point.stops));
         },
 
@@ -160,7 +160,8 @@ export function groupInvitesAnalysisPage(config) {
             const step = c.step ? (t.analysis.steps[c.step] ?? c.step) : '';
             const via = c.via === 'username' ? t.analysis.via_username : '';
 
-            return [step, via, c.size ? t.analysis.size.replace(':n', c.size) : ''].filter(Boolean).join(' · ');
+            /* The batch size is how the adding is done, not what the page is about: people only. */
+            return [step, via].filter(Boolean).join(' · ');
         },
     };
 }

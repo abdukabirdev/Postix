@@ -544,16 +544,19 @@ final class GroupInviteTest extends TestCase
         ]);
     }
 
-    public function test_batches_that_add_nobody_rest_the_account_until_the_next_run_then_until_tomorrow(): void
+    public function test_batches_that_add_nobody_do_not_stop_the_account_and_old_rests_for_it_are_over(): void
     {
-        /* The default schedule: 05:00, 11:00, 17:00, 23:00. */
-        $this->travelTo(now()->setTime(12, 0));
-
         TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
 
-        foreach (range(1201, 1212) as $id) {
+        foreach (range(1201, 1208) as $id) {
             $this->hold(1, $this->person($id, "P{$id}"));
         }
+
+        /* Rested by the rule that is gone, until tomorrow. */
+        TelegramAccountProcess::query()->updateOrCreate(
+            ['telegram_account_id' => 1, 'process' => ProcessEnum::GroupInvite->value],
+            ['meta' => ['rest_until' => now()->addDay()->toIso8601String(), 'rest_kind' => 'empty', 'rest_reason' => 'NOBODY_ADDED']],
+        );
 
         /* Held quietly: every call "succeeds", nobody gets in. */
         $calls = $this->fakeTelegram(invite: fn () => ['missing_invitees' => []]);
@@ -561,23 +564,13 @@ final class GroupInviteTest extends TestCase
         $settings = $this->app->make(GroupInviteSettings::class);
         $settings->save([...$settings->current(), 'batch_size' => 1, 'excluded_accounts' => [2]]);
 
-        $totals = $this->service->run();
+        $totals = $this->service->run(trigger: 'manual');
 
-        $this->assertCount(5, $calls);
-        $this->assertSame([0, 5], [$totals['invited'], $totals['not_added']]);
-        $this->assertSame(5, TelegramGroupInvite::query()->where('status', TelegramGroupInvite::STATUS_NOT_ADDED)->count());
-
-        /* The first time in a day it may only have been unlucky: it sits out until a minute before the 17:00 run. */
-        $meta = $this->service->meta(TelegramAccount::query()->find(1));
-        $this->assertSame('NOBODY_ADDED', $meta['rest_reason']);
-        $this->assertSame(now()->setTime(16, 59)->format('Y-m-d H:i'), Carbon::parse($meta['rest_until'])->format('Y-m-d H:i'));
-
-        /* The 17:00 run: the same again, now it rests until tomorrow. */
-        $this->travelTo(now()->setTime(17, 0));
-        $this->service->run();
-
-        $this->assertCount(10, $calls);
-        $this->assertTrue(Carbon::parse($this->service->meta(TelegramAccount::query()->find(1))['rest_until'])->isTomorrow());
+        /* Not five and a rest: every one of its people, nobody added or not. */
+        $this->assertCount(8, $calls);
+        $this->assertSame([0, 8], [$totals['invited'], $totals['not_added']]);
+        $this->assertArrayNotHasKey('rest_until', $this->service->meta(TelegramAccount::query()->find(1)));
+        $this->assertTrue(TelegramGroupInviteLog::query()->where('event', 'released')->where('context->kind', 'empty')->exists());
     }
 
     public function test_batches_telegram_refused_outright_do_not_count_as_nobody_added(): void
@@ -1572,6 +1565,76 @@ final class GroupInviteTest extends TestCase
         $this->getJson($url, ['X-Report-Token' => $token])->assertOk();
     }
 
+    public function test_one_accounts_channel_invalid_on_a_call_does_not_switch_a_known_group_off(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'telegram_chat_id' => -1000000000777, 'is_active' => true]);
+        $this->hold(1, $this->person(3101, 'One'));
+        $this->hold(2, $this->person(3102, 'Two'));
+
+        /* Whichever account calls first has a stale session; the other one adds. */
+        $first = true;
+        $calls = $this->fakeTelegram(invite: function (array $users) use (&$first) {
+            if ($first) {
+                $first = false;
+
+                throw RPCErrorException::make('CHANNEL_INVALID', 400, '');
+            }
+
+            return $this->added($users);
+        });
+
+        $this->service->run();
+
+        $this->assertCount(2, $calls);
+        $this->assertTrue($group->fresh()->is_active);
+        $this->assertFalse(TelegramGroupInviteLog::query()->where('context->reason', 'group_off')->exists());
+        $this->assertTrue(TelegramGroupInviteLog::query()->where('context->reason', 'denied')->where('context->rpc', 'CHANNEL_INVALID')->exists());
+
+        /* The first account's person is given back for another account; the second's is in. */
+        $this->assertSame([TelegramGroupInvite::STATUS_INVITED], TelegramGroupInvite::query()->pluck('status')->all());
+    }
+
+    public function test_a_full_group_is_switched_off_whoever_finds_it_full(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'telegram_chat_id' => -1000000000777, 'is_active' => true]);
+        $this->hold(1, $this->person(3201, 'One'));
+
+        $this->fakeTelegram(invite: fn (array $users) => throw RPCErrorException::make('USERS_TOO_MUCH', 400, ''));
+
+        $this->service->run();
+
+        $this->assertFalse($group->fresh()->is_active);
+        $this->assertSame('USERS_TOO_MUCH', $group->fresh()->last_error);
+    }
+
+    public function test_an_account_a_dead_run_left_busy_is_freed_by_the_next_run(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $person = $this->person(3001, 'Waiting');
+        $this->hold(2, $person);
+
+        /* A run killed in the middle never gave account 2 back. */
+        DB::table('telegram_account_processes')->insert([
+            'telegram_account_id' => 2,
+            'process' => ProcessEnum::GroupInvite->value,
+            'is_available' => true,
+            'is_busy' => true,
+            'busy_at' => now()->subDays(5),
+        ]);
+
+        $calls = $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+
+        $this->service->run();
+
+        $this->assertSame([[3001]], $calls->getArrayCopy());
+        $this->assertSame(2, $this->inviteOf($person)->telegram_account_id);
+
+        $line = TelegramGroupInviteLog::query()->where('event', 'released')->sole();
+        $this->assertSame([2], $line->context['accounts']);
+
+        $this->assertFalse((bool) DB::table('telegram_account_processes')->where('telegram_account_id', 2)->value('is_busy'));
+    }
+
     public function test_a_check_run_does_not_read_the_members_lists(): void
     {
         $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
@@ -1594,15 +1657,16 @@ final class GroupInviteTest extends TestCase
         $this->assertFalse(TelegramGroupInviteLog::query()->where('event', TelegramGroupInviteLog::EVENT_CHECK)->exists());
     }
 
-    public function test_the_analysis_tells_after_how_many_calls_each_kind_of_stop_comes(): void
+    public function test_the_analysis_tells_after_how_many_people_each_kind_of_stop_comes(): void
     {
+        /* Batches are how the adding is done; the page counts the people tried: added, left out, refused. */
         foreach ([10, 20, 60] as $calls) {
             TelegramGroupInviteLog::query()->create([
                 'run_id' => 'r1',
                 'telegram_account_id' => 1,
                 'event' => 'flood',
                 'message' => 'PEER_FLOOD',
-                'context' => ['kind' => 'spam', 'rpc' => 'PEER_FLOOD', 'counters' => ['calls' => $calls, 'invited' => $calls * 2]],
+                'context' => ['kind' => 'spam', 'rpc' => 'PEER_FLOOD', 'counters' => ['calls' => $calls, 'invited' => $calls, 'not_added' => $calls, 'invited_today' => 1, 'not_added_today' => 2]],
             ]);
         }
 
@@ -1626,7 +1690,7 @@ final class GroupInviteTest extends TestCase
         $json = $this->app->make(GroupInviteAnalysisController::class)->show(request())->getData(true);
         $spam = collect($json['reasons'])->firstWhere('kind', 'spam');
 
-        $this->assertSame([3, 1, 30, 20, 10, 60, 60], [
+        $this->assertSame([3, 1, 60, 40, 20, 120, 30, 3], [
             $spam['stops'],
             $spam['accounts'],
             (int) $spam['calls_avg'],
@@ -1634,7 +1698,10 @@ final class GroupInviteTest extends TestCase
             $spam['calls_min'],
             $spam['calls_max'],
             (int) $spam['invited_avg'],
+            (int) $spam['tried_today_avg'],
         ]);
+        $stop = collect($json['stops'])->firstWhere('counters.calls', 20);
+        $this->assertSame([40, 20, 3], [$stop['counters']['tried'], $stop['counters']['invited'], $stop['counters']['tried_today']]);
         $this->assertSame(1, collect($json['reasons'])->firstWhere('kind', 'empty')['stops']);
         $this->assertSame([4, 3], [$json['totals']['stops'], $json['totals']['calls']]);
 

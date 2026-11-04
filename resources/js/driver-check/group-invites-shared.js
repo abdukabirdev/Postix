@@ -215,6 +215,8 @@ export function inviteHelpers(t) {
                     return line.message;
                 case 'joined':
                     return e.joined;
+                case 'released':
+                    return (c.kind === 'empty' ? e.released_empty : e.released).replace(':accounts', (c.accounts || []).map((id) => `#${id}`).join(', '));
                 case 'bot_muted':
                     return c.rpc
                         ? e.bot_mute_failed.replace(':who', c.who ?? '?').replace(':reason', this.errorLabel(c.rpc))
@@ -292,6 +294,7 @@ export function inviteHelpers(t) {
                 case 'rest':
                 case 'wait':
                 case 'stop':
+                case 'released':
                     return 'warn';
                 case 'batch':
                 case 'check':

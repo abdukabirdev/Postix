@@ -41,6 +41,8 @@ final class GroupInviteAnalysisController extends Controller
             'periods' => self::PERIODS,
             'totals' => [
                 'calls' => (int) $rows->sum('calls'),
+                /* People, not batches: everybody an account tried to add. */
+                'tried' => (int) $rows->sum('tried'),
                 'added' => (int) $rows->sum('added'),
                 'not_added' => (int) $rows->sum('not_added'),
                 'failed' => (int) $rows->sum('failed'),
@@ -74,7 +76,7 @@ final class GroupInviteAnalysisController extends Controller
         $h = fn (string $key) => __("driver_check.invites.analysis.csv.{$key}");
 
         if ($data['type'] === 'stops') {
-            $header = ['at', 'account', 'group', 'kind', 'rpc', 'until', 'step', 'via', 'size', 'calls', 'invited', 'not_added', 'failed', 'lookups', 'waits', 'minutes', 'calls_today', 'cap', 'peer_floods_before', 'authorized_days'];
+            $header = ['at', 'account', 'group', 'kind', 'rpc', 'until', 'step', 'via', 'size', 'tried', 'calls', 'invited', 'not_added', 'failed', 'lookups', 'waits', 'minutes', 'tried_today', 'calls_today', 'cap', 'peer_floods_before', 'authorized_days'];
             $lines = $this->stops($from, $to)->map(fn (array $stop) => [
                 $stop['at'],
                 $stop['account'],
@@ -85,6 +87,7 @@ final class GroupInviteAnalysisController extends Controller
                 $stop['counters']['step'] ?? '',
                 $stop['counters']['via'] ?? '',
                 $stop['counters']['size'] ?? '',
+                $stop['counters']['tried'] ?? '',
                 $stop['counters']['calls'] ?? '',
                 $stop['counters']['invited'] ?? '',
                 $stop['counters']['not_added'] ?? '',
@@ -92,16 +95,18 @@ final class GroupInviteAnalysisController extends Controller
                 $stop['counters']['lookups'] ?? '',
                 $stop['counters']['waits'] ?? '',
                 $stop['counters']['minutes'] ?? '',
+                $stop['counters']['tried_today'] ?? '',
                 $stop['counters']['calls_today'] ?? '',
                 $stop['counters']['cap'] ?? '',
                 $stop['counters']['peer_floods_before'] ?? '',
                 $stop['counters']['authorized_days'] ?? '',
             ]);
         } else {
-            $header = ['day', 'account', 'calls', 'added', 'not_added', 'failed', 'already', 'lookups', 'waits', 'stops', 'left'];
+            $header = ['day', 'account', 'tried', 'calls', 'added', 'not_added', 'failed', 'already', 'lookups', 'waits', 'stops', 'left'];
             $lines = $this->days($from, $to)->map(fn (array $row) => [
                 $row['day'],
                 $row['account'],
+                $row['tried'],
                 $row['calls'],
                 $row['added'],
                 $row['not_added'],
@@ -169,9 +174,29 @@ final class GroupInviteAnalysisController extends Controller
                     'rpc' => $context['rpc'] ?? null,
                     'until' => $context['until'] ?? null,
                     'seconds' => $context['seconds'] ?? null,
-                    'counters' => (array) ($context['counters'] ?? []),
+                    'counters' => self::people((array) ($context['counters'] ?? [])),
                 ];
             });
+    }
+
+    /**
+     * The stop's counters with the people they come to: the batches are
+     * only how the adding is done, the page speaks of people. tried - all
+     * the account tried to add since its last stop; tried_today - that day.
+     *
+     * @param array<string, mixed> $counters
+     *
+     * @return array<string, mixed>
+     */
+    private static function people(array $counters): array
+    {
+        $n = fn (string $key): int => (int) ($counters[$key] ?? 0);
+
+        return [
+            ...$counters,
+            'tried' => $n('invited') + $n('not_added') + $n('failed') + $n('already'),
+            'tried_today' => $n('invited_today') + $n('not_added_today') + $n('failed_today'),
+        ];
     }
 
     /**
@@ -193,7 +218,8 @@ final class GroupInviteAnalysisController extends Controller
                 continue;
             }
 
-            $calls = $mine->map(fn (array $stop) => (int) ($stop['counters']['calls'] ?? 0))->sort()->values();
+            /* People tried before the stop, not batches. */
+            $calls = $mine->map(fn (array $stop) => (int) ($stop['counters']['tried'] ?? 0))->sort()->values();
             $avg = fn (string $key) => round((float) $mine->avg(fn (array $stop) => (float) ($stop['counters'][$key] ?? 0)), 1);
 
             $out[] = [
@@ -210,6 +236,8 @@ final class GroupInviteAnalysisController extends Controller
                 'waits_avg' => $avg('waits'),
                 'minutes_avg' => $avg('minutes'),
                 'calls_today_avg' => $avg('calls_today'),
+                'tried_avg' => $avg('tried'),
+                'tried_today_avg' => $avg('tried_today'),
                 'rpcs' => $mine->pluck('rpc')->filter()->countBy()->sortDesc()->take(4)->all(),
             ];
         }
@@ -303,7 +331,12 @@ final class GroupInviteAnalysisController extends Controller
         $phones = TelegramAccount::query()->pluck('phone', 'id');
 
         return collect($rows)
-            ->map(fn (array $r) => [...$r, 'account' => $r['account_id'] !== null ? ($phones[$r['account_id']] ?? '#' . $r['account_id']) : null])
+            ->map(fn (array $r) => [
+                ...$r,
+                /* People tried that day, whatever became of them. */
+                'tried' => $r['added'] + $r['not_added'] + $r['failed'] + $r['already'],
+                'account' => $r['account_id'] !== null ? ($phones[$r['account_id']] ?? '#' . $r['account_id']) : null,
+            ])
             ->sortBy([['day', 'desc'], ['account', 'asc']])
             ->values();
     }
@@ -326,6 +359,7 @@ final class GroupInviteAnalysisController extends Controller
             $out[] = [
                 'day' => $day->toDateString(),
                 'calls' => (int) $mine->sum('calls'),
+                'tried' => (int) $mine->sum('tried'),
                 'added' => (int) $mine->sum('added'),
                 'not_added' => (int) $mine->sum('not_added'),
                 'failed' => (int) $mine->sum('failed'),

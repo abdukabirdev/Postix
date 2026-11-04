@@ -61,8 +61,8 @@
                         <span x-text="number(data.totals.not_added)"></span>
                         <x-slot:hint><span x-text="t.analysis.totals.failed_hint.replace(':n', number(data.totals.failed))"></span></x-slot:hint>
                     </x-driver-check.stat-card>
-                    <x-driver-check.stat-card :label="__('driver_check.invites.analysis.totals.calls')">
-                        <span x-text="number(data.totals.calls)"></span>
+                    <x-driver-check.stat-card :label="__('driver_check.invites.analysis.totals.tried')">
+                        <span x-text="number(data.totals.tried)"></span>
                         <x-slot:hint><span x-text="t.analysis.totals.lookups_hint.replace(':n', number(data.totals.lookups))"></span></x-slot:hint>
                     </x-driver-check.stat-card>
                     <x-driver-check.stat-card :label="__('driver_check.invites.analysis.totals.stops')">
@@ -159,12 +159,13 @@
                                 </dl>
 
                                 <p class="mt-3 text-[12px] leading-relaxed tabular-nums text-gray-500" x-text="t.analysis.before_stop
+                                    .replace(':tried', number(reason.tried_avg))
                                     .replace(':invited', number(reason.invited_avg))
                                     .replace(':not_added', number(reason.not_added_avg))
                                     .replace(':lookups', number(reason.lookups_avg))
                                     .replace(':waits', number(reason.waits_avg))
                                     .replace(':minutes', number(reason.minutes_avg))
-                                    .replace(':today', number(reason.calls_today_avg))"></p>
+                                    .replace(':today', number(reason.tried_today_avg))"></p>
                                 <p x-show="Object.keys(reason.rpcs || {}).length > 1" x-cloak class="mt-1 text-[11.5px] text-gray-400" x-text="rpcLine(reason.rpcs)"></p>
                             </x-driver-check.surface>
                         </template>
@@ -193,8 +194,9 @@
                                     <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.analysis.cols.account') }}</th>
                                     <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.analysis.cols.reason') }}</th>
                                     <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.analysis.cols.what') }}</th>
-                                    <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.analysis.cols.calls') }}</th>
+                                    <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.analysis.cols.tried') }}</th>
                                     <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.analysis.cols.invited') }}</th>
+                                    <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.analysis.cols.quiet') }}</th>
                                     <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.analysis.cols.lookups') }}</th>
                                     <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.analysis.cols.today') }}</th>
                                     <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.analysis.cols.floods') }}</th>
@@ -211,10 +213,11 @@
                                             <span class="block text-[11.5px] text-gray-400" x-text="errorLabel(stop.rpc)"></span>
                                         </td>
                                         <td class="px-4 py-2 text-gray-500" x-text="stopWhat(stop)"></td>
-                                        <td class="px-4 py-2 text-right font-semibold text-gray-950 dark:text-white" x-text="number(stop.counters.calls ?? 0)"></td>
-                                        <td class="px-4 py-2 text-right" x-text="number(stop.counters.invited ?? 0)"></td>
+                                        <td class="px-4 py-2 text-right" x-text="number(stop.counters.tried ?? 0)"></td>
+                                        <td class="px-4 py-2 text-right font-semibold text-gray-950 dark:text-white" x-text="number(stop.counters.invited ?? 0)"></td>
+                                        <td class="px-4 py-2 text-right" x-text="number(stop.counters.not_added ?? 0)"></td>
                                         <td class="px-4 py-2 text-right" x-text="number(stop.counters.lookups ?? 0)"></td>
-                                        <td class="px-4 py-2 text-right" x-text="number(stop.counters.calls_today ?? 0)"></td>
+                                        <td class="whitespace-nowrap px-4 py-2 text-right" x-text="t.analysis.today_people.replace(':tried', number(stop.counters.tried_today ?? 0)).replace(':added', number(stop.counters.invited_today ?? 0))"></td>
                                         <td class="px-4 py-2 text-right" x-text="number(stop.counters.peer_floods_before ?? 0)"></td>
                                         <td class="whitespace-nowrap px-4 py-2 text-gray-500" x-text="stop.until ? time(stop.until) : '—'"></td>
                                     </tr>
@@ -231,7 +234,7 @@
                                 <tr>
                                     <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.analysis.cols.day') }}</th>
                                     <th class="px-4 py-2 font-medium">{{ __('driver_check.invites.analysis.cols.account') }}</th>
-                                    @foreach (['calls', 'added', 'not_added', 'failed', 'already', 'lookups', 'waits', 'stops', 'left'] as $col)
+                                    @foreach (['tried', 'added', 'not_added', 'failed', 'already', 'lookups', 'waits', 'stops', 'left'] as $col)
                                         <th class="px-4 py-2 text-right font-medium">{{ __("driver_check.invites.analysis.cols.{$col}") }}</th>
                                     @endforeach
                                 </tr>
@@ -241,7 +244,7 @@
                                     <tr>
                                         <td class="whitespace-nowrap px-4 py-2 text-gray-500" x-text="day(row.day)"></td>
                                         <td class="whitespace-nowrap px-4 py-2 font-medium text-gray-950 dark:text-white" x-text="row.account ? phone(row.account) : '—'"></td>
-                                        <td class="px-4 py-2 text-right" x-text="number(row.calls)"></td>
+                                        <td class="px-4 py-2 text-right" x-text="number(row.tried)"></td>
                                         <td class="px-4 py-2 text-right font-semibold text-gray-950 dark:text-white" x-text="number(row.added)"></td>
                                         <td class="px-4 py-2 text-right" x-text="number(row.not_added)"></td>
                                         <td class="px-4 py-2 text-right" x-text="number(row.failed)"></td>
