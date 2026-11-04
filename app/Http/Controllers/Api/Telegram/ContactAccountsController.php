@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\AccountContactsService;
+use App\Application\Telegram\Services\ContactSyncService;
 use App\Application\Telegram\Services\ContactSyncSettings;
 use App\Console\Commands\Telegram\TelegramAccountContactsCommand;
 use App\Console\Commands\Telegram\TelegramSyncContactsCommand;
@@ -66,7 +67,7 @@ final class ContactAccountsController extends Controller
                     'held' => $held->has($account->id),
                     'held_reason' => $held->get($account->id)?->disabled_reason,
                     /* A rest ends by itself; null: held until enabled here. */
-                    'held_until' => $held->has($account->id) ? AppApplicationTelegramServicesContactSyncService::restEnd($held->get($account->id))?->toIso8601String() : null,
+                    'held_until' => $held->has($account->id) ? ContactSyncService::restEnd($held->get($account->id))?->toIso8601String() : null,
                     'in_database' => $inDatabase,
                     'in_account' => $inAccount,
                     'agree' => match (true) {

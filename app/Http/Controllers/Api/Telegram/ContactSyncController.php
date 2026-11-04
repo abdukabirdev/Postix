@@ -75,7 +75,7 @@ final class ContactSyncController extends Controller
                     'held' => $held->has($account->id),
                     'held_reason' => $held->get($account->id)?->disabled_reason,
                     'held_at' => $held->get($account->id)?->disabled_at,
-                    'held_until' => $held->has($account->id) ? AppApplicationTelegramServicesContactSyncService::restEnd($held->get($account->id))?->toIso8601String() : null,
+                    'held_until' => $held->has($account->id) ? ContactSyncService::restEnd($held->get($account->id))?->toIso8601String() : null,
                     'added' => (int) ($stats->added ?? 0),
                     'failed' => (int) ($stats->failed ?? 0),
                     'skipped' => (int) ($stats->skipped ?? 0),

@@ -120,6 +120,39 @@ final class ContactAccountsTest extends TestCase
         $this->assertSame(0, AccountContactsService::inDatabase(2));
     }
 
+    public function test_the_page_says_until_when_a_resting_account_is_held_and_that_a_dead_one_is_held_for_good(): void
+    {
+        Carbon::setTestNow('2026-11-04 10:00:00');
+
+        /* Account 1 rests after a flood wait, account 2's session is dead. */
+        DB::table('telegram_account_processes')->insert([
+            [
+                'telegram_account_id' => 1,
+                'process' => 'contact_sync',
+                'is_available' => false,
+                'disabled_at' => now(),
+                'disabled_reason' => 'FLOOD_WAIT_600',
+                'meta' => json_encode(['rest_until' => '2026-11-04T10:15:00+00:00', 'rest_reason' => 'FLOOD_WAIT_600']),
+            ],
+            [
+                'telegram_account_id' => 2,
+                'process' => 'contact_sync',
+                'is_available' => false,
+                'disabled_at' => now(),
+                'disabled_reason' => 'AUTH_KEY_UNREGISTERED',
+                'meta' => null,
+            ],
+        ]);
+
+        $accounts = $this->accounts();
+
+        $this->assertSame([true, 'FLOOD_WAIT_600'], [$accounts[1]['held'], $accounts[1]['held_reason']]);
+        $this->assertSame('2026-11-04 10:15:00', Carbon::parse($accounts[1]['held_until'])->utc()->toDateTimeString());
+        $this->assertTrue($accounts[2]['held']);
+        $this->assertNull($accounts[2]['held_until'], 'a dead session does not come back by itself');
+        $this->assertSame([false, null], [$accounts[3]['held'], $accounts[3]['held_until']]);
+    }
+
     public function test_the_page_says_where_database_and_account_agree_and_where_not(): void
     {
         foreach ([20, 21, 22] as $id) {
