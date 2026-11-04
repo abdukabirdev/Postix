@@ -75,8 +75,175 @@ final class GroupInviteReport
             'events' => $this->events($from),
             'stops' => $this->stops($from),
             'accounts' => $this->accounts($config, $group),
+            'history' => $this->history($group),
             'log' => $this->log($lines, $runId),
         ];
+    }
+
+    /**
+     * Whether a person left out once is worth another try, in people: the
+     * current group's people by account, each by what the same person had
+     * in our other groups; and every person tried in more than one group,
+     * the later try by the earlier one, split by whether the later try's
+     * account added anybody else that day (a quietly held account leaves
+     * everybody out, whoever they are).
+     *
+     * @return array<string, mixed>
+     */
+    private function history(?TelegramInviteGroup $group): array
+    {
+        return [
+            'current_group' => $group !== null ? $this->groupHistory($group) : null,
+            'second_try' => $this->secondTry(),
+        ];
+    }
+
+    /**
+     * The current group's people by account: what came of them here, by
+     * what they had elsewhere - added (into some other group), not_added
+     * (left out there, never added anywhere), other (refused, already in,
+     * not checked), new (no other group tried them).
+     *
+     * @return array<string, mixed>
+     */
+    private function groupHistory(TelegramInviteGroup $group): array
+    {
+        $elsewhere = TelegramGroupInvite::query()
+            ->where('invite_group_id', '!=', $group->id)
+            ->whereIn('status', TelegramGroupInvite::SETTLED)
+            ->whereIn('scraped_user_id', TelegramGroupInvite::query()->where('invite_group_id', $group->id)->select('scraped_user_id'))
+            ->toBase()
+            ->get(['scraped_user_id', 'status'])
+            ->groupBy('scraped_user_id')
+            ->map(fn (Collection $rows) => self::before($rows->pluck('status')->all()));
+
+        $rows = TelegramGroupInvite::query()
+            ->where('invite_group_id', $group->id)
+            ->whereIn('status', TelegramGroupInvite::SETTLED)
+            ->toBase()
+            ->get(['scraped_user_id', 'telegram_account_id', 'status', 'via']);
+
+        $count = function (Collection $rows) use ($elsewhere): array {
+            $out = ['tried' => $rows->count(), ...self::fates($rows), 'via' => $rows->countBy('via')->all(), 'by_elsewhere' => []];
+
+            foreach (['added', 'not_added', 'other', 'new'] as $before) {
+                $mine = $rows->filter(fn ($row) => ($elsewhere[$row->scraped_user_id] ?? 'new') === $before);
+                $out['by_elsewhere'][$before] = ['tried' => $mine->count(), ...self::fates($mine)];
+            }
+
+            return $out;
+        };
+
+        return [
+            'group_id' => $group->id,
+            'total' => $count($rows),
+            'accounts' => $rows->groupBy('telegram_account_id')
+                ->map(fn (Collection $mine, $accountId) => ['account_id' => $accountId !== '' ? (int) $accountId : null, ...$count($mine)])
+                ->sortByDesc('tried')
+                ->values()
+                ->all(),
+        ];
+    }
+
+    /**
+     * Every person tried in more than one group: each later try by the try
+     * before it, as added / not_added / failed / already / sent. "working"
+     * - the later try's account added somebody else that day; "quiet" - it
+     * added nobody else.
+     *
+     * @return array<string, array<string, mixed>>
+     */
+    private function secondTry(): array
+    {
+        $statuses = TelegramGroupInvite::SETTLED;
+
+        $tries = TelegramGroupInvite::query()
+            ->whereIn('status', $statuses)
+            ->whereIn('scraped_user_id', TelegramGroupInvite::query()
+                ->whereIn('status', $statuses)
+                ->groupBy('scraped_user_id')
+                ->havingRaw('COUNT(DISTINCT invite_group_id) > 1')
+                ->select('scraped_user_id'))
+            ->orderByRaw('COALESCE(attempted_at, created_at)')
+            ->orderBy('id')
+            ->toBase()
+            ->get(['scraped_user_id', 'telegram_account_id', 'status', 'attempted_at', 'created_at']);
+
+        /* How many each account added each day: anybody else than the person at hand tells it was not held. */
+        $addedOn = TelegramGroupInvite::query()
+            ->whereIn('status', TelegramGroupInvite::ADDED)
+            ->whereNotNull('telegram_account_id')
+            ->selectRaw('telegram_account_id, DATE(COALESCE(attempted_at, created_at)) as day, COUNT(*) as total')
+            ->groupBy('telegram_account_id', 'day')
+            ->toBase()
+            ->get()
+            ->mapWithKeys(fn ($row) => [$row->telegram_account_id . '|' . $row->day => (int) $row->total]);
+
+        $out = [];
+
+        foreach ($tries->groupBy('scraped_user_id') as $mine) {
+            $mine = $mine->values();
+
+            for ($i = 1; $i < $mine->count(); $i++) {
+                $earlier = self::fate($mine[$i - 1]->status);
+                $later = $mine[$i];
+                $fate = self::fate($later->status);
+                $day = substr((string) ($later->attempted_at ?? $later->created_at), 0, 10);
+                $others = ($addedOn[$later->telegram_account_id . '|' . $day] ?? 0) - ($fate === 'added' ? 1 : 0);
+                $how = $others > 0 ? 'working' : 'quiet';
+
+                $out[$earlier] ??= ['tries' => 0, 'working' => self::zeroFates(), 'quiet' => self::zeroFates()];
+                $out[$earlier]['tries']++;
+                $out[$earlier][$how][$fate]++;
+            }
+        }
+
+        ksort($out);
+
+        return $out;
+    }
+
+    /**
+     * @param list<string> $statuses a person's statuses in the other groups
+     */
+    private static function before(array $statuses): string
+    {
+        $fates = array_map(self::fate(...), $statuses);
+
+        return match (true) {
+            in_array('added', $fates, true) => 'added',
+            in_array('not_added', $fates, true) => 'not_added',
+            default => 'other',
+        };
+    }
+
+    private static function fate(string $status): string
+    {
+        return in_array($status, TelegramGroupInvite::ADDED, true) ? 'added' : $status;
+    }
+
+    /**
+     * @return array{added: int, not_added: int, failed: int, already: int, sent: int}
+     */
+    private static function zeroFates(): array
+    {
+        return ['added' => 0, 'not_added' => 0, 'failed' => 0, 'already' => 0, 'sent' => 0];
+    }
+
+    /**
+     * @param Collection<int, object> $rows
+     *
+     * @return array{added: int, not_added: int, failed: int, already: int, sent: int}
+     */
+    private static function fates(Collection $rows): array
+    {
+        $out = self::zeroFates();
+
+        foreach ($rows as $row) {
+            $out[self::fate($row->status)]++;
+        }
+
+        return $out;
     }
 
     /**

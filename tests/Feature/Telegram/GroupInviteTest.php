@@ -1641,6 +1641,58 @@ final class GroupInviteTest extends TestCase
         $this->getJson($url, ['X-Report-Token' => $token])->assertOk();
     }
 
+    public function test_the_report_tells_what_people_left_out_once_get_on_the_next_try(): void
+    {
+        Carbon::setTestNow('2026-11-04 11:00:00');
+
+        $old = TelegramInviteGroup::query()->create(['link' => 'old', 'is_active' => false]);
+        $new = TelegramInviteGroup::query()->create(['link' => 'new', 'is_active' => true]);
+        [$p1, $p2, $p3, $p4, $p5] = collect(range(1, 5))->map(fn (int $i) => $this->person(4100 + $i, "P{$i}"))->all();
+
+        $try = fn (TelegramInviteGroup $group, TelegramScrapedUser $person, int $account, string $status, string $at) => DB::table('telegram_group_invites')->insert([
+            'invite_group_id' => $group->id,
+            'scraped_user_id' => $person->id,
+            'telegram_account_id' => $account,
+            'status' => $status,
+            'via' => 'contact',
+            'attempted_at' => $at,
+            'created_at' => $at,
+            'updated_at' => $at,
+        ]);
+
+        /* Yesterday, the old group: p1 added, p2 and p3 left out. */
+        $try($old, $p1, 1, TelegramGroupInvite::STATUS_LEFT, '2026-11-03 10:00:00');
+        $try($old, $p2, 2, TelegramGroupInvite::STATUS_NOT_ADDED, '2026-11-03 10:00:00');
+        $try($old, $p3, 2, TelegramGroupInvite::STATUS_NOT_ADDED, '2026-11-03 10:00:00');
+
+        /* Today, the new group: account 1 adds whomever it tries, account 2 nobody. */
+        $try($new, $p1, 2, TelegramGroupInvite::STATUS_NOT_ADDED, '2026-11-04 10:00:00');
+        $try($new, $p2, 1, TelegramGroupInvite::STATUS_INVITED, '2026-11-04 10:00:00');
+        $try($new, $p3, 2, TelegramGroupInvite::STATUS_NOT_ADDED, '2026-11-04 10:01:00');
+        $try($new, $p4, 2, TelegramGroupInvite::STATUS_NOT_ADDED, '2026-11-04 10:02:00');
+        $try($new, $p5, 1, TelegramGroupInvite::STATUS_INVITED, '2026-11-04 10:03:00');
+
+        $history = $this->app->make(\App\Application\Telegram\Services\GroupInviteReport::class)->build(1, 0)['history'];
+
+        $here = $history['current_group'];
+        $this->assertSame([$new->id, 5, 2, 3], [$here['group_id'], $here['total']['tried'], $here['total']['added'], $here['total']['not_added']]);
+        $this->assertSame([1, 0, 1], [$here['total']['by_elsewhere']['added']['tried'], $here['total']['by_elsewhere']['added']['added'], $here['total']['by_elsewhere']['added']['not_added']]);
+        $this->assertSame([2, 1, 1], [$here['total']['by_elsewhere']['not_added']['tried'], $here['total']['by_elsewhere']['not_added']['added'], $here['total']['by_elsewhere']['not_added']['not_added']]);
+        $this->assertSame([2, 1, 1], [$here['total']['by_elsewhere']['new']['tried'], $here['total']['by_elsewhere']['new']['added'], $here['total']['by_elsewhere']['new']['not_added']]);
+
+        $accounts = collect($here['accounts'])->keyBy('account_id');
+        $this->assertSame([3, 0, 3], [$accounts[2]['tried'], $accounts[2]['added'], $accounts[2]['not_added']]);
+        $this->assertSame([1, 1, 1], [$accounts[2]['by_elsewhere']['added']['not_added'], $accounts[2]['by_elsewhere']['not_added']['not_added'], $accounts[2]['by_elsewhere']['new']['not_added']]);
+        $this->assertSame([2, 2], [$accounts[1]['tried'], $accounts[1]['added']]);
+
+        /* p2 left out, then added by an account that added somebody else that day; p3 left out twice, the second time by one that added nobody. */
+        $second = $history['second_try'];
+        $this->assertSame(2, $second['not_added']['tries']);
+        $this->assertSame(1, $second['not_added']['working']['added']);
+        $this->assertSame(1, $second['not_added']['quiet']['not_added']);
+        $this->assertSame([1, 1], [$second['added']['tries'], $second['added']['quiet']['not_added']]);
+    }
+
     public function test_one_accounts_channel_invalid_on_a_call_does_not_switch_a_known_group_off(): void
     {
         $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'telegram_chat_id' => -1000000000777, 'is_active' => true]);
