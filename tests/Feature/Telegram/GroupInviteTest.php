@@ -1422,13 +1422,12 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(7, $other['period']['days']);
     }
 
-    public function test_the_day_in_people_adds_up_to_the_most_the_accounts_may_try_and_tells_why_the_rest_will_not_be(): void
+    public function test_the_day_is_the_ideal_one_and_its_progress_is_the_calls_made_out_of_those_due(): void
     {
         Carbon::setTestNow(Carbon::parse('2026-11-05 12:00:00'));
 
         $this->app->make(GroupInviteSettings::class)->save([
             ...$this->app->make(GroupInviteSettings::class)->current(),
-            /* Runs at 05:00, 11:00, 17:00, 23:00: two left after noon. */
             'enabled' => true,
             'schedule_at' => '05:00',
             'runs_per_day' => 4,
@@ -1458,42 +1457,31 @@ final class GroupInviteTest extends TestCase
             }
         };
 
-        /* #1: 5 of its 10 calls, 12 people in them (3 short of full); the two runs left give it the other 5. */
+        /* #1: 5 of its 10 calls. */
         $calls(1, 5);
         $tried(1, 7001, 4, TelegramGroupInvite::STATUS_INVITED);
         $tried(1, 7011, 8, TelegramGroupInvite::STATUS_NOT_ADDED);
-        /* #2: 2 calls, then a flood until 18:00 - the 17:00 run is lost to it, the 23:00 one gives 3 calls. */
-        $calls(2, 2);
+        /* #2: its cap lowered to 4 after PEER_FLOOD and resting now; 6 calls count as the 4 due. */
+        $calls(2, 6);
         $tried(2, 7101, 6, TelegramGroupInvite::STATUS_INVITED);
         TelegramAccountProcess::query()->create([
             'telegram_account_id' => 2,
             'process' => ProcessEnum::GroupInvite->value,
-            'meta' => ['rest_until' => now()->setTime(18, 0)->toIso8601String(), 'rest_kind' => 'wait'],
+            'meta' => ['cap' => 4, 'rest_until' => now()->setTime(18, 0)->toIso8601String(), 'rest_kind' => 'wait'],
         ]);
-        /* #3: switched off for the invites. */
+        /* #3: switched off for the invites - still in the ideal day, none of its calls made. */
         TelegramAccountProcess::query()->create(['telegram_account_id' => 3, 'process' => ProcessEnum::GroupInvite->value, 'is_available' => false]);
 
         $config = $this->app->make(GroupInviteSettings::class)->current();
-        $day = $this->app->make(\App\Application\Telegram\Services\GroupInviteDayProgress::class)->today($config, 1000);
+        $day = $this->app->make(\App\Application\Telegram\Services\GroupInviteDayProgress::class)->today($config);
 
-        $this->assertSame(90, $day['max']);
-        $this->assertSame([18, 10, 24], [$day['done'], $day['added'], $day['expected']]);
-        $this->assertSame(['held' => 30, 'resting' => 9, 'schedule' => 6, 'partial' => 3, 'queue' => 0], $day['lost_by']);
-        $this->assertSame(48, $day['lost']);
-        $this->assertSame($day['max'], $day['done'] + $day['expected'] + $day['lost']);
-        $this->assertSame(2, $day['runs_left']);
-        $this->assertSame(['accounts' => 3, 'working' => 1, 'resting' => 1, 'held' => 1, 'capped' => 0], $day['accounts']);
-
-        /* Fewer people waiting than the accounts could still try. */
-        $short = $this->app->make(\App\Application\Telegram\Services\GroupInviteDayProgress::class)->today($config, 20);
-
-        $this->assertSame([20, 4], [$short['expected'], $short['lost_by']['queue']]);
-        $this->assertSame($short['max'], $short['done'] + $short['expected'] + $short['lost']);
+        $this->assertSame(['max' => 72, 'due' => 24, 'made' => 9, 'tried' => 18, 'added' => 10, 'accounts' => 3, 'batch_size' => 3], $day);
 
         /* The page reads it without moving anybody's cap. */
         $json = $this->app->make(GroupInviteController::class)->show()->getData(true);
 
-        $this->assertSame(90, $json['progress']['max']);
+        $this->assertSame(72, $json['progress']['max']);
+        $this->assertSame(4, TelegramAccountProcess::query()->where('telegram_account_id', 2)->value('meta')['cap']);
 
         Carbon::setTestNow();
     }

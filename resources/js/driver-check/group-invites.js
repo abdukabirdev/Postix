@@ -155,62 +155,29 @@ export function groupInvitesPage(config) {
 
         /*
         |--------------------------------------------------------------
-        | The day in people
+        | The day: the ideal one and how far into it
         |--------------------------------------------------------------
         */
 
         day() {
-            return this.data?.progress ?? {
-                max: 0, done: 0, added: 0, expected: 0, lost: 0, lost_by: {}, accounts: {}, batch_size: 0,
-                runs_left: 0, next_run: null, schedule_on: true, has_group: true,
-            };
+            return this.data?.progress ?? { max: 0, due: 0, made: 0, tried: 0, added: 0, accounts: 0, batch_size: 0 };
         },
 
-        /* Done, still to come, most likely not: the three add up to the most of the day. */
-        dayParts() {
+        /* The calls made out of those due; 100 only once every one is made. */
+        dayShare() {
             const day = this.day();
-            const p = t.overview.progress;
 
-            return [
-                { key: 'done', label: p.done, value: day.done, fill: 'bg-success-500' },
-                { key: 'expected', label: p.expected, value: day.expected, fill: 'bg-brand-300 dark:bg-brand-500/60' },
-                { key: 'lost', label: p.lost, value: day.lost, fill: 'bg-error-300 dark:bg-error-500/50' },
-            ].map((part) => ({ ...part, share: day.max > 0 ? (100 * part.value) / day.max : 0 }));
+            return day.due > 0 ? Math.min(100, (100 * day.made) / day.due) : 0;
         },
 
-        /* The biggest reason first; none that took nothing. */
-        lostReasons() {
-            const by = this.day().lost_by ?? {};
-
-            return ['resting', 'held', 'schedule', 'partial', 'queue']
-                .map((key) => ({ key, value: Number(by[key] ?? 0) }))
-                .filter((reason) => reason.value > 0)
-                .sort((a, b) => b.value - a.value);
-        },
-
-        expectedLine() {
+        dayMadeLine() {
             const day = this.day();
-            const p = t.overview.progress;
 
-            if (!day.schedule_on || day.runs_left === 0) {
-                return p.people.replace(':n', this.number(day.expected)) + ' · ' + p.no_runs;
-            }
-
-            return p.expected_line
-                .replace(':n', this.number(day.expected))
-                .replace(':runs', this.number(day.runs_left))
-                .replace(':time', this.time(day.next_run));
-        },
-
-        dayAccountsLine() {
-            const a = this.day().accounts ?? {};
-
-            return t.overview.progress.accounts
-                .replace(':n', this.number(a.accounts ?? 0))
-                .replace(':working', this.number(a.working ?? 0))
-                .replace(':resting', this.number(a.resting ?? 0))
-                .replace(':held', this.number(a.held ?? 0))
-                .replace(':capped', this.number(a.capped ?? 0));
+            return t.overview.progress.made_line
+                .replace(':made', this.number(day.made))
+                .replace(':due', this.number(day.due))
+                .replace(':tried', this.number(day.tried))
+                .replace(':added', this.number(day.added));
         },
 
         /*

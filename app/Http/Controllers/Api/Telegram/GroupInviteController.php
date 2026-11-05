@@ -84,12 +84,10 @@ final class GroupInviteController extends Controller
         $latest = TelegramGroupInviteLog::query()->where('event', 'started')->latest('id')->value('run_id');
 
         $current = TelegramInviteGroup::current();
-        $queue = $current ? $this->base->queue($current, $config) : null;
-        $now = self::now($running);
 
         return response()->json([
             'running' => $running,
-            'now' => $now,
+            'now' => self::now($running),
             'base' => $this->base->cachedCounts($config),
             'added' => [
                 'total' => (int) $groups->sum('added'),
@@ -120,16 +118,10 @@ final class GroupInviteController extends Controller
             /* The one group people are added into now, and who is still left to try for it. */
             'current' => $current ? [
                 ...($groups->firstWhere('id', $current->id) ?? []),
-                'queue' => $queue,
+                'queue' => $this->base->queue($current, $config),
             ] : null,
-            /* The day in people: the most, what was tried, what is still to come, what will most likely not be. */
-            'progress' => $this->progress->today(
-                $config,
-                $queue === null ? null : $queue['proven'] + ($config['audience'] === GroupInviteSettings::AUDIENCE_PROVEN ? 0 : $queue['other']),
-                ($now['running'] ?? false) && ! ($now['check_only'] ?? false)
-                    ? ['run_id' => (string) $now['run_id'], 'trigger' => (string) ($now['trigger'] ?? 'manual')]
-                    : null,
-            ),
+            /* The ideal day and how far the accounts are into it. */
+            'progress' => $this->progress->today($config),
             'accounts' => [
                 'total' => $accounts->count(),
                 'taking_part' => $taking->count(),
