@@ -55,6 +55,8 @@ export function groupInvitesSpamPage(config) {
         /* The settings form: filled from the first answer and after a save, not by the refreshes in between. */
         delay: 15,
         notifyOn: true,
+        /* Who may forward spam to the bot: Telegram ids, as typed. */
+        moderators: '',
         settingsFilled: false,
 
         init() {
@@ -88,6 +90,7 @@ export function groupInvitesSpamPage(config) {
                 if (!this.settingsFilled) {
                     this.delay = this.data.settings.delay;
                     this.notifyOn = this.data.settings.notify;
+                    this.moderators = (this.data.settings.moderators ?? []).join(', ');
                     this.settingsFilled = true;
                 }
             } catch (error) {
@@ -164,6 +167,21 @@ export function groupInvitesSpamPage(config) {
 
         groupsReady() {
             return this.groups.filter((group) => group.can_delete === true).length;
+        },
+
+        /* Forward a spammer's message to the bot: its author goes onto the list. */
+        forwardHint() {
+            if (!this.bot.connected) {
+                return s.bot_none;
+            }
+
+            return s.forward_hint.replace(':bot', '@' + this.bot.username);
+        },
+
+        forwardWho() {
+            const ids = this.data.forward.moderators;
+
+            return ids.length ? s.forward_who.replace(':ids', ids.join(', ')) : s.forward_nobody;
         },
 
         statuses() {
@@ -276,6 +294,7 @@ export function groupInvitesSpamPage(config) {
                 const json = await requestJson(this.endpoints.settings, 'PATCH', {
                     delay: Number(this.delay),
                     notify: this.notifyOn,
+                    moderators: this.moderators.trim(),
                 });
                 notify(json.message);
                 this.settingsFilled = false;

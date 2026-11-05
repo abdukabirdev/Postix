@@ -105,6 +105,10 @@ final class GroupInviteSpamController extends Controller
             'messages' => $messages,
             'list_size' => self::LIST_SIZE,
             'max_delay' => JoinBotSettings::MAX_SPAM_DELAY,
+            /* Who may forward a spammer's message to the bot. */
+            'forward' => [
+                'moderators' => $this->settings->moderators(),
+            ],
         ]);
     }
 
@@ -160,17 +164,34 @@ final class GroupInviteSpamController extends Controller
     }
 
     /**
-     * How many seconds after it was sent a message goes, and whether the
-     * owner is told of each (without a sound).
+     * How many seconds after it was sent a message goes, whether the owner
+     * is told of each (without a sound), and who may forward spam to the
+     * bot (Telegram ids; none - whoever the reports go to).
      */
     public function settings(Request $request): JsonResponse
     {
         $data = $request->validate([
             'delay' => ['required', 'integer', 'min:0', 'max:' . JoinBotSettings::MAX_SPAM_DELAY],
             'notify' => ['required', 'boolean'],
+            'moderators' => ['sometimes', 'nullable', 'string', 'max:1000'],
         ]);
 
-        $this->settings->saveSpam((int) $data['delay'], (bool) $data['notify']);
+        $moderators = null;
+
+        if ($request->has('moderators')) {
+            $words = preg_split('/[\s,;]+/u', trim((string) ($data['moderators'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+            $invalid = array_filter($words, static fn (string $word) => preg_match('/^\d{3,16}$/', $word) !== 1);
+
+            if ($invalid !== []) {
+                return response()->json([
+                    'message' => __('driver_check.invites.spam.messages.bad_moderators', ['words' => implode(', ', array_slice($invalid, 0, 5))]),
+                ], 422);
+            }
+
+            $moderators = array_values(array_unique(array_map('intval', $words)));
+        }
+
+        $this->settings->saveSpam((int) $data['delay'], (bool) $data['notify'], $moderators);
 
         return response()->json(['message' => __('driver_check.invites.spam.messages.saved', ['n' => (int) $data['delay']])]);
     }

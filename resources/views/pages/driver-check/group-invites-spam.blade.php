@@ -114,6 +114,18 @@
                             </form>
                         </x-driver-check.surface>
 
+                        {{-- Or forward a spammer's message to the bot --}}
+                        <x-driver-check.surface class="overflow-hidden">
+                            <div class="flex items-start gap-3 p-4">
+                                <x-driver-check.icon name="bot" class="mt-0.5 h-5 w-5 shrink-0 text-brand-500" />
+                                <div class="min-w-0">
+                                    <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.spam.forward_title') }}</h2>
+                                    <p class="mt-1 text-[12.5px] leading-snug text-gray-600 dark:text-gray-300" x-text="forwardHint()"></p>
+                                    <p class="mt-1.5 text-[11.5px] leading-snug" :class="data.forward.moderators.length ? 'text-gray-400' : 'text-warning-700 dark:text-warning-400'" x-text="forwardWho()"></p>
+                                </div>
+                            </div>
+                        </x-driver-check.surface>
+
                         {{-- How long a message stays, whether the owner is told --}}
                         <x-driver-check.surface class="overflow-hidden">
                             <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
@@ -136,6 +148,11 @@
                                     </label>
                                     <p class="mt-1.5 text-[11.5px] leading-snug text-gray-400" x-text="s.notify_hint.replace(':chat', data.reports.chat_id || '—')"></p>
                                 </div>
+
+                                <x-driver-check.field :label="__('driver_check.invites.spam.moderators')" for="dc-spam-moderators">
+                                    <x-driver-check.input id="dc-spam-moderators" inputmode="numeric" autocomplete="off" maxlength="1000" x-model="moderators" ::placeholder="data.reports.chat_id || ''" />
+                                    <p class="mt-1.5 text-[11.5px] leading-snug text-gray-400 dark:text-gray-500" x-text="s.moderators_hint.replace(':chat', data.reports.chat_id || '—')"></p>
+                                </x-driver-check.field>
 
                                 <x-driver-check.button type="submit" ::disabled="busy" class="self-start">
                                     {{ __('driver_check.invites.spam.save') }}

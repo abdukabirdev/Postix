@@ -38,6 +38,9 @@ use Throwable;
  * after they were sent (SpamCleaner): the bot, an admin of the group, gets
  * every message there, and deletes the due ones between its asks.
  *
+ * The owner forwards a spammer's message to the bot: its author goes onto
+ * the spam list (ForwardedSpam).
+ *
  * The bot is asked by getUpdates (long polling), a minute at a time, from
  * the scheduler: no webhook, nothing public to set up.
  */
@@ -49,7 +52,7 @@ final class JoinRequestService
     /**
      * chat_member: who came into a group where the bot is an admin - a bot
      * among them is muted; message: what is written there - the spam list's
-     * messages are deleted.
+     * messages are deleted - and the owner's forwards in the bot's own chat.
      */
     private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member', 'message'];
 
@@ -87,6 +90,7 @@ final class JoinRequestService
         private readonly JoinBotSettings $settings,
         private readonly JoinBotReporter $reporter,
         private readonly SpamCleaner $spam,
+        private readonly ForwardedSpam $forwards,
     ) {}
 
     /**
@@ -350,6 +354,8 @@ final class JoinRequestService
     {
         if (is_array($update['message'] ?? null)) {
             $this->spam->take($update['message'], $say);
+            /* In the bot's own chat: the owner's forward of a spammer's message. */
+            $this->forwards->take($api, $update['message'], $say);
 
             return;
         }

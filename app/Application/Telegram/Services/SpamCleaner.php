@@ -501,21 +501,24 @@ final class SpamCleaner
      *
      * @param array<string, mixed> $actor
      */
-    private static function nameOf(array $actor): ?string
+    public static function nameOf(array $actor): ?string
     {
         $name = trim(((string) ($actor['first_name'] ?? $actor['title'] ?? '')) . ' ' . ((string) ($actor['last_name'] ?? '')));
 
         return $name === '' ? null : $name;
     }
 
-    private static function username(mixed $value): ?string
+    /**
+     * A @username as the list keeps it: lowercase, without the @.
+     */
+    public static function username(mixed $value): ?string
     {
         $value = is_string($value) ? ltrim(trim($value), '@') : '';
 
         return $value === '' ? null : mb_strtolower(mb_substr($value, 0, 64));
     }
 
-    private static function cut(mixed $value, int $length): ?string
+    public static function cut(mixed $value, int $length): ?string
     {
         $value = is_scalar($value) ? trim((string) $value) : '';
 
