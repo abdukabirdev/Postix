@@ -1118,6 +1118,25 @@ final class GroupInviteService
     }
 
     /**
+     * What dailyCap() comes to, read only: the clean day's growth worked out
+     * without writing it down. For the overview's progress of the day, a
+     * page must not move an account's cap.
+     *
+     * @param array<string, mixed> $meta
+     */
+    public static function capFromMeta(array $meta, int $warmLimit, int $full): int
+    {
+        $cap = isset($meta['cap']) ? (int) $meta['cap'] : null;
+
+        if ($cap !== null && isset($meta['clean_day']) && $meta['clean_day'] < now()->toDateString()) {
+            $grown = max($cap + 1, (int) ceil($cap * self::CAP_GROWTH));
+            $cap = $grown < $full ? $grown : null;
+        }
+
+        return $cap !== null ? max(1, min($warmLimit, $cap)) : $warmLimit;
+    }
+
+    /**
      * Which day of inviting today is for the account (1: its first): from
      * the day it first made a call, kept in its meta once it has.
      *

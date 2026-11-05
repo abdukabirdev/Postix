@@ -1422,6 +1422,82 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(7, $other['period']['days']);
     }
 
+    public function test_the_day_in_people_adds_up_to_the_most_the_accounts_may_try_and_tells_why_the_rest_will_not_be(): void
+    {
+        Carbon::setTestNow(Carbon::parse('2026-11-05 12:00:00'));
+
+        $this->app->make(GroupInviteSettings::class)->save([
+            ...$this->app->make(GroupInviteSettings::class)->current(),
+            /* Runs at 05:00, 11:00, 17:00, 23:00: two left after noon. */
+            'enabled' => true,
+            'schedule_at' => '05:00',
+            'runs_per_day' => 4,
+            'batch_size' => 3,
+            'batches_per_day' => 10,
+            'warm_up' => false,
+            'excluded_accounts' => [],
+        ]);
+        DB::table('telegram_accounts')->insert(['id' => 3, 'phone' => '+998900000003', 'telegram_user_id' => 9003, 'session_path' => '/sessions/3']);
+
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        $calls = function (int $accountId, int $count): void {
+            foreach (range(1, $count) as $i) {
+                TelegramGroupInviteLog::query()->create(['run_id' => 'r', 'telegram_account_id' => $accountId, 'event' => TelegramGroupInviteLog::EVENT_CALL, 'message' => 'x']);
+            }
+        };
+        $tried = function (int $accountId, int $from, int $count, string $status) use ($group): void {
+            foreach (range($from, $from + $count - 1) as $id) {
+                TelegramGroupInvite::query()->create([
+                    'invite_group_id' => $group->id,
+                    'scraped_user_id' => $this->person($id, "P{$id}")->id,
+                    'telegram_account_id' => $accountId,
+                    'status' => $status,
+                    'attempted_at' => now()->subHour(),
+                ]);
+            }
+        };
+
+        /* #1: 5 of its 10 calls, 12 people in them (3 short of full); the two runs left give it the other 5. */
+        $calls(1, 5);
+        $tried(1, 7001, 4, TelegramGroupInvite::STATUS_INVITED);
+        $tried(1, 7011, 8, TelegramGroupInvite::STATUS_NOT_ADDED);
+        /* #2: 2 calls, then a flood until 18:00 - the 17:00 run is lost to it, the 23:00 one gives 3 calls. */
+        $calls(2, 2);
+        $tried(2, 7101, 6, TelegramGroupInvite::STATUS_INVITED);
+        TelegramAccountProcess::query()->create([
+            'telegram_account_id' => 2,
+            'process' => ProcessEnum::GroupInvite->value,
+            'meta' => ['rest_until' => now()->setTime(18, 0)->toIso8601String(), 'rest_kind' => 'wait'],
+        ]);
+        /* #3: switched off for the invites. */
+        TelegramAccountProcess::query()->create(['telegram_account_id' => 3, 'process' => ProcessEnum::GroupInvite->value, 'is_available' => false]);
+
+        $config = $this->app->make(GroupInviteSettings::class)->current();
+        $day = $this->app->make(\App\Application\Telegram\Services\GroupInviteDayProgress::class)->today($config, 1000);
+
+        $this->assertSame(90, $day['max']);
+        $this->assertSame([18, 10, 24], [$day['done'], $day['added'], $day['expected']]);
+        $this->assertSame(['held' => 30, 'resting' => 9, 'schedule' => 6, 'partial' => 3, 'queue' => 0], $day['lost_by']);
+        $this->assertSame(48, $day['lost']);
+        $this->assertSame($day['max'], $day['done'] + $day['expected'] + $day['lost']);
+        $this->assertSame(2, $day['runs_left']);
+        $this->assertSame(['accounts' => 3, 'working' => 1, 'resting' => 1, 'held' => 1, 'capped' => 0], $day['accounts']);
+
+        /* Fewer people waiting than the accounts could still try. */
+        $short = $this->app->make(\App\Application\Telegram\Services\GroupInviteDayProgress::class)->today($config, 20);
+
+        $this->assertSame([20, 4], [$short['expected'], $short['lost_by']['queue']]);
+        $this->assertSame($short['max'], $short['done'] + $short['expected'] + $short['lost']);
+
+        /* The page reads it without moving anybody's cap. */
+        $json = $this->app->make(GroupInviteController::class)->show()->getData(true);
+
+        $this->assertSame(90, $json['progress']['max']);
+
+        Carbon::setTestNow();
+    }
+
     public function test_an_accounts_country_is_told_by_its_calling_code_and_its_age_by_its_telegram_id(): void
     {
         $this->assertSame(['code' => '998', 'region' => 'UZ'], PhoneCountry::of('+998 88 400 02 48'));

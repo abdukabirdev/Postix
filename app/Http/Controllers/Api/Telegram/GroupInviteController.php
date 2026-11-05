@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\GroupInviteBase;
+use App\Application\Telegram\Services\GroupInviteDayProgress;
 use App\Application\Telegram\Services\GroupInviteService;
 use App\Application\Telegram\Services\GroupInviteSettings;
 use App\Console\Commands\Telegram\TelegramGroupInviteCommand;
@@ -32,6 +33,7 @@ final class GroupInviteController extends Controller
     public function __construct(
         private readonly GroupInviteSettings $settings,
         private readonly GroupInviteBase $base,
+        private readonly GroupInviteDayProgress $progress,
     ) {}
 
     /**
@@ -82,10 +84,12 @@ final class GroupInviteController extends Controller
         $latest = TelegramGroupInviteLog::query()->where('event', 'started')->latest('id')->value('run_id');
 
         $current = TelegramInviteGroup::current();
+        $queue = $current ? $this->base->queue($current, $config) : null;
+        $now = self::now($running);
 
         return response()->json([
             'running' => $running,
-            'now' => self::now($running),
+            'now' => $now,
             'base' => $this->base->cachedCounts($config),
             'added' => [
                 'total' => (int) $groups->sum('added'),
@@ -116,8 +120,16 @@ final class GroupInviteController extends Controller
             /* The one group people are added into now, and who is still left to try for it. */
             'current' => $current ? [
                 ...($groups->firstWhere('id', $current->id) ?? []),
-                'queue' => $this->base->queue($current, $config),
+                'queue' => $queue,
             ] : null,
+            /* The day in people: the most, what was tried, what is still to come, what will most likely not be. */
+            'progress' => $this->progress->today(
+                $config,
+                $queue === null ? null : $queue['proven'] + ($config['audience'] === GroupInviteSettings::AUDIENCE_PROVEN ? 0 : $queue['other']),
+                ($now['running'] ?? false) && ! ($now['check_only'] ?? false)
+                    ? ['run_id' => (string) $now['run_id'], 'trigger' => (string) ($now['trigger'] ?? 'manual')]
+                    : null,
+            ),
             'accounts' => [
                 'total' => $accounts->count(),
                 'taking_part' => $taking->count(),

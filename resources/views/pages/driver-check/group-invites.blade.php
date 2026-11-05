@@ -108,6 +108,77 @@
                     </div>
                 </x-driver-check.surface>
 
+                {{-- The day in people: the most the accounts may try today, what is done, what is still to come, what will most likely not be --}}
+                <x-driver-check.surface class="overflow-hidden">
+                    <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+                        <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.overview.progress.title') }}</h2>
+                        <p class="mt-0.5 text-[12px] leading-snug text-gray-400" x-text="t.overview.progress.hint.replace(':size', number(day().batch_size))"></p>
+                    </div>
+
+                    <div class="p-4">
+                        <div class="grid gap-4 sm:grid-cols-4">
+                            <div>
+                                <p class="dc-eyebrow">{{ __('driver_check.invites.overview.progress.max') }}</p>
+                                <p class="mt-1.5 text-[26px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-gray-950 dark:text-white" x-text="number(day().max)"></p>
+                                <p class="mt-1 text-[12px] text-gray-500" x-text="t.overview.progress.people_word"></p>
+                            </div>
+                            <div>
+                                <p class="dc-eyebrow">{{ __('driver_check.invites.overview.progress.done') }}</p>
+                                <p class="mt-1.5 text-[26px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-success-600 dark:text-success-400" x-text="percent(day().done, day().max) + '%'"></p>
+                                <p class="mt-1 text-[12px] tabular-nums text-gray-500" x-text="t.overview.progress.done_line.replace(':done', number(day().done)).replace(':added', number(day().added))"></p>
+                            </div>
+                            <div>
+                                <p class="dc-eyebrow">{{ __('driver_check.invites.overview.progress.expected') }}</p>
+                                <p class="mt-1.5 text-[26px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-brand-600 dark:text-brand-400" x-text="percent(day().expected, day().max) + '%'"></p>
+                                <p class="mt-1 text-[12px] tabular-nums text-gray-500" x-text="expectedLine()"></p>
+                            </div>
+                            <div>
+                                <p class="dc-eyebrow">{{ __('driver_check.invites.overview.progress.lost') }}</p>
+                                <p class="mt-1.5 text-[26px] font-semibold leading-none tracking-[-0.02em] tabular-nums text-error-600 dark:text-error-400" x-text="percent(day().lost, day().max) + '%'"></p>
+                                <p class="mt-1 text-[12px] tabular-nums text-gray-500" x-text="t.overview.progress.people.replace(':n', number(day().lost))"></p>
+                            </div>
+                        </div>
+
+                        {{-- One bar: done, still to come, most likely not --}}
+                        <div
+                            class="mt-4 flex h-3 w-full gap-[2px] overflow-hidden rounded-full"
+                            :class="day().max === 0 && 'bg-gray-100 dark:bg-white/[0.06]'"
+                            role="img"
+                            :aria-label="dayParts().map((p) => p.label + ': ' + p.share.toFixed(0) + '%').join(', ')"
+                        >
+                            <template x-for="part in dayParts()" :key="part.key">
+                                <span
+                                    x-show="part.value > 0"
+                                    class="h-full first:rounded-l-full last:rounded-r-full"
+                                    :class="part.fill"
+                                    :style="`width: ${part.share}%; min-width: 4px`"
+                                    :title="part.label + ': ' + number(part.value) + ' (' + percent(part.value, day().max) + '%)'"
+                                ></span>
+                            </template>
+                        </div>
+
+                        <p class="mt-2 text-[12px] text-gray-500" x-text="dayAccountsLine()"></p>
+                        <p x-show="!day().has_group" x-cloak class="mt-1 text-[12px] font-medium text-warning-600 dark:text-warning-400">{{ __('driver_check.invites.overview.progress.no_group') }}</p>
+                        <p x-show="day().has_group && !day().schedule_on" x-cloak class="mt-1 text-[12px] font-medium text-warning-600 dark:text-warning-400">{{ __('driver_check.invites.overview.progress.schedule_off') }}</p>
+
+                        {{-- Why the rest will most likely not be tried --}}
+                        <div x-show="lostReasons().length > 0" x-cloak class="mt-4">
+                            <p class="text-[12px] font-semibold text-gray-600 dark:text-gray-300">{{ __('driver_check.invites.overview.progress.why') }}</p>
+                            <ul class="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                                <template x-for="reason in lostReasons()" :key="reason.key">
+                                    <li class="rounded-xl border border-gray-100 p-3 dark:border-gray-800">
+                                        <div class="flex items-baseline justify-between gap-2">
+                                            <span class="text-[12.5px] font-medium text-gray-800 dark:text-gray-100" x-text="t.overview.progress.reasons[reason.key]"></span>
+                                            <span class="shrink-0 text-[13px] font-semibold tabular-nums text-error-600 dark:text-error-400" x-text="number(reason.value) + ' · ' + percent(reason.value, day().max) + '%'"></span>
+                                        </div>
+                                        <p class="mt-1 text-[11.5px] leading-snug text-gray-400" x-text="t.overview.progress.reason_hints[reason.key]"></p>
+                                    </li>
+                                </template>
+                            </ul>
+                        </div>
+                    </div>
+                </x-driver-check.surface>
+
                 {{-- The base: everybody, and where each one stands --}}
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="flex flex-col gap-1 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-baseline sm:justify-between dark:border-gray-800">
