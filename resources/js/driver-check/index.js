@@ -36,6 +36,7 @@ import { groupInvitesAccountsPage } from './group-invites-accounts';
 import { groupInvitesLogPage } from './group-invites-log';
 import { groupInvitesAnalysisPage } from './group-invites-analysis';
 import { groupInvitesRankingPage } from './group-invites-ranking';
+import { groupInvitesDriversPage } from './group-invites-drivers';
 import { groupInvitesSettingsPage } from './group-invites-settings';
 import { groupInvitesBotPage } from './group-invites-bot';
 import { groupInvitesSpamPage } from './group-invites-spam';
@@ -1260,6 +1261,7 @@ export function registerDriverCheck(Alpine) {
     Alpine.data('dcGroupInvitesLog', groupInvitesLogPage);
     Alpine.data('dcGroupInvitesAnalysis', groupInvitesAnalysisPage);
     Alpine.data('dcGroupInvitesRanking', groupInvitesRankingPage);
+    Alpine.data('dcGroupInvitesDrivers', groupInvitesDriversPage);
     Alpine.data('dcGroupInvitesSettings', groupInvitesSettingsPage);
     Alpine.data('dcGroupInvitesBot', groupInvitesBotPage);
     Alpine.data('dcGroupInvitesSpam', groupInvitesSpamPage);

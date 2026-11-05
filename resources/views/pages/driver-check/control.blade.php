@@ -277,6 +277,77 @@
             </div>
 
             {{-- ============================================================
+                 Drivers into a group: what runs now, continue and stop
+            ============================================================= --}}
+            <div
+                x-data="dcGroupInvitesDrivers({
+                    endpoints: {
+                        show: @js(route('api.telegram.group-invites.drivers')),
+                        rows: @js(route('api.telegram.group-invites.drivers.rows')),
+                        settings: @js(route('api.telegram.group-invites.drivers.settings')),
+                        all: @js(route('api.telegram.group-invites.drivers.all')),
+                        run: @js(route('api.telegram.group-invites.drivers.run')),
+                        retry: @js(route('api.telegram.group-invites.drivers.retry')),
+                        stop: @js(route('api.telegram.group-invites.drivers.stop')),
+                    },
+                    translations: @js(__('driver_check.invites')),
+                    drivers: @js(__('driver_check.drivers_group')),
+                    compact: true,
+                })"
+            >
+                <x-driver-check.surface class="flex h-full flex-col overflow-hidden">
+                    <div class="{{ $cardHead }}">
+                        <h2 class="{{ $cardTitle }}">
+                            <x-driver-check.icon name="truck" class="h-4 w-4 text-gray-400" />
+                            {{ __('driver_check.control.cards.drivers') }}
+                        </h2>
+                        <a href="{{ route('driver-check.group-invites.drivers') }}" class="{{ $cardLink }}">{{ __('driver_check.control.open') }} →</a>
+                    </div>
+
+                    <div class="p-4">
+                        <div x-show="!data && loading" class="dc-skeleton h-16 rounded-xl bg-gray-100 dark:bg-white/[0.06]"></div>
+                        <p x-show="error" x-cloak class="dc-break rounded-lg bg-error-50 px-3 py-2 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400" x-text="error"></p>
+
+                        <template x-if="data">
+                            <div>
+                                <div class="flex items-center gap-2">
+                                    <span class="dc-dot" :class="running ? 'animate-pulse text-success-500' : 'text-gray-300 dark:text-gray-600'"></span>
+                                    <p class="dc-eyebrow" x-text="running ? d.now.title_running : d.now.title_idle"></p>
+                                </div>
+
+                                <p x-show="!data.group" x-cloak class="mt-2 text-[13px] text-gray-500" x-text="d.no_group"></p>
+
+                                <template x-if="data.group">
+                                    <div class="mt-2">
+                                        <p class="text-[14px] font-semibold text-gray-950 dark:text-white" x-text="running ? doingLabel() : lastRunLabel()"></p>
+                                        <p x-show="running" x-cloak class="mt-0.5 text-[12.5px] text-gray-500" x-text="whereLabel()"></p>
+                                        <p x-show="now?.totals" x-cloak class="mt-1 text-[12.5px] tabular-nums text-gray-600 dark:text-gray-300" x-text="summary(now?.totals)"></p>
+                                        <p x-show="groupError()" x-cloak class="mt-1 text-[12.5px] font-medium text-error-600 dark:text-error-400" x-text="groupError()"></p>
+                                        <p class="mt-1 text-[12px] tabular-nums text-gray-400">
+                                            <span x-text="data.group.title"></span>
+                                            <span x-text="' · ' + d.statuses.invited + ' ' + number(counts().invited) + ' · ' + d.statuses.pending + ' ' + number(counts().pending)"></span>
+                                        </p>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="{{ $cardFoot }}">
+                        <x-driver-check.button size="sm" icon="users" x-show="!running" x-on:click="addAll()" ::disabled="busy || !data?.group || (data?.counts?.not_queued ?? 0) === 0">
+                            <span x-text="d.add_all + ((data?.counts?.not_queued ?? 0) > 0 ? ' · ' + number(data.counts.not_queued) : '')"></span>
+                        </x-driver-check.button>
+                        <x-driver-check.button size="sm" variant="primary" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy || !data?.group || counts().pending === 0">
+                            <span x-text="d.run + (counts().pending > 0 ? ' · ' + number(counts().pending) : '')"></span>
+                        </x-driver-check.button>
+                        <x-driver-check.button size="sm" variant="danger" icon="stop" x-show="running" x-cloak x-on:click="stop()" ::disabled="busy || now?.stop_asked">
+                            <span x-text="now?.stop_asked ? d.stopping : d.stop"></span>
+                        </x-driver-check.button>
+                    </div>
+                </x-driver-check.surface>
+            </div>
+
+            {{-- ============================================================
                  Join group: the watchdog, the switch, a new search
             ============================================================= --}}
             <div

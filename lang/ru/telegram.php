@@ -1379,6 +1379,7 @@ return [
                 'driver_check' => 'Проверка водителей',
                 'group_join' => 'Вступление в группы',
                 'group_invite' => 'Добавление в группы',
+                'driver_group_add' => 'Водители в группу',
             ],
             'states' => [
                 'ready' => 'Готов',

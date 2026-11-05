@@ -1366,6 +1366,7 @@ return [
                 'driver_check' => 'Haydovchilarni tekshirish',
                 'group_join' => 'Guruhlarga qo\'shilish',
                 'group_invite' => 'Guruhlarga qo\'shish',
+                'driver_group_add' => 'Haydovchilarni guruhga',
             ],
             'states' => [
                 'ready' => 'Tayyor',

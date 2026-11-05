@@ -111,6 +111,9 @@ final class DriverCheckNav
                 ['invites_people', 'group-invites/people', 'users'],
                 ['invites_accounts', 'group-invites/accounts', 'phone'],
             ],
+            'drivers' => [
+                ['invites_drivers', 'group-invites/drivers', 'truck'],
+            ],
             'setup' => [
                 ['invites_settings', 'group-invites/settings', 'sliders-h'],
             ],

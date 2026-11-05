@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\Telegram\ContactSyncSettingsController;
 use App\Http\Controllers\Api\Telegram\GroupInviteAccountController;
 use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
 use App\Http\Controllers\Api\Telegram\GroupInviteRankingController;
+use App\Http\Controllers\Api\Telegram\DriverGroupController;
 use App\Http\Controllers\Api\Telegram\GroupInviteBotController;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
 use App\Http\Controllers\Api\Telegram\GroupInviteController;
@@ -419,7 +420,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             [DriverCheckController::class, 'groupInvites']
         )->name('driver-check.group-invites');
 
-        foreach (['groups', 'people', 'accounts', 'log', 'analysis', 'ranking', 'settings', 'bot', 'spam'] as $invitePage) {
+        foreach (['groups', 'people', 'accounts', 'log', 'analysis', 'ranking', 'drivers', 'settings', 'bot', 'spam'] as $invitePage) {
             Route::get(
                 "/group-invites/{$invitePage}",
                 [DriverCheckController::class, 'groupInvites' . ucfirst($invitePage)]
@@ -939,6 +940,17 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                 /* The accounts side by side: who adds the most, by day, by age and by country. */
                 Route::controller(GroupInviteRankingController::class)->group(function () {
                     Route::get('/ranking', 'show')->name('api.telegram.group-invites.ranking');
+                });
+
+                /* Drivers found in Telegram into one of our groups, by the account that found them. */
+                Route::controller(DriverGroupController::class)->group(function () {
+                    Route::get('/drivers', 'show')->name('api.telegram.group-invites.drivers');
+                    Route::get('/drivers/list', 'rows')->name('api.telegram.group-invites.drivers.rows');
+                    Route::put('/drivers/settings', 'updateSettings')->name('api.telegram.group-invites.drivers.settings');
+                    Route::post('/drivers/all', 'all')->name('api.telegram.group-invites.drivers.all');
+                    Route::post('/drivers/run', 'run')->name('api.telegram.group-invites.drivers.run');
+                    Route::post('/drivers/retry', 'retry')->name('api.telegram.group-invites.drivers.retry');
+                    Route::post('/drivers/stop', 'stop')->name('api.telegram.group-invites.drivers.stop');
                 });
 
                 /* Our bot that approves the requests to join our groups. */

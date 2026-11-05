@@ -32,6 +32,15 @@ Schedule::command('telegram:group-invites --trigger=schedule')
     ->runInBackground()
     ->withoutOverlapping();
 
+// Drivers into the group picked in the panel (Group invites -> Drivers into
+// a group). Every minute the drivers checked meanwhile go into the queue,
+// and a run starts when an account may add now; the command's own lock
+// keeps one run at a time, and asks quietly when there is nothing to do.
+Schedule::command('telegram:driver-group-add --trigger=schedule')
+    ->everyMinute()
+    ->when(fn () => app(\App\Application\Telegram\Services\DriverGroupSettings::class)->active())
+    ->runInBackground();
+
 // Our bot approves the requests to join our groups and writes who asked
 // into the base. Each start asks Telegram for under a minute and ends; the
 // token and the switch live in the panel (Group invites -> Join bot).

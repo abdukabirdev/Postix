@@ -1378,6 +1378,7 @@ return [
                 'driver_check' => 'Driver check',
                 'group_join' => 'Group join',
                 'group_invite' => 'Add to groups',
+                'driver_group_add' => 'Drivers into a group',
             ],
             'states' => [
                 'ready' => 'Ready',
