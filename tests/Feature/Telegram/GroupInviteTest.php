@@ -7,6 +7,8 @@ use App\Application\Telegram\Services\GroupInviteSettings;
 use App\Application\Telegram\Services\JoinBotSettings;
 use App\Application\Telegram\Services\MadelineService;
 use App\Application\Telegram\Support\MemberCount;
+use App\Application\Telegram\Support\PhoneCountry;
+use App\Application\Telegram\Support\SessionProbe;
 use App\Application\Telegram\Support\UsernameLookup;
 use ArrayObject;
 use danog\MadelineProto\API;
@@ -105,7 +107,8 @@ final class GroupInviteTest extends TestCase
             ['id' => 2, 'phone' => '+998900000002', 'telegram_user_id' => 9002, 'session_path' => '/sessions/2'],
         ]);
 
-        $this->service = $this->app->make(GroupInviteService::class);
+        /* Every session answers, wherever the tests run. */
+        $this->probe();
     }
 
     public function test_defaults_are_twenty_at_a_time_eighty_times_a_day_then_usernames(): void
@@ -430,6 +433,136 @@ final class GroupInviteTest extends TestCase
 
         /* Resting, it is not taken by the next run. */
         $this->assertSame(['accounts' => 0, 'batches' => 0, 'invited' => 0, 'not_added' => 0, 'already' => 0, 'sent' => 0, 'failed' => 0, 'left' => 0, 'stayed' => 0, 'back' => 0], $this->service->run());
+    }
+
+    public function test_a_session_that_does_not_answer_rests_and_the_run_goes_on_with_the_others(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(801, 'One'));
+        $this->hold(2, $this->person(802, 'Two'));
+
+        $calls = $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+        $asked = $this->probe([1 => SessionProbe::HUNG]);
+
+        $totals = $this->service->run();
+
+        /* The run did not stand on #1: #2 invited its person. */
+        $this->assertSame([[802]], $calls->getArrayCopy());
+        $this->assertSame(1, $totals['invited']);
+        /* #1 once; #2 for its invites and again to read the members list after them. */
+        $this->assertSame([1, 2, 2], collect($asked->getArrayCopy())->sort()->values()->all());
+
+        $meta = $this->service->meta(TelegramAccount::query()->find(1));
+
+        $this->assertSame([GroupInviteService::KIND_HUNG, GroupInviteService::SESSION_HUNG], [$meta['rest_kind'], $meta['rest_reason']]);
+        $this->assertGreaterThan(now()->addHours(19)->timestamp, strtotime($meta['rest_until']));
+        $this->assertArrayHasKey('hung_at', $meta);
+        $this->assertNull(TelegramGroupInvite::query()->whereHas('user', fn ($q) => $q->where('telegram_user_id', 801))->first());
+
+        $stop = TelegramGroupInviteLog::query()->where('telegram_account_id', 1)->whereIn('event', TelegramGroupInviteLog::STOP_EVENTS)->sole();
+        $this->assertSame(['flood', GroupInviteService::KIND_HUNG, GroupInviteService::SESSION_HUNG], [$stop->event, $stop->context['kind'], $stop->context['rpc']]);
+
+        /* Resting, it is not even asked by the next run. */
+        $asked->exchangeArray([]);
+        $this->service->run();
+
+        $this->assertNotContains(1, $asked->getArrayCopy());
+    }
+
+    public function test_a_session_that_hangs_again_within_days_is_put_on_hold(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(811, 'One'));
+
+        TelegramAccountProcess::query()->create([
+            'telegram_account_id' => 1,
+            'process' => ProcessEnum::GroupInvite->value,
+            'meta' => ['hung_at' => now()->subDays(2)->toIso8601String()],
+        ]);
+
+        $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+        $this->probe([1 => SessionProbe::HUNG]);
+
+        $this->service->run();
+
+        $state = TelegramAccountProcess::query()->where('telegram_account_id', 1)->where('process', ProcessEnum::GroupInvite->value)->sole();
+
+        $this->assertFalse($state->is_available);
+        $this->assertSame(GroupInviteService::SESSION_HUNG, $state->disabled_reason);
+        $this->assertSame(['disabled', GroupInviteService::KIND_HUNG], [
+            TelegramGroupInviteLog::query()->where('telegram_account_id', 1)->whereIn('event', TelegramGroupInviteLog::STOP_EVENTS)->value('event'),
+            TelegramGroupInviteLog::query()->where('telegram_account_id', 1)->whereIn('event', TelegramGroupInviteLog::STOP_EVENTS)->sole()->context['kind'],
+        ]);
+    }
+
+    public function test_a_session_that_hung_long_ago_only_rests_again(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(821, 'One'));
+
+        TelegramAccountProcess::query()->create([
+            'telegram_account_id' => 1,
+            'process' => ProcessEnum::GroupInvite->value,
+            'meta' => ['hung_at' => now()->subDays(4)->toIso8601String()],
+        ]);
+
+        $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+        $this->probe([1 => SessionProbe::HUNG]);
+
+        $this->service->run();
+
+        $state = TelegramAccountProcess::query()->where('telegram_account_id', 1)->where('process', ProcessEnum::GroupInvite->value)->sole();
+
+        $this->assertTrue($state->is_available);
+        $this->assertSame(GroupInviteService::KIND_HUNG, $state->meta['rest_kind']);
+    }
+
+    public function test_a_probe_that_says_no_leaves_the_session_to_the_run(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(831, 'One'));
+
+        $calls = $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+
+        /* What every probe said on 05.11 11:11: its own fault, not the session's. */
+        $this->probe([1 => [SessionProbe::FAILED, 'You cannot use this method directly, use the getPwrChat, getInfo, getFullInfo methods instead']]);
+
+        $totals = $this->service->run();
+
+        $this->assertSame([[831]], $calls->getArrayCopy());
+        $this->assertSame(1, $totals['invited']);
+
+        $state = TelegramAccountProcess::query()->where('telegram_account_id', 1)->where('process', ProcessEnum::GroupInvite->value)->sole();
+
+        $this->assertTrue($state->is_available);
+        $this->assertSame(0, $state->consecutive_failures);
+        $this->assertSame(0, TelegramGroupInviteLog::query()->where('event', 'failed')->count());
+    }
+
+    public function test_a_session_that_fails_to_start_is_the_accounts_error_as_before(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(841, 'One'));
+
+        $this->fakeTelegram(invite: fn (array $users) => $this->added($users));
+
+        $madeline = Mockery::mock(MadelineService::class);
+        $madeline->shouldReceive('for')->andReturnUsing(function () use ($madeline) {
+            $madeline->lastError = RPCErrorException::make('AUTH_KEY_UNREGISTERED', 401, '');
+
+            return null;
+        });
+        $this->app->instance(MadelineService::class, $madeline);
+
+        $this->probe([1 => [SessionProbe::FAILED, 'AUTH_KEY_UNREGISTERED']]);
+
+        $this->service->run();
+
+        $state = TelegramAccountProcess::query()->where('telegram_account_id', 1)->where('process', ProcessEnum::GroupInvite->value)->sole();
+
+        $this->assertFalse($state->is_available);
+        $this->assertSame('AUTH_KEY_UNREGISTERED', $state->disabled_reason);
+        $this->assertFalse((bool) TelegramAccount::query()->find(1)->is_authorized);
     }
 
     public function test_a_stop_keeps_what_the_account_did_before_it(): void
@@ -1983,6 +2116,37 @@ final class GroupInviteTest extends TestCase
         }
 
         $this->get('/api/telegram/group-invites/analysis/export?type=stops')->assertOk();
+    }
+
+    /**
+     * The session check before a start: every account answers, unless
+     * $answers names it (a status, or [status, error]).
+     *
+     * @param array<int, string|array{0: string, 1: string}> $answers
+     *
+     * @return ArrayObject<int, int> the accounts asked
+     */
+    private function probe(array $answers = []): ArrayObject
+    {
+        $asked = new ArrayObject;
+
+        $this->app->instance(SessionProbe::class, new class($answers, $asked) extends SessionProbe
+        {
+            public function __construct(private array $answers, private ArrayObject $asked) {}
+
+            public function check(TelegramAccount $account, int $seconds, callable $stopping): array
+            {
+                $this->asked[] = $account->id;
+
+                [$status, $error] = (array) ($this->answers[$account->id] ?? self::OK) + [1 => null];
+
+                return ['status' => $status, 'error' => $error];
+            }
+        });
+
+        $this->service = $this->app->make(GroupInviteService::class);
+
+        return $asked;
     }
 
     private function person(int $telegramId, string $name, bool $bot = false, ?string $username = null): TelegramScrapedUser

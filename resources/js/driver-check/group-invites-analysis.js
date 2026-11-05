@@ -132,6 +132,7 @@ export function groupInvitesAnalysisPage(config) {
             return {
                 spam: 'text-error-600 dark:text-error-400',
                 dead: 'text-error-600 dark:text-error-400',
+                hung: 'text-warning-600 dark:text-warning-400',
                 wait: 'text-warning-600 dark:text-warning-400',
                 empty: 'text-gray-600 dark:text-gray-300',
             }[kind] ?? 'text-gray-600';

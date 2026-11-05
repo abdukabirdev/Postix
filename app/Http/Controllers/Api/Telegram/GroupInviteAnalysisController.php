@@ -24,8 +24,8 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 final class GroupInviteAnalysisController extends Controller
 {
-    /** The kinds a stop is told by: PEER_FLOOD, a long flood wait, nobody added call after call, a dead session. */
-    private const KINDS = ['spam', 'wait', 'empty', 'dead'];
+    /** The kinds a stop is told by: PEER_FLOOD, a long flood wait, nobody added call after call, a dead session, a session that did not answer. */
+    private const KINDS = ['spam', 'wait', 'empty', 'dead', 'hung'];
 
     private const PERIODS = [7, 14, 30, 90];
 
@@ -424,6 +424,8 @@ final class GroupInviteAnalysisController extends Controller
     private static function kindOf(string $event, array $context): string
     {
         return match (true) {
+            /* Resting or on hold for it: a hung session either way. */
+            ($context['kind'] ?? null) === 'hung' => 'hung',
             $event === 'disabled' => 'dead',
             $event === 'rest' => 'empty',
             in_array($context['kind'] ?? null, self::KINDS, true) => $context['kind'],

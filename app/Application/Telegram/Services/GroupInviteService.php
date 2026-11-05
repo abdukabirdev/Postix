@@ -8,6 +8,8 @@ use App\Application\Telegram\Support\BotApiError;
 use App\Application\Telegram\Support\DeadSession;
 use App\Application\Telegram\Support\JoinRefused;
 use App\Application\Telegram\Support\MemberCount;
+use App\Application\Telegram\Support\SessionHung;
+use App\Application\Telegram\Support\SessionProbe;
 use App\Application\Telegram\Support\SessionSleep;
 use App\Application\Telegram\Support\UsernameLookup;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
@@ -27,6 +29,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use RuntimeException;
 use Throwable;
@@ -143,6 +146,25 @@ final class GroupInviteService
 
     /** The person could be added, not by this call: left the group, a mutual contact may bring them back. */
     public const KIND_NOT_ADDED = 'not_added';
+
+    /** The account's session did not answer in SESSION_START_LIMIT seconds (SessionProbe). */
+    public const KIND_HUNG = 'hung';
+
+    /** Why an account whose session hung rests or is on hold; the contact sync says the same. */
+    public const SESSION_HUNG = 'SESSION_HUNG';
+
+    /**
+     * How long an account's session has to start and answer. A start takes
+     * seconds; one that hangs never ends by itself and stood the whole run
+     * still with it. Seconds.
+     */
+    public const SESSION_START_LIMIT = 90;
+
+    /** The rest of an account whose session hung: the worker is killed, the next start may well go. Hours. */
+    private const HUNG_REST_HOURS = 20;
+
+    /** A session that hangs again this soon is put on hold until it is enabled in the panel. Days. */
+    private const HUNG_AGAIN_DAYS = 3;
 
     /** The kinds that stop the account, not the group or the person. */
     private const ACCOUNT_KINDS = [self::KIND_WAIT, self::KIND_SPAM, self::KIND_DEAD, self::KIND_TRANSIENT];
@@ -332,6 +354,7 @@ final class GroupInviteService
         private readonly MemberCount $memberCount,
         private readonly JoinBotSettings $joinBot,
         private readonly JoinRequestService $joinRequests,
+        private readonly SessionProbe $probe,
     ) {}
 
     /**
@@ -444,13 +467,13 @@ final class GroupInviteService
         while (! $this->stopping() && (! $whoLeft || $this->toRecheck()->exists())) {
             $this->now = [...$this->now, 'account_id' => null, 'account' => null, 'group' => null];
 
-            /* A check only reads: an account resting from invites may make it. */
+            /* A check only reads: an account resting from invites may make it, not one whose session hung. */
             $account = $this->pool->claimRandomAvailableAccount(
                 ProcessEnum::GroupInvite,
                 array_values(array_unique(array_merge(
                     $usedAccountIds,
                     $this->busyElsewhere(),
-                    $checkOnly ? [] : $this->restingIds(),
+                    $checkOnly ? $this->restingIds(self::KIND_HUNG) : $this->restingIds(),
                 ))),
             );
 
@@ -496,11 +519,11 @@ final class GroupInviteService
             $api = null;
 
             try {
-                $api = $this->madeline->for($account);
+                $api = $this->connect($account);
 
-                if (! $api) {
-                    throw $this->madeline->lastError
-                        ?? new RuntimeException('Failed to start MadelineProto.');
+                /* Stopped from the panel while the session started. */
+                if ($api === null) {
+                    continue;
                 }
 
                 $result = $whoLeft
@@ -580,6 +603,48 @@ final class GroupInviteService
         $this->log('released', 'Accounts a run that died had left busy: #' . implode(', #', $stuck), null, null, [
             'accounts' => $stuck,
         ]);
+    }
+
+    /**
+     * The account's session, started here once a process of its own showed
+     * that it starts and answers (SessionProbe). Started here straight away,
+     * a session that hangs held the whole run with it - the start has no
+     * time limit, and the Stop button is only looked at between steps: one
+     * account stood the run 9 hours on 05.11. Now it gets
+     * SESSION_START_LIMIT seconds; its MadelineProto worker is killed then,
+     * and SessionHung puts the account aside. The probe only tells a hang:
+     * one that said no is not the account's error - the start here meets
+     * the error itself and tells it apart as before. Said the other way, a
+     * fault of the probe's own put every account aside in the run of 11:11
+     * on 05.11. Null: stopped from the panel meanwhile.
+     */
+    private function connect(TelegramAccount $account): ?API
+    {
+        $probe = $this->probe->check($account, self::SESSION_START_LIMIT, fn () => $this->stopping());
+
+        if ($probe['status'] === SessionProbe::STOPPED) {
+            return null;
+        }
+
+        if ($probe['status'] === SessionProbe::HUNG) {
+            throw new SessionHung($probe['error'] ?? self::SESSION_HUNG);
+        }
+
+        if ($probe['status'] === SessionProbe::FAILED) {
+            Log::info('Group invite: the session probe said no, the run starts the session itself', [
+                'account_id' => $account->id,
+                'error' => $probe['error'],
+            ]);
+        }
+
+        $api = $this->madeline->for($account);
+
+        if (! $api) {
+            throw $this->madeline->lastError
+                ?? new RuntimeException('Failed to start MadelineProto.');
+        }
+
+        return $api;
     }
 
     /**
@@ -695,6 +760,10 @@ final class GroupInviteService
         /* Our bot did not let the account in: it cannot add here in this run. */
         if ($e instanceof JoinRefused) {
             return self::KIND_GROUP_DENIED;
+        }
+
+        if ($e instanceof SessionHung) {
+            return self::KIND_HUNG;
         }
 
         $error = self::rpcError($e);
@@ -1921,11 +1990,11 @@ final class GroupInviteService
             $api = null;
 
             try {
-                $api = $this->madeline->for($account);
+                $api = $this->connect($account);
 
-                if (! $api) {
-                    throw $this->madeline->lastError
-                        ?? new RuntimeException('Failed to start MadelineProto.');
+                /* Stopped from the panel while the session started. */
+                if ($api === null) {
+                    break;
                 }
 
                 $mine = TelegramGroupInvite::query()
@@ -2031,7 +2100,7 @@ final class GroupInviteService
      */
     private function reader(Collection $pending, array $used): ?TelegramAccount
     {
-        $skip = array_values(array_unique([...$used, ...$this->busyElsewhere()]));
+        $skip = array_values(array_unique([...$used, ...$this->busyElsewhere(), ...$this->restingIds(self::KIND_HUNG)]));
 
         $worked = TelegramGroupInvite::query()
             ->whereIn('invite_group_id', $pending->keys())
@@ -2646,17 +2715,18 @@ final class GroupInviteService
     }
 
     /**
-     * Accounts still resting after a flood.
+     * Accounts still resting after a flood; with $kind, only those resting for that.
      *
      * @return list<int>
      */
-    private function restingIds(): array
+    private function restingIds(?string $kind = null): array
     {
         return TelegramAccountProcess::query()
             ->where('process', ProcessEnum::GroupInvite->value)
             ->whereNotNull('meta')
             ->get(['telegram_account_id', 'meta'])
-            ->filter(fn (TelegramAccountProcess $state) => self::secondsUntil(((array) $state->meta)['rest_until'] ?? null) > 0)
+            ->filter(fn (TelegramAccountProcess $state) => self::secondsUntil(((array) $state->meta)['rest_until'] ?? null) > 0
+                && ($kind === null || (((array) $state->meta)['rest_kind'] ?? null) === $kind))
             ->pluck('telegram_account_id')
             ->map(fn ($id) => (int) $id)
             ->values()
@@ -3068,6 +3138,12 @@ final class GroupInviteService
             return;
         }
 
+        if ($kind === self::KIND_HUNG) {
+            $this->hung($account, $groupId, $context);
+
+            return;
+        }
+
         if ($kind === self::KIND_DEAD) {
             $counters = $this->snapshot($account, $context);
 
@@ -3094,6 +3170,41 @@ final class GroupInviteService
         $this->log('failed', mb_substr($e->getMessage(), 0, 500), $account->id, $groupId, [
             ...$context,
             'exception' => $e::class,
+        ]);
+    }
+
+    /**
+     * The account's session did not answer and its worker was killed: the
+     * next start may well go, so the account rests HUNG_REST_HOURS. One that
+     * hangs again within HUNG_AGAIN_DAYS is on hold until somebody enables
+     * it in the panel - each hang costs a run SESSION_START_LIMIT seconds.
+     *
+     * @param array<string, mixed> $context
+     */
+    private function hung(TelegramAccount $account, ?int $groupId, array $context): void
+    {
+        $last = $this->meta($account)['hung_at'] ?? null;
+        $now = now()->toIso8601String();
+
+        if (! is_string($last) || Carbon::parse($last)->lte(now()->subDays(self::HUNG_AGAIN_DAYS))) {
+            $this->rest($account, self::HUNG_REST_HOURS * 3600, self::KIND_HUNG, self::SESSION_HUNG, $groupId, ['hung_at' => $now], $context);
+
+            return;
+        }
+
+        $counters = $this->snapshot($account, $context);
+
+        $this->setMeta($account, ['hung_at' => $now]);
+        $this->pool->disable($account, ProcessEnum::GroupInvite, self::SESSION_HUNG);
+
+        /* Whoever it added no longer waits for it. */
+        $this->inviters = null;
+
+        $this->log('disabled', self::SESSION_HUNG, $account->id, $groupId, [
+            'kind' => self::KIND_HUNG,
+            'rpc' => self::SESSION_HUNG,
+            'hung_before' => $last,
+            'counters' => $counters,
         ]);
     }
 
