@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Telegram\ContactSyncRunController;
 use App\Http\Controllers\Api\Telegram\ContactSyncSettingsController;
 use App\Http\Controllers\Api\Telegram\GroupInviteAccountController;
 use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
+use App\Http\Controllers\Api\Telegram\GroupInviteRankingController;
 use App\Http\Controllers\Api\Telegram\GroupInviteBotController;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
 use App\Http\Controllers\Api\Telegram\GroupInviteController;
@@ -418,7 +419,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             [DriverCheckController::class, 'groupInvites']
         )->name('driver-check.group-invites');
 
-        foreach (['groups', 'people', 'accounts', 'log', 'analysis', 'settings', 'bot', 'spam'] as $invitePage) {
+        foreach (['groups', 'people', 'accounts', 'log', 'analysis', 'ranking', 'settings', 'bot', 'spam'] as $invitePage) {
             Route::get(
                 "/group-invites/{$invitePage}",
                 [DriverCheckController::class, 'groupInvites' . ucfirst($invitePage)]
@@ -933,6 +934,11 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                 Route::controller(GroupInviteAnalysisController::class)->group(function () {
                     Route::get('/analysis', 'show')->name('api.telegram.group-invites.analysis');
                     Route::get('/analysis/export', 'export')->name('api.telegram.group-invites.analysis.export');
+                });
+
+                /* The accounts side by side: who adds the most, by day, by age and by country. */
+                Route::controller(GroupInviteRankingController::class)->group(function () {
+                    Route::get('/ranking', 'show')->name('api.telegram.group-invites.ranking');
                 });
 
                 /* Our bot that approves the requests to join our groups. */

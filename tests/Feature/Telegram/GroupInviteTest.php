@@ -24,6 +24,7 @@ use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
 use App\Http\Controllers\Api\Telegram\GroupInviteController;
 use App\Http\Controllers\Api\Telegram\GroupInviteGroupController;
 use App\Http\Controllers\Api\Telegram\GroupInvitePeopleController;
+use App\Http\Controllers\Api\Telegram\GroupInviteRankingController;
 use App\Models\Role;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountContact;
@@ -39,6 +40,7 @@ use danog\MadelineProto\RPCError\RateLimitError;
 use danog\MadelineProto\RPCErrorException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
@@ -1350,6 +1352,74 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(['code' => '998', 'region' => 'UZ'], $rows[1]['country']);
         $this->assertSame([9001, 'lt1'], [$rows[1]['telegram_user_id'], $rows[1]['age']]);
         $this->assertSame(AccountAge::bands(), $json['age_bands']);
+    }
+
+    public function test_the_ranking_counts_each_accounts_people_day_by_day_and_how_often_telegram_stopped_it(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        $tried = function (int $accountId, int $from, int $count, string $status, Carbon $at) use ($group): void {
+            foreach (range($from, $from + $count - 1) as $id) {
+                TelegramGroupInvite::query()->create([
+                    'invite_group_id' => $group->id,
+                    'scraped_user_id' => $this->person($id, "P{$id}")->id,
+                    'telegram_account_id' => $accountId,
+                    'status' => $status,
+                    'attempted_at' => $at,
+                ]);
+            }
+        };
+
+        /* Account 1: today 3 in (one left since) and 1 quietly left out; two days ago 2 in, 1 refused. Not looked up yet and before the period - not counted. */
+        $tried(1, 6001, 2, TelegramGroupInvite::STATUS_INVITED, now()->startOfDay()->addHour());
+        $tried(1, 6011, 1, TelegramGroupInvite::STATUS_LEFT, now()->startOfDay()->addHour());
+        $tried(1, 6021, 1, TelegramGroupInvite::STATUS_NOT_ADDED, now()->startOfDay()->addHour());
+        $tried(1, 6031, 2, TelegramGroupInvite::STATUS_INVITED, now()->subDays(2));
+        $tried(1, 6041, 1, TelegramGroupInvite::STATUS_FAILED, now()->subDays(2));
+        $tried(1, 6051, 1, TelegramGroupInvite::STATUS_SENT, now()->subHour());
+        $tried(1, 6061, 9, TelegramGroupInvite::STATUS_INVITED, now()->subDays(10));
+        /* Account 2: one already in the group. */
+        $tried(2, 6101, 1, TelegramGroupInvite::STATUS_ALREADY, now()->subDay());
+
+        $stop = fn (int $accountId, string $event, array $context) => TelegramGroupInviteLog::query()->create([
+            'run_id' => 'r1',
+            'telegram_account_id' => $accountId,
+            'event' => $event,
+            'message' => 'x',
+            'context' => $context,
+        ]);
+
+        $stop(1, 'flood', ['kind' => 'wait', 'rpc' => 'FLOOD_WAIT_3458', 'seconds' => 3496]);
+        $stop(1, 'flood', ['kind' => 'wait', 'rpc' => 'FLOOD_WAIT_61', 'seconds' => 90]);
+        $stop(1, 'flood', ['kind' => 'spam', 'rpc' => 'PEER_FLOOD']);
+        $stop(1, 'rest', ['kind' => 'empty', 'rpc' => 'NOBODY_ADDED']);
+        $stop(1, 'flood', ['kind' => 'wait', 'seconds' => 80000])->forceFill(['created_at' => now()->subDays(10)])->save();
+
+        $json = $this->app->make(GroupInviteRankingController::class)
+            ->show(Request::create('/', 'GET', ['days' => 7]))
+            ->getData(true);
+        $rows = collect($json['accounts'])->keyBy('id');
+
+        $this->assertSame(7, $json['period']['days']);
+        $this->assertCount(7, $json['dates']);
+        $this->assertSame(now()->toDateString(), $json['dates'][6]);
+
+        $one = $rows[1];
+        $this->assertSame([7, 5, 1, 1, 0], [$one['tried'], $one['added'], $one['not_added'], $one['failed'], $one['already']]);
+        $this->assertSame([0, 0, 0, 0, 2, 0, 3], $one['added_by_day']);
+        $this->assertSame([0, 0, 0, 0, 3, 0, 4], $one['tried_by_day']);
+        $this->assertSame([2, 3496, 1], [$one['floods'], $one['flood_max'], $one['peer_floods']]);
+        $this->assertSame(['code' => '998', 'region' => 'UZ'], $one['country']);
+        $this->assertSame([9001, 'lt1'], [$one['telegram_user_id'], $one['age']]);
+
+        $this->assertSame([1, 0, 1], [$rows[2]['tried'], $rows[2]['added'], $rows[2]['already']]);
+        $this->assertSame([0, 0, 0], [$rows[2]['floods'], $rows[2]['flood_max'], $rows[2]['peer_floods']]);
+
+        /* An unknown period falls back to a week. */
+        $other = $this->app->make(GroupInviteRankingController::class)
+            ->show(Request::create('/', 'GET', ['days' => 5]))
+            ->getData(true);
+        $this->assertSame(7, $other['period']['days']);
     }
 
     public function test_an_accounts_country_is_told_by_its_calling_code_and_its_age_by_its_telegram_id(): void

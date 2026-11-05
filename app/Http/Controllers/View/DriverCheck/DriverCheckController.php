@@ -320,6 +320,13 @@ final class DriverCheckController extends Controller
         );
     }
 
+    public function groupInvitesRanking()
+    {
+        return view(
+            'pages.driver-check.group-invites-ranking'
+        );
+    }
+
     public function groupInvitesSettings()
     {
         return view(

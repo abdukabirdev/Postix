@@ -104,6 +104,7 @@ final class DriverCheckNav
                 ['invites_overview', 'group-invites', 'play'],
                 ['invites_log', 'group-invites/log', 'layers'],
                 ['invites_analysis', 'group-invites/analysis', 'chart'],
+                ['invites_ranking', 'group-invites/ranking', 'trending'],
             ],
             'data' => [
                 ['invites_groups', 'group-invites/groups', 'send'],

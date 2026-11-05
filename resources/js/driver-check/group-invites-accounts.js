@@ -38,7 +38,7 @@ const SORTS = {
 };
 
 /* A region's flag from its two letters (regional indicator symbols). */
-function flag(region) {
+export function flag(region) {
     return /^[A-Z]{2}$/.test(region ?? '')
         ? String.fromCodePoint(...[...region].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65))
         : '';
@@ -46,7 +46,7 @@ function flag(region) {
 
 let regionNames = null;
 
-function regionName(region) {
+export function regionName(region) {
     try {
         regionNames ??= new Intl.DisplayNames([document.documentElement.lang || 'ru'], { type: 'region' });
 
