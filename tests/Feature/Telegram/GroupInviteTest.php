@@ -677,19 +677,16 @@ final class GroupInviteTest extends TestCase
         ]);
     }
 
-    public function test_batches_that_add_nobody_do_not_stop_the_account_and_old_rests_for_it_are_over(): void
+    public function test_batches_that_add_nobody_rest_the_account_until_the_next_run_then_until_tomorrow(): void
     {
+        /* The default schedule: 05:00, 11:00, 17:00, 23:00. */
+        $this->travelTo(now()->setTime(12, 0));
+
         TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
 
-        foreach (range(1201, 1208) as $id) {
+        foreach (range(1201, 1212) as $id) {
             $this->hold(1, $this->person($id, "P{$id}"));
         }
-
-        /* Rested by the rule that is gone, until tomorrow. */
-        TelegramAccountProcess::query()->updateOrCreate(
-            ['telegram_account_id' => 1, 'process' => ProcessEnum::GroupInvite->value],
-            ['meta' => ['rest_until' => now()->addDay()->toIso8601String(), 'rest_kind' => 'empty', 'rest_reason' => 'NOBODY_ADDED']],
-        );
 
         /* Held quietly: every call "succeeds", nobody gets in. */
         $calls = $this->fakeTelegram(invite: fn () => ['missing_invitees' => []]);
@@ -697,13 +694,28 @@ final class GroupInviteTest extends TestCase
         $settings = $this->app->make(GroupInviteSettings::class);
         $settings->save([...$settings->current(), 'batch_size' => 1, 'excluded_accounts' => [2]]);
 
-        $totals = $this->service->run(trigger: 'manual');
+        $totals = $this->service->run();
 
-        /* Not five and a rest: every one of its people, nobody added or not. */
-        $this->assertCount(8, $calls);
-        $this->assertSame([0, 8], [$totals['invited'], $totals['not_added']]);
-        $this->assertArrayNotHasKey('rest_until', $this->service->meta(TelegramAccount::query()->find(1)));
-        $this->assertTrue(TelegramGroupInviteLog::query()->where('event', 'released')->where('context->kind', 'empty')->exists());
+        $this->assertCount(5, $calls);
+        $this->assertSame([0, 5], [$totals['invited'], $totals['not_added']]);
+        $this->assertSame(5, TelegramGroupInvite::query()->where('status', TelegramGroupInvite::STATUS_NOT_ADDED)->count());
+
+        /* The first time in a day it may only have been unlucky: it sits out until a minute before the 17:00 run. */
+        $meta = $this->service->meta(TelegramAccount::query()->find(1));
+        $this->assertSame(['empty', 'NOBODY_ADDED'], [$meta['rest_kind'], $meta['rest_reason']]);
+        $this->assertSame(now()->setTime(16, 59)->format('Y-m-d H:i'), Carbon::parse($meta['rest_until'])->format('Y-m-d H:i'));
+
+        /* A run before then: the rest is not lifted at its start, the account sits it out... */
+        $this->travelTo(now()->setTime(16, 0));
+        $this->service->run();
+        $this->assertCount(5, $calls);
+
+        /* ...and the same again after it: now it rests until tomorrow. */
+        $this->travelTo(now()->setTime(17, 0));
+        $this->service->run();
+
+        $this->assertCount(10, $calls);
+        $this->assertTrue(Carbon::parse($this->service->meta(TelegramAccount::query()->find(1))['rest_until'])->isTomorrow());
     }
 
     public function test_batches_telegram_refused_outright_do_not_count_as_nobody_added(): void

@@ -1098,7 +1098,7 @@ return [
             'kind_hints' => [
                 'spam' => 'PEER_FLOOD: the account rests a day or more, its limit drops',
                 'wait' => 'FLOOD_WAIT over a minute: rests as long as Telegram said',
-                'empty' => 'Until 04.11: five batches in a row nobody added — the account rested until the next run. Since 04.11 the rule is gone: the account works on even when nobody is added',
+                'empty' => 'Five batches in a row nobody added, people quietly left out — the account rests until the next run, the second time in a day until tomorrow. The rule was off from 04.11 to 05.11',
                 'dead' => 'The session logged out or the account is frozen',
                 'hung' => 'The session did not start in 90 seconds — its process was killed, the account rests 20 hours; hung again within 3 days — on hold until you enable it',
             ],

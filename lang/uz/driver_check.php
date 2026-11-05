@@ -1098,7 +1098,7 @@ return [
             'kind_hints' => [
                 'spam' => 'PEER_FLOOD: akkaunt bir kun va undan ko\'p dam oladi, limit pasayadi',
                 'wait' => 'Bir daqiqadan uzun FLOOD_WAIT: Telegram aytgancha dam oladi',
-                'empty' => '04.11 gacha shunday edi: ketma-ket besh pachkada hech kim qo\'shilmadi — akkaunt keyingi ishga tushirishgacha dam olardi. 04.11 dan bu qoida yo\'q: hech kim qo\'shilmasa ham akkaunt ishlayveradi',
+                'empty' => 'Ketma-ket besh pachkada hech kim qo\'shilmadi, odamlar indamay qo\'shilmadi — akkaunt keyingi ishga tushirishgacha dam oladi, kunda ikkinchi marta — ertagacha. 04.11 dan 05.11 gacha bu qoida o\'chirilgan edi',
                 'dead' => 'Sessiyadan chiqilgan yoki akkaunt muzlatilgan',
                 'hung' => 'Sessiya 90 soniyada ishga tushmadi — jarayoni to\'xtatildi, akkaunt 20 soat dam oladi; 3 kun ichida yana qotib qolsa — panelda yoqmaguningizcha pauzada',
             ],
