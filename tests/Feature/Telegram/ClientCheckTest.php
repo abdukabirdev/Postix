@@ -33,7 +33,7 @@ use Tests\TestCase;
 use Tests\Unit\Telegram\Mp4InfoTest;
 
 /**
- * Records the forwards and messages a client check produces.
+ * Records the penalties and messages a client check produces.
  */
 final class FakeClientCheckMessages
 {
@@ -61,24 +61,6 @@ final class FakeClientCheckMessages
         $this->calls[] = ['save_gif', $params];
 
         return true;
-    }
-
-    /** The account does not have the group the penalty was posted in (another account than Driver Check delivers). */
-    public bool $sourceUnknown = false;
-
-    public function forwardMessages(array $params): array
-    {
-        if ($this->sourceUnknown) {
-            throw new RuntimeException(\danog\MadelineProto\Lang::$lang['uz']['peer_not_in_db']);
-        }
-
-        if (in_array($params['to_peer'], $this->forwardFailsFor, true)) {
-            throw new RuntimeException('USERNAME_INVALID: ' . $params['to_peer']);
-        }
-
-        $this->calls[] = ['forward', $params];
-
-        return [];
     }
 
     public function sendMedia(array $params): array
@@ -115,6 +97,17 @@ final class FakeClientCheckMessages
 
     public function sendMessage(array $params): array
     {
+        /* The penalty itself, in our words ("… по запросу #…"): kept as "forward" to tell it from the comments. */
+        if (str_contains((string) ($params['message'] ?? ''), 'по запросу #')) {
+            if (in_array($params['peer'], $this->forwardFailsFor, true)) {
+                throw new RuntimeException('USERNAME_INVALID: ' . $params['peer']);
+            }
+
+            $this->calls[] = ['forward', $params];
+
+            return ['id' => count($this->calls)];
+        }
+
         if ($this->commentFails) {
             throw new RuntimeException('FLOOD_WAIT_30');
         }
@@ -553,10 +546,10 @@ class ClientCheckTest extends TestCase
         $this->assertSame(['forward'], $this->messages->kinds());
         $this->assertSame(TelegramClientCheckStatus::Forwarded, $check->refresh()->status);
 
-        [, $forward] = $this->messages->calls[0];
-        $this->assertSame(self::BOT_CHAT_ID, $forward['from_peer']);
-        $this->assertSame([$check->telegram_message_id], $forward['id']);
-        $this->assertSame('@afzal', $forward['to_peer']);
+        [, $penalty] = $this->messages->calls[0];
+        $this->assertSame('@afzal', $penalty['peer']);
+        $this->assertSame('html', $penalty['parse_mode']);
+        $this->assertStringStartsWith('🆘 Повторное напоминание №1 по запросу #TLS04834', $penalty['message']);
 
         /* the burst may not be over yet */
         app(ClientCheckSender::class)->flush($this->telegram);
@@ -981,7 +974,7 @@ class ClientCheckTest extends TestCase
         $this->assertSame(TelegramClientCheck::REASON_ROLE_DISABLED, $sales->reason);
         $this->assertSame(TelegramClientCheckStatus::Sent, $operation->refresh()->status);
         $this->assertSame(['@afzal', '@afzal'], array_map(
-            static fn (array $call) => $call[1]['to_peer'] ?? $call[1]['peer'],
+            static fn (array $call) => $call[1]['peer'],
             $this->messages->calls,
         ));
     }
@@ -2587,7 +2580,7 @@ class ClientCheckTest extends TestCase
         $check = $this->penalty(text: self::ACTUAL);
 
         $this->assertSame($anna->id, $check->refresh()->operation_user_id);
-        $this->assertSame('@anna', $this->messages->calls[0][1]['to_peer']);
+        $this->assertSame('@anna', $this->messages->calls[0][1]['peer']);
         $this->assertSame("PULATOV AFZAL AHMADJON O'G'LI", $check->responsible_name);
         $this->assertSame('56000000.00', $check->parsed['sales_turn']['carrier_price']);
         $this->assertSame('UZS', $check->parsed['sales_turn']['currency']);
@@ -2802,27 +2795,49 @@ class ClientCheckTest extends TestCase
         $this->assertStringContainsString('BELYAKOVA', $alert->title);
     }
 
-    public function test_an_account_that_does_not_see_the_group_sends_the_penalty_as_a_copy(): void
+    public function test_the_penalty_goes_in_our_words_without_the_word_penalty(): void
     {
         $this->person();
 
-        $this->messages->sourceUnknown = true;
-
-        $check = $this->penalty();
+        $check = $this->penalty(repeat: 2);
 
         $this->assertSame(TelegramClientCheckStatus::Forwarded, $check->status);
-        $this->assertSame('@afzal', $check->peer);
-        $this->assertSame('copy', $check->metrics['delivery']);
-        $this->assertSame([], $this->forwards());
-
-        $sent = array_values(array_filter($this->messages->calls, fn (array $c): bool => $c[0] === 'send' && $c[1]['message'] === $check->message_text));
-
-        $this->assertCount(1, $sent, 'the bot\'s own words, as a message');
-        $this->assertSame('@afzal', $sent[0][1]['peer']);
+        $this->assertSame(
+            implode("\n", [
+                '🆘 Повторное напоминание №2 по запросу #TLS04834',
+                'Статус: В поиске перевозчика',
+                'Норма в статусе: 2 ч',
+                'В статусе с: 02.10.2026 11:16',
+                'Уже в статусе: 5 ч 8 мин',
+                'Тип транспорта: Тентованный прицеп',
+                'Объём: 96 м³',
+                'Ответственный (операционный отдел): PULATOV AFZAL AHMADJON O&#039;G&#039;LI',
+                '',
+                'Размещение в Telegram (PULATOV AFZAL AHMADJON O&#039;G&#039;LI): групп — 331, сообщений — 54',
+                '',
+                '<a href="https://crm.zanjeer.uz/queries/queries?filter[search]=TLS04834">Открыть запрос</a>',
+            ]),
+            $this->forwards()[0][1]['message'],
+        );
         $this->assertSame(0, \App\Models\Telegram\TelegramAlert::query()->count(), 'delivered: nothing to tell the developer');
     }
 
-    public function test_another_failure_is_not_turned_into_a_copy(): void
+    public function test_the_first_penalty_and_nobody_posting_it_read_right_too(): void
+    {
+        $text = app(\App\Application\Telegram\Services\PenaltyMessageText::class)->html(self::NOBODY);
+
+        $this->assertStringStartsWith('⚠️ Напоминание по запросу #EGS19815', $text);
+        $this->assertStringContainsString("\nОтветственный (операционный отдел): —\n", $text);
+        $this->assertStringContainsString("\nРазмещение в Telegram: групп — 0, сообщений — 0\n", $text);
+        $this->assertStringNotContainsStringIgnoringCase('штраф', $text);
+
+        $sales = app(\App\Application\Telegram\Services\PenaltyMessageText::class)->html(self::SALES);
+
+        $this->assertStringContainsString("\nОтветственный (отдел продаж): BELYAKOVA ANNA VLADIMIROVNA\n", $sales);
+        $this->assertStringNotContainsStringIgnoringCase('штраф', $sales);
+    }
+
+    public function test_a_penalty_nobody_can_take_is_not_delivered(): void
     {
         $this->person();
 
@@ -2831,9 +2846,6 @@ class ClientCheckTest extends TestCase
         $check = $this->penalty();
 
         $this->assertSame(TelegramClientCheckStatus::Failed, $check->status);
-
-        $sent = array_filter($this->messages->calls, fn (array $c): bool => $c[0] === 'send' && ($c[1]['message'] ?? null) === $check->message_text);
-
-        $this->assertSame([], $sent, 'no such username is not the group\'s fault');
+        $this->assertSame([], $this->forwards());
     }
 }
