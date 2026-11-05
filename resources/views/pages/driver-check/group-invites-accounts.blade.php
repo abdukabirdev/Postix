@@ -41,6 +41,86 @@
                 .replace(':lookups', number(limits.usernames_per_day))"></p>
         </div>
 
+        {{-- Which ones add lately, in what order, and one by its number --}}
+        <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <x-driver-check.chips items="qualities()" selected="quality" action="setQuality" />
+
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,14rem)_minmax(0,18rem)]">
+                <x-driver-check.search
+                    model="filters.search"
+                    :placeholder="__('driver_check.invites.accounts.search')"
+                    debounce="150ms"
+                />
+
+                <x-driver-check.select x-model="filters.sort" aria-label="{{ __('telegram.ui.sort') }}">
+                    @foreach (__('driver_check.invites.accounts.sorts') as $value => $label)
+                        <option value="{{ $value }}">{{ str_replace(':days', (string) \App\Http\Controllers\Api\Telegram\GroupInviteAccountController::RECENT_DAYS, $label) }}</option>
+                    @endforeach
+                </x-driver-check.select>
+            </div>
+        </div>
+
+        <p class="-mt-1 text-[12px] text-gray-500" x-text="qualityHint()"></p>
+
+        {{-- How well they add, by the number's country or by the account's age; a row narrows the cards to it --}}
+        <x-driver-check.surface x-show="loaded && accounts.length > 0" x-cloak class="overflow-hidden">
+            <div class="flex flex-col gap-2 border-b border-gray-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-gray-800">
+                <h2 class="text-[14px] font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.accounts.stats.title') }}</h2>
+                <x-driver-check.chips items="statsTabs()" selected="statsBy" action="setStatsBy" />
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full min-w-[640px] text-left text-[12.5px]">
+                    <thead class="bg-gray-25 text-[10.5px] uppercase tracking-wide text-gray-400 dark:bg-white/[0.02]">
+                        <tr>
+                            <th class="px-4 py-2 font-medium" x-text="t.accounts.stats.cols[statsBy]"></th>
+                            <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.accounts.stats.cols.accounts') }}</th>
+                            <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.accounts.stats.cols.quiet') }}</th>
+                            <th class="px-4 py-2 text-right font-medium" x-text="t.accounts.stats.cols.tried.replace(':days', recentDays)"></th>
+                            <th class="px-4 py-2 text-right font-medium" x-text="t.accounts.stats.cols.added.replace(':days', recentDays)"></th>
+                            <th class="px-4 py-2 text-right font-medium">%</th>
+                            <th class="px-4 py-2 text-right font-medium">{{ __('driver_check.invites.accounts.stats.cols.total') }}</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 tabular-nums dark:divide-gray-800">
+                        <template x-for="row in statRows()" :key="statsBy + '-' + row.key">
+                            <tr
+                                class="cursor-pointer transition hover:bg-gray-25 dark:hover:bg-white/[0.02]"
+                                :class="isPicked(row) && 'bg-brand-50 dark:bg-brand-500/10'"
+                                x-on:click="pick(row)"
+                                :title="t.accounts.stats.pick"
+                            >
+                                <td class="px-4 py-2">
+                                    <span class="font-medium text-gray-950 dark:text-white" x-text="row.label"></span>
+                                    <span x-show="row.ids" class="block text-[11px] text-gray-400" x-text="row.ids"></span>
+                                </td>
+                                <td class="px-4 py-2 text-right">
+                                    <span x-text="number(row.accounts)"></span>
+                                    <span x-show="row.taking !== row.accounts" class="block text-[11px] text-gray-400" x-text="t.accounts.stats.taking_part.replace(':n', number(row.taking))"></span>
+                                </td>
+                                <td class="px-4 py-2 text-right" :class="row.quiet > 0 ? 'text-error-600 dark:text-error-400' : 'text-gray-400'" x-text="number(row.quiet)"></td>
+                                <td class="px-4 py-2 text-right" x-text="number(row.tried)"></td>
+                                <td class="px-4 py-2 text-right font-semibold text-gray-950 dark:text-white" x-text="number(row.added)"></td>
+                                <td class="px-4 py-2 text-right font-semibold" :class="rowTone(row)" x-text="rowRate(row)"></td>
+                                <td class="px-4 py-2 text-right" x-text="number(row.total)"></td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+
+            <p class="border-t border-gray-100 px-4 py-2.5 text-[11.5px] text-gray-500 dark:border-gray-800" x-text="t.accounts.stats.hints[statsBy]"></p>
+        </x-driver-check.surface>
+
+        <div x-show="picked" x-cloak class="flex items-center gap-2">
+            <x-driver-check.badge class="bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-300">
+                <span x-text="picked ? t.accounts.stats.only.replace(':what', picked.label) : ''"></span>
+                <button type="button" class="-mr-1 rounded p-0.5 hover:bg-brand-100 dark:hover:bg-brand-500/20" x-on:click="unpick()" aria-label="{{ __('telegram.ui.search_clear') }}">
+                    <x-driver-check.icon name="close" class="h-3 w-3" />
+                </button>
+            </x-driver-check.badge>
+        </div>
+
         <div x-show="!loaded && loading" class="grid gap-3 lg:grid-cols-2">
             <template x-for="i in 4" :key="'sk-' + i">
                 <div class="dc-skeleton h-48 rounded-2xl bg-gray-100 dark:bg-white/[0.06]"></div>
@@ -59,6 +139,7 @@
                             <span class="dc-dot mt-[7px] shrink-0" :class="dot(account)"></span>
                             <div class="min-w-0">
                                 <p class="truncate text-[15px] font-semibold tabular-nums text-gray-950 dark:text-white" x-text="phone(account.phone) || ('#' + account.id)"></p>
+                                <p class="truncate text-[11.5px] text-gray-400" x-text="'#' + account.id + ' · ' + originLine(account)"></p>
                                 <p class="text-[12px] leading-snug" :class="account.held ? 'text-error-600 dark:text-error-400' : (account.rest_until ? 'text-warning-600 dark:text-warning-400' : 'text-gray-500')" x-text="stateLine(account)"></p>
                             </div>
                         </div>
@@ -89,8 +170,17 @@
                         <p x-show="account.warm_day" x-cloak class="mt-1 text-[11.5px] text-brand-600 dark:text-brand-400" x-text="t.accounts.warm_up.replace(':day', account.warm_day).replace(':percent', account.warm_percent)"></p>
                     </div>
 
+                    {{-- How it adds lately: the share tells a working account from a quiet one --}}
+                    <div class="flex items-center justify-between gap-3 px-4 pt-3">
+                        <p class="min-w-0 truncate text-[12.5px] tabular-nums text-gray-600 dark:text-gray-300" x-text="recentLine(account)"></p>
+                        <x-driver-check.badge x-show="account.recent.tried > 0" x-cloak ::class="qualityTone(account)" ::title="t.accounts.quality[qualityOf(account)]">
+                            <span x-text="recentRate(account)"></span>
+                            <span x-show="qualityOf(account) === 'quiet'" x-text="'· ' + t.accounts.quiet_badge"></span>
+                        </x-driver-check.badge>
+                    </div>
+
                     {{-- The numbers --}}
-                    <dl class="mt-4 grid grid-cols-3 border-y border-gray-100 text-center dark:border-gray-800">
+                    <dl class="mt-3 grid grid-cols-3 border-y border-gray-100 text-center dark:border-gray-800">
                         <div class="px-2 py-2.5">
                             <dt class="text-[10.5px] uppercase tracking-wide text-gray-400">{{ __('driver_check.invites.accounts.added_today') }}</dt>
                             <dd class="mt-0.5 text-[17px] font-semibold tabular-nums text-gray-950 dark:text-white" x-text="number(account.added_today)"></dd>

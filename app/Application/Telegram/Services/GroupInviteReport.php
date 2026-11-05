@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Application\Telegram\Services;
 
+use App\Application\Telegram\Support\AccountAge;
+use App\Application\Telegram\Support\PhoneCountry;
 use App\Console\Commands\Telegram\TelegramGroupInviteCommand;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Models\Telegram\TelegramAccount;
@@ -506,6 +508,10 @@ final class GroupInviteReport
 
                 return [
                     'id' => $account->id,
+                    /* The number's country code, not the number; how old the account is by its Telegram id. */
+                    'country' => PhoneCountry::of($account->phone)['code'] ?? null,
+                    'age' => AccountAge::band($account->telegram_user_id),
+                    'telegram_user_id' => $account->telegram_user_id !== null ? (int) $account->telegram_user_id : null,
                     'authorized' => (bool) $account->is_authorized,
                     'has_session' => (string) $account->session_path !== '',
                     'status' => $account->status,

@@ -12,6 +12,62 @@
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify } from './group-invites-shared';
 
+/*
+ * "Adds nobody": tried at least this many people in the last days and got
+ * fewer than this share of them in - Telegram quietly lets it add nobody.
+ */
+const QUIET_MIN_TRIED = 30;
+const QUIET_SHARE = 0.05;
+
+const QUALITY_TONES = {
+    adding: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
+    quiet: 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400',
+    few: 'bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300',
+};
+
+/* Which way each order goes: the account to look at first comes first. */
+const SORTS = {
+    id: (a, b) => a.id - b.id,
+    added_recent: (a, b) => b.recent.added - a.recent.added || b.recent.tried - a.recent.tried,
+    added: (a, b) => b.added - a.added,
+    added_today: (a, b) => b.added_today - a.added_today || b.added - a.added,
+    rate_best: (a, b) => rateKey(b, -1) - rateKey(a, -1) || b.recent.added - a.recent.added,
+    /* The ones that tried enough first, worst share first; then the rest. */
+    rate_worst: (a, b) => worstGroup(a) - worstGroup(b) || rateKey(a, 2) - rateKey(b, 2) || b.recent.tried - a.recent.tried,
+    not_added_recent: (a, b) => b.recent.not_added - a.recent.not_added,
+};
+
+/* A region's flag from its two letters (regional indicator symbols). */
+function flag(region) {
+    return /^[A-Z]{2}$/.test(region ?? '')
+        ? String.fromCodePoint(...[...region].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65))
+        : '';
+}
+
+let regionNames = null;
+
+function regionName(region) {
+    try {
+        regionNames ??= new Intl.DisplayNames([document.documentElement.lang || 'ru'], { type: 'region' });
+
+        return regionNames.of(region) ?? region;
+    } catch {
+        return region;
+    }
+}
+
+function rateKey(account, none) {
+    return account.recent.tried > 0 ? account.recent.added / account.recent.tried : none;
+}
+
+function worstGroup(account) {
+    if (account.recent.tried >= QUIET_MIN_TRIED) {
+        return 0;
+    }
+
+    return account.recent.tried > 0 ? 1 : 2;
+}
+
 export function groupInvitesAccountsPage(config) {
     const t = config.translations;
 
@@ -27,7 +83,14 @@ export function groupInvitesAccountsPage(config) {
         loaded: false,
         accounts: [],
         limits: { batches_per_day: 0, batch_size: 0, usernames_per_day: 0 },
+        recentDays: 3,
+        ageBands: [],
         view: 'all',
+        quality: 'all',
+        filters: { search: '', sort: 'id' },
+        /* The table of how well they add: by country or by age; a row picked narrows the cards to it. */
+        statsBy: 'country',
+        picked: null,
 
         init() {
             this.load();
@@ -39,8 +102,13 @@ export function groupInvitesAccountsPage(config) {
 
             try {
                 const json = await requestJson(this.endpoints.index);
-                this.accounts = json.accounts ?? [];
+                this.accounts = (json.accounts ?? []).map((account) => ({
+                    ...account,
+                    recent: account.recent ?? { tried: 0, added: 0, not_added: 0 },
+                }));
                 this.limits = json.limits ?? this.limits;
+                this.recentDays = json.recent_days ?? this.recentDays;
+                this.ageBands = json.age_bands ?? this.ageBands;
                 this.loaded = true;
             } catch (error) {
                 this.error = error?.message || t.load_failed;
@@ -64,12 +132,188 @@ export function groupInvitesAccountsPage(config) {
             this.view = value;
         },
 
+        /* How it adds lately: adds, adds nobody, or too few tried to tell. */
+        qualityOf(account) {
+            const { tried, added } = account.recent;
+
+            if (tried >= QUIET_MIN_TRIED && added / tried < QUIET_SHARE) {
+                return 'quiet';
+            }
+
+            return added > 0 ? 'adding' : 'few';
+        },
+
+        qualities() {
+            const count = (value) => this.accounts.filter((a) => this.qualityOf(a) === value).length;
+
+            return [
+                { value: 'all', label: t.accounts.quality.all },
+                ...['adding', 'quiet', 'few'].map((value) => ({ value, label: `${t.accounts.quality[value]} · ${count(value)}` })),
+            ];
+        },
+
+        setQuality(value) {
+            this.quality = value;
+        },
+
+        qualityHint() {
+            return t.accounts.quality_hint
+                .replace(':days', this.recentDays)
+                .replace(':min', QUIET_MIN_TRIED)
+                .replace(':share', Math.round(QUIET_SHARE * 100));
+        },
+
+        qualityTone(account) {
+            return QUALITY_TONES[this.qualityOf(account)];
+        },
+
+        /* The search narrows the list as it is typed: nothing to send anywhere. */
+        applyFilters() {},
+
+        clearSearch() {
+            this.filters.search = '';
+        },
+
+        matches(account) {
+            const query = this.filters.search.trim();
+
+            if (query === '') {
+                return true;
+            }
+
+            if (/^#\d+$/.test(query)) {
+                return String(account.id) === query.slice(1);
+            }
+
+            const digits = query.replace(/\D/g, '');
+
+            return (digits !== '' && String(account.phone ?? '').replace(/\D/g, '').includes(digits))
+                || String(account.username ?? '').toLowerCase().includes(query.replace(/^@/, '').toLowerCase());
+        },
+
         shown() {
-            return this.accounts.filter((account) => ({
-                working: !account.excluded && !this.sitsOut(account),
-                resting: !account.excluded && this.sitsOut(account),
-                excluded: account.excluded,
-            })[this.view] ?? true);
+            return this.accounts
+                .filter((account) => ({
+                    working: !account.excluded && !this.sitsOut(account),
+                    resting: !account.excluded && this.sitsOut(account),
+                    excluded: account.excluded,
+                })[this.view] ?? true)
+                .filter((account) => this.quality === 'all' || this.qualityOf(account) === this.quality)
+                .filter((account) => this.picked === null || this.groupOf(account, this.picked.by) === this.picked.key)
+                .filter((account) => this.matches(account))
+                .sort((a, b) => (SORTS[this.filters.sort] ?? SORTS.id)(a, b) || a.id - b.id);
+        },
+
+        recentLine(account) {
+            const { tried, added } = account.recent;
+
+            if (tried === 0) {
+                return t.accounts.recent_none.replace(':days', this.recentDays);
+            }
+
+            return t.accounts.recent_line
+                .replace(':days', this.recentDays)
+                .replace(':tried', this.number(tried))
+                .replace(':added', this.number(added));
+        },
+
+        recentRate(account) {
+            const { tried, added } = account.recent;
+
+            return tried > 0 ? `${Math.round((100 * added) / tried)}%` : '';
+        },
+
+        /* The account's country (by the number's code) or its age band (by its Telegram id). */
+        groupOf(account, by) {
+            return by === 'age' ? account.age : (account.country?.code ?? 'unknown');
+        },
+
+        countryLabel(country) {
+            if (!country) {
+                return t.accounts.stats.unknown;
+            }
+
+            if (!country.region) {
+                return `${t.accounts.stats.anonymous} +${country.code}`;
+            }
+
+            return `${flag(country.region)} ${regionName(country.region)} +${country.code}`;
+        },
+
+        groupLabel(account, by) {
+            return by === 'age' ? (t.accounts.ages[account.age] ?? account.age) : this.countryLabel(account.country);
+        },
+
+        /* Under the number on its card: where it is from and how old. */
+        originLine(account) {
+            return [this.countryLabel(account.country), t.accounts.ages[account.age]].filter(Boolean).join(' · ');
+        },
+
+        statsTabs() {
+            return ['country', 'age'].map((value) => ({ value, label: t.accounts.stats.by[value] }));
+        },
+
+        setStatsBy(value) {
+            this.statsBy = value;
+        },
+
+        /* A row per country or age band: how many accounts, how many add nobody, what they tried and got lately. */
+        statRows() {
+            const by = this.statsBy;
+            const rows = new Map();
+
+            for (const account of this.accounts) {
+                const key = this.groupOf(account, by);
+                const row = rows.get(key) ?? {
+                    key,
+                    label: this.groupLabel(account, by),
+                    ids: by === 'age' ? (t.accounts.age_ids[key] ?? '') : '',
+                    accounts: 0,
+                    taking: 0,
+                    quiet: 0,
+                    tried: 0,
+                    added: 0,
+                    total: 0,
+                };
+
+                row.accounts++;
+                row.taking += account.excluded ? 0 : 1;
+                row.quiet += this.qualityOf(account) === 'quiet' ? 1 : 0;
+                row.tried += account.recent.tried;
+                row.added += account.recent.added;
+                row.total += account.added;
+                rows.set(key, row);
+            }
+
+            const list = [...rows.values()];
+
+            return by === 'age'
+                ? list.sort((a, b) => this.ageBands.indexOf(a.key) - this.ageBands.indexOf(b.key))
+                : list.sort((a, b) => b.accounts - a.accounts || b.added - a.added || a.label.localeCompare(b.label));
+        },
+
+        rowRate(row) {
+            return row.tried > 0 ? `${Math.round((100 * row.added) / row.tried)}%` : '—';
+        },
+
+        rowTone(row) {
+            if (row.tried < QUIET_MIN_TRIED) {
+                return 'text-gray-500';
+            }
+
+            return row.added / row.tried < QUIET_SHARE ? 'text-error-600 dark:text-error-400' : 'text-success-700 dark:text-success-400';
+        },
+
+        isPicked(row) {
+            return this.picked !== null && this.picked.by === this.statsBy && this.picked.key === row.key;
+        },
+
+        pick(row) {
+            this.picked = this.isPicked(row) ? null : { by: this.statsBy, key: row.key, label: row.label };
+        },
+
+        unpick() {
+            this.picked = null;
         },
 
         sitsOut(account) {

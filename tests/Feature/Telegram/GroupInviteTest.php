@@ -6,6 +6,7 @@ use App\Application\Telegram\Services\GroupInviteService;
 use App\Application\Telegram\Services\GroupInviteSettings;
 use App\Application\Telegram\Services\JoinBotSettings;
 use App\Application\Telegram\Services\MadelineService;
+use App\Application\Telegram\Support\AccountAge;
 use App\Application\Telegram\Support\MemberCount;
 use App\Application\Telegram\Support\PhoneCountry;
 use App\Application\Telegram\Support\SessionProbe;
@@ -1310,6 +1311,68 @@ final class GroupInviteTest extends TestCase
 
         $this->assertNull($row['rest_until']);
         $this->assertFalse($row['cap_lowered']);
+    }
+
+    public function test_the_page_tells_how_each_account_adds_in_the_last_days(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+
+        $tried = function (int $accountId, int $from, int $count, string $status, Carbon $at) use ($group): void {
+            foreach (range($from, $from + $count - 1) as $id) {
+                TelegramGroupInvite::query()->create([
+                    'invite_group_id' => $group->id,
+                    'scraped_user_id' => $this->person($id, "P{$id}")->id,
+                    'telegram_account_id' => $accountId,
+                    'status' => $status,
+                    'attempted_at' => $at,
+                ]);
+            }
+        };
+
+        /* Account 1 lately: 2 in, 30 quietly left out, 1 not looked up yet. Its good start a week ago does not count. */
+        $tried(1, 5001, 2, TelegramGroupInvite::STATUS_INVITED, now()->subDay());
+        $tried(1, 5101, 30, TelegramGroupInvite::STATUS_NOT_ADDED, now()->subDays(2));
+        $tried(1, 5201, 1, TelegramGroupInvite::STATUS_SENT, now()->subHour());
+        $tried(1, 5301, 20, TelegramGroupInvite::STATUS_INVITED, now()->subDays(7));
+        /* Account 2: one added who left since, one refused by privacy. */
+        $tried(2, 5401, 1, TelegramGroupInvite::STATUS_LEFT, now()->subHours(5));
+        $tried(2, 5501, 1, TelegramGroupInvite::STATUS_FAILED, now()->subHours(5));
+
+        $json = $this->app->make(GroupInviteAccountController::class)->index()->getData(true);
+        $rows = collect($json['accounts'])->keyBy('id');
+
+        $this->assertSame(GroupInviteAccountController::RECENT_DAYS, $json['recent_days']);
+        $this->assertSame(['tried' => 32, 'added' => 2, 'not_added' => 30], $rows[1]['recent']);
+        $this->assertSame(22, $rows[1]['added']);
+        $this->assertSame(['tried' => 2, 'added' => 1, 'not_added' => 0], $rows[2]['recent']);
+
+        /* For the tables by country and by age. */
+        $this->assertSame(['code' => '998', 'region' => 'UZ'], $rows[1]['country']);
+        $this->assertSame([9001, 'lt1'], [$rows[1]['telegram_user_id'], $rows[1]['age']]);
+        $this->assertSame(AccountAge::bands(), $json['age_bands']);
+    }
+
+    public function test_an_accounts_country_is_told_by_its_calling_code_and_its_age_by_its_telegram_id(): void
+    {
+        $this->assertSame(['code' => '998', 'region' => 'UZ'], PhoneCountry::of('+998 88 400 02 48'));
+        $this->assertSame(['code' => '90', 'region' => 'TR'], PhoneCountry::of('+90 539 193 72 69'));
+        $this->assertSame(['code' => '93', 'region' => 'AF'], PhoneCountry::of('+937 446 833 59'));
+        $this->assertSame(['code' => '98', 'region' => 'IR'], PhoneCountry::of('989909316453'));
+        $this->assertSame(['code' => '91', 'region' => 'IN'], PhoneCountry::of('+917 083 794 864'));
+        $this->assertSame(['code' => '1', 'region' => 'US'], PhoneCountry::of('+1 307 414 3326'));
+        $this->assertSame(['code' => '77', 'region' => 'KZ'], PhoneCountry::of('+77011234567'));
+        $this->assertSame(['code' => '7', 'region' => 'RU'], PhoneCountry::of('+79161234567'));
+        $this->assertSame(['code' => '888', 'region' => null], PhoneCountry::of('+888 0123 4567'));
+        $this->assertNull(PhoneCountry::of(null));
+        $this->assertNull(PhoneCountry::of('+0 12'));
+
+        $this->assertSame('lt1', AccountAge::band(123_456_789));
+        $this->assertSame('b1_5', AccountAge::band(1_987_654_321));
+        $this->assertSame('b5_6', AccountAge::band(5_123_456_789));
+        $this->assertSame('b7_8', AccountAge::band('7712345678'));
+        $this->assertSame('b8', AccountAge::band(8_100_000_000));
+        $this->assertSame(AccountAge::UNKNOWN, AccountAge::band(null));
+        $this->assertSame('unknown', collect(AccountAge::bands())->last());
     }
 
     public function test_a_link_is_stored_once_without_the_host(): void

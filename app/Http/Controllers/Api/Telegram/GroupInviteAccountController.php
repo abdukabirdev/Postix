@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\GroupInviteSettings;
+use App\Application\Telegram\Support\AccountAge;
+use App\Application\Telegram\Support\PhoneCountry;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Http\Controllers\Controller;
 use App\Models\Telegram\TelegramAccount;
@@ -22,6 +24,13 @@ use Illuminate\Support\Facades\DB;
  */
 final class GroupInviteAccountController extends Controller
 {
+    /**
+     * How an account adds lately: the page tells the ones that add from
+     * the ones Telegram quietly lets add nobody by these days, not by all
+     * time - an account can go quiet after a good start.
+     */
+    public const RECENT_DAYS = 3;
+
     public function __construct(private readonly GroupInviteSettings $settings) {}
 
     public function index(): JsonResponse
@@ -31,6 +40,16 @@ final class GroupInviteAccountController extends Controller
         $today = now()->startOfDay();
 
         $byStatus = TelegramGroupInvite::query()
+            ->selectRaw('telegram_account_id, status, COUNT(*) as total')
+            ->groupBy('telegram_account_id', 'status')
+            ->get()
+            ->groupBy('telegram_account_id');
+
+        /* Tried in the last days, whichever group: not yet looked up (sent) is no answer either way. */
+        $recent = TelegramGroupInvite::query()
+            ->whereIn('status', TelegramGroupInvite::SETTLED)
+            ->where('status', '!=', TelegramGroupInvite::STATUS_SENT)
+            ->where('attempted_at', '>=', now()->subDays(self::RECENT_DAYS))
             ->selectRaw('telegram_account_id, status, COUNT(*) as total')
             ->groupBy('telegram_account_id', 'status')
             ->get()
@@ -75,8 +94,9 @@ final class GroupInviteAccountController extends Controller
             ->where('is_authorized', true)
             ->orderBy('id')
             ->get()
-            ->map(function (TelegramAccount $account) use ($byStatus, $callsToday, $firstDays, $lookupsToday, $addedToday, $contacts, $lastStops, $states, $config, $limit) {
+            ->map(function (TelegramAccount $account) use ($byStatus, $recent, $callsToday, $firstDays, $lookupsToday, $addedToday, $contacts, $lastStops, $states, $config, $limit) {
                 $counts = GroupInviteGroupController::counts($byStatus->get($account->id, collect())->pluck('total', 'status')->all());
+                $lately = GroupInviteGroupController::counts($recent->get($account->id, collect())->pluck('total', 'status')->all());
                 $state = $states->get($account->id);
                 $meta = (array) ($state?->meta ?? []);
                 $restUntil = GroupInviteController::future($meta['rest_until'] ?? null);
@@ -91,6 +111,10 @@ final class GroupInviteAccountController extends Controller
                     'id' => $account->id,
                     'phone' => $account->phone,
                     'username' => $account->username,
+                    /* By the number's calling code; how old by the Telegram id (AccountAge): for the page's tables by country and by age. */
+                    'country' => PhoneCountry::of($account->phone),
+                    'telegram_user_id' => $account->telegram_user_id !== null ? (int) $account->telegram_user_id : null,
+                    'age' => AccountAge::band($account->telegram_user_id),
                     'is_primary' => $account->isPrimary(),
                     'excluded' => in_array($account->id, $config['excluded_accounts'], true),
                     'listener' => in_array($account->id, GroupInviteSettings::listenerIds(), true),
@@ -108,6 +132,12 @@ final class GroupInviteAccountController extends Controller
                     'warm_percent' => (int) round($share * 100),
                     'peer_floods' => (int) ($meta['peer_floods'] ?? 0),
                     ...$counts,
+                    /* The last RECENT_DAYS: people tried, how many of them got in, how many Telegram quietly left out. */
+                    'recent' => [
+                        'tried' => $lately['added'] + $lately['not_added'] + $lately['already'] + $lately['failed'],
+                        'added' => $lately['added'],
+                        'not_added' => $lately['not_added'],
+                    ],
                     'held' => $state !== null && ! $state->is_available,
                     'held_reason' => $state !== null && ! $state->is_available ? $state->disabled_reason : null,
                     'rest_until' => $restUntil,
@@ -125,6 +155,8 @@ final class GroupInviteAccountController extends Controller
 
         return response()->json([
             'accounts' => $accounts->values(),
+            'recent_days' => self::RECENT_DAYS,
+            'age_bands' => AccountAge::bands(),
             'limits' => [
                 'batches_per_day' => $limit,
                 'batch_size' => (int) $config['batch_size'],
