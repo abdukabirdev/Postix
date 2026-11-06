@@ -51,6 +51,8 @@ final class JoinRequestBotTest extends TestCase
         (include database_path('migrations/2026_10_30_100000_keep_telegram_group_invite_history.php'))->up();
         (include database_path('migrations/2026_11_02_110000_create_telegram_join_requests_table.php'))->up();
         (include database_path('migrations/2026_11_03_100000_create_telegram_spam_tables.php'))->up();
+        (include database_path('migrations/2026_11_06_100000_add_reason_to_telegram_spam_messages.php'))->up();
+        (include database_path('migrations/2026_11_06_110000_create_telegram_spam_admins_table.php'))->up();
 
         DB::table('telegram_accounts')->insert(['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001]);
     }

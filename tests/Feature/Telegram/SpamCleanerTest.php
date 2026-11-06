@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
 use App\Models\Telegram\TelegramInviteGroup;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramSetting;
+use App\Models\Telegram\TelegramSpamAdmin;
 use App\Models\Telegram\TelegramSpamMessage;
 use App\Models\Telegram\TelegramSpamSender;
 use Illuminate\Database\Schema\Blueprint;
@@ -53,6 +54,8 @@ final class SpamCleanerTest extends TestCase
         (include database_path('migrations/2026_10_30_100000_keep_telegram_group_invite_history.php'))->up();
         (include database_path('migrations/2026_11_02_110000_create_telegram_join_requests_table.php'))->up();
         (include database_path('migrations/2026_11_03_100000_create_telegram_spam_tables.php'))->up();
+        (include database_path('migrations/2026_11_06_100000_add_reason_to_telegram_spam_messages.php'))->up();
+        (include database_path('migrations/2026_11_06_110000_create_telegram_spam_admins_table.php'))->up();
 
         DB::table('telegram_accounts')->insert(['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001]);
         TelegramSetting::set(JoinBotSettings::KEY, ['token' => self::TOKEN, 'enabled' => true, 'bot' => ['id' => 555, 'username' => 'our_join_bot', 'name' => 'Join']]);
@@ -261,18 +264,179 @@ final class SpamCleanerTest extends TestCase
         ];
     }
 
+    public function test_a_strangers_link_goes_and_the_owner_gets_its_copy_first(): void
+    {
+        $this->fakeTelegram(updates: [
+            $this->message(80, 21, ['id' => 801, 'first_name' => 'Ads', 'username' => 'ads'], [
+                'text' => 'Join t.me/cheap_taxi now',
+                'entities' => [['type' => 'url', 'offset' => 5, 'length' => 15]],
+            ]),
+        ]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $row = TelegramSpamMessage::query()->sole();
+        $this->assertSame([TelegramSpamMessage::REASON_LINK, TelegramSpamMessage::STATUS_DELETED, null, 77], [$row->reason, $row->status, $row->spam_sender_id, $row->copy_message_id]);
+
+        $methods = collect($this->sent)->pluck('method')->reject(fn ($method) => in_array($method, ['getUpdates', 'getChatAdministrators'], true))->values()->all();
+        $this->assertSame(['copyMessage', 'deleteMessage', 'sendMessage'], $methods);
+
+        $copy = collect($this->sent)->firstWhere('method', 'copyMessage')['params'];
+        $this->assertSame([JoinBotSettings::DEFAULT_REPORT_CHAT, self::CHAT, 21, true], [$copy['chat_id'], $copy['from_chat_id'], $copy['message_id'], $copy['disable_notification']]);
+
+        /* The report answers the copy and does not quote what the copy shows. */
+        $report = collect($this->sent)->firstWhere('method', 'sendMessage')['params'];
+        $this->assertSame('🔗 Удалил сообщение со ссылкой от Ads (@ads, ID 801) в «Drivers UZ»', $report['text']);
+        $this->assertSame([77, true], [$report['reply_parameters']['message_id'], $report['disable_notification']]);
+
+        $this->assertContains('edited_message', collect($this->sent)->firstWhere('method', 'getUpdates')['params']['allowed_updates']);
+    }
+
+    public function test_a_hidden_link_a_button_with_a_link_and_an_edited_message_go_too(): void
+    {
+        $this->fakeTelegram(updates: [
+            $this->message(81, 22, ['id' => 801, 'first_name' => 'Ads'], [
+                'photo' => [['file_id' => 'x']],
+                'caption' => 'Cheap taxi here',
+                'caption_entities' => [['type' => 'text_link', 'offset' => 0, 'length' => 5, 'url' => 'https://ads.example']],
+            ]),
+            $this->message(82, 23, ['id' => 802, 'first_name' => 'Bot ads'], [
+                'text' => 'Press',
+                'reply_markup' => ['inline_keyboard' => [[['text' => 'Go', 'url' => 'https://ads.example']]]],
+            ]),
+            /* Telegram did not mark it, still a link. */
+            $this->message(83, 24, ['id' => 803, 'first_name' => 'Plain'], ['text' => 'see https://ads.example']),
+            [
+                'update_id' => 84,
+                'edited_message' => [
+                    'message_id' => 25,
+                    'from' => ['id' => 804, 'is_bot' => false, 'first_name' => 'Editor'],
+                    'chat' => ['id' => self::CHAT, 'title' => 'Drivers UZ', 'type' => 'supergroup'],
+                    'date' => now()->timestamp - 60,
+                    'edit_date' => now()->timestamp,
+                    'text' => 'now with www.ads.example',
+                ],
+            ],
+            /* No link: left alone. */
+            $this->message(85, 26, ['id' => 805, 'first_name' => 'Driver'], ['text' => 'Who goes to Tashkent? @dispatcher']),
+        ]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $this->assertSame([22, 23, 24, 25], TelegramSpamMessage::query()->orderBy('message_id')->pluck('message_id')->all());
+        $this->assertSame([TelegramSpamMessage::STATUS_DELETED], TelegramSpamMessage::query()->distinct()->pluck('status')->all());
+        $this->assertCount(4, collect($this->sent)->where('method', 'copyMessage'));
+    }
+
+    public function test_the_admins_ours_and_the_groups_own_posts_keep_their_links(): void
+    {
+        TelegramSpamAdmin::query()->create(['telegram_user_id' => 6001]);
+        $link = ['text' => 'https://rules.example', 'entities' => [['type' => 'url', 'offset' => 0, 'length' => 21]]];
+
+        $this->fakeTelegram(admins: [7001], updates: [
+            /* An admin of the group, one of our accounts, an admin of the anti-spam. */
+            $this->message(90, 31, ['id' => 7001, 'first_name' => 'Admin'], $link),
+            $this->message(91, 32, ['id' => 9001, 'first_name' => 'Ours'], $link),
+            $this->message(92, 33, ['id' => 6001, 'first_name' => 'Moderator'], $link),
+            /* The group writing as its anonymous admin; its channel's post. */
+            $this->message(93, 34, ['id' => 1087968824, 'first_name' => 'Group', 'is_bot' => true], [...$link, 'sender_chat' => ['id' => self::CHAT, 'type' => 'supergroup', 'title' => 'Drivers UZ']]),
+            $this->message(94, 35, ['id' => 777000, 'first_name' => 'Telegram'], [...$link, 'is_automatic_forward' => true, 'sender_chat' => ['id' => -1009999, 'type' => 'channel', 'title' => 'Our channel']]),
+            /* Somebody else's channel writing in the group: no admin. */
+            $this->message(95, 36, ['id' => 136817688, 'first_name' => 'Channel', 'is_bot' => true], [...$link, 'sender_chat' => ['id' => -1008888, 'type' => 'channel', 'title' => 'Ads channel']]),
+        ]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $this->assertSame([36], TelegramSpamMessage::query()->pluck('message_id')->all());
+        $this->assertSame('Ads channel', TelegramSpamMessage::query()->sole()->name);
+    }
+
+    public function test_admins_not_known_a_link_stays(): void
+    {
+        $this->fakeTelegram(admins: null, updates: [
+            $this->message(96, 37, ['id' => 801, 'first_name' => 'Ads'], ['text' => 'https://ads.example']),
+        ]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $this->assertSame(0, TelegramSpamMessage::query()->count());
+    }
+
+    public function test_links_off_in_the_panel_a_link_stays_but_the_list_still_goes(): void
+    {
+        TelegramSpamSender::query()->create(['telegram_user_id' => 701]);
+        $this->app->make(JoinBotSettings::class)->saveSpam(15, true, false);
+
+        $this->fakeTelegram(updates: [
+            $this->message(100, 41, ['id' => 801, 'first_name' => 'Ads'], ['text' => 'https://ads.example']),
+            $this->message(101, 42, ['id' => 701, 'first_name' => 'Ali'], ['text' => 'https://ads.example']),
+        ]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $row = TelegramSpamMessage::query()->sole();
+        $this->assertSame([42, TelegramSpamMessage::REASON_LIST, null], [$row->message_id, $row->reason, $row->copy_message_id]);
+        $this->assertFalse(collect($this->sent)->contains('method', 'copyMessage'));
+        $this->assertTrue($this->app->make(JoinBotSettings::class)->spam()['notify']);
+    }
+
+    public function test_no_copy_the_report_quotes_the_text_and_a_sweep_again_does_not_copy_twice(): void
+    {
+        $deletes = 0;
+
+        $this->fakeTelegram(
+            updates: [$this->message(110, 51, ['id' => 801, 'first_name' => 'Ads'], ['text' => 'Taxi https://ads.example'])],
+            /* Out of reach once, then deleted. */
+            delete: function () use (&$deletes) {
+                return ++$deletes === 1
+                    ? ['ok' => false, 'error_code' => 502, 'description' => 'Bad Gateway']
+                    : ['ok' => true, 'result' => true];
+            },
+            copy: fn () => ['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: message can\'t be copied'],
+        );
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+        $this->assertSame([TelegramSpamMessage::STATUS_PENDING, 0], [TelegramSpamMessage::query()->sole()->status, TelegramSpamMessage::query()->sole()->copy_message_id]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $this->assertSame(TelegramSpamMessage::STATUS_DELETED, TelegramSpamMessage::query()->sole()->status);
+        $this->assertCount(1, collect($this->sent)->where('method', 'copyMessage'));
+
+        $report = collect($this->sent)->firstWhere('method', 'sendMessage')['params'];
+        $this->assertSame("🔗 Удалил сообщение со ссылкой от Ads (ID 801) в «Drivers UZ»\n«Taxi https://ads.example»", $report['text']);
+        $this->assertArrayNotHasKey('reply_parameters', $report);
+    }
+
+    public function test_off_the_list_their_link_still_goes(): void
+    {
+        $sender = TelegramSpamSender::query()->create(['telegram_user_id' => 701]);
+        $this->fakeTelegram(updates: [
+            $this->message(120, 61, ['id' => 701, 'first_name' => 'Ali'], ['text' => 'Hello', 'date' => now()->timestamp]),
+            $this->message(121, 62, ['id' => 701, 'first_name' => 'Ali'], ['text' => 'https://ads.example', 'date' => now()->timestamp]),
+        ]);
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $this->app->make(GroupInviteSpamController::class)->destroy($sender);
+
+        $row = TelegramSpamMessage::query()->sole();
+        $this->assertSame([62, TelegramSpamMessage::REASON_LINK, null], [$row->message_id, $row->reason, $row->spam_sender_id]);
+    }
+
     /**
      * The Bot API: getUpdates (the updates once, nothing after the offset
-     * passed them), deleteMessage(s), sendMessage, getChatMember.
+     * passed them), deleteMessage(s), sendMessage, getChatMember,
+     * copyMessage, getChatAdministrators (null: Telegram out of reach).
      *
      * @param list<array<string, mixed>> $updates
      * @param array<string, mixed>       $member
+     * @param list<int>|null             $admins
      */
-    private function fakeTelegram(array $updates = [], ?callable $delete = null, array $member = ['status' => 'creator']): void
+    private function fakeTelegram(array $updates = [], ?callable $delete = null, array $member = ['status' => 'creator'], ?callable $copy = null, ?array $admins = [1]): void
     {
         $this->sent = [];
 
-        Http::fake(function (Request $request) use ($updates, $delete, $member) {
+        Http::fake(function (Request $request) use ($updates, $delete, $member, $copy, $admins) {
             $method = basename(parse_url($request->url(), PHP_URL_PATH));
             $params = $request->data();
             $this->sent[] = ['method' => $method, 'params' => $params];
@@ -284,6 +448,10 @@ final class SpamCleanerTest extends TestCase
                 ))],
                 'deleteMessage', 'deleteMessages' => $delete !== null ? $delete($params) : ['ok' => true, 'result' => true],
                 'sendMessage' => ['ok' => true, 'result' => ['message_id' => 1]],
+                'copyMessage' => $copy !== null ? $copy($params) : ['ok' => true, 'result' => ['message_id' => 77]],
+                'getChatAdministrators' => $admins !== null
+                    ? ['ok' => true, 'result' => array_map(fn (int $id) => ['status' => 'administrator', 'user' => ['id' => $id, 'is_bot' => false]], $admins)]
+                    : ['ok' => false, 'error_code' => 502, 'description' => 'Bad Gateway'],
                 'getChatMember' => ['ok' => true, 'result' => ['user' => ['id' => 555, 'is_bot' => true], ...$member]],
                 default => ['ok' => false, 'error_code' => 404, 'description' => 'Not Found'],
             });

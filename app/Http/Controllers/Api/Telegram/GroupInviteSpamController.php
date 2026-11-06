@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\JoinBotSettings;
+use App\Application\Telegram\Services\SpamAdmins;
 use App\Application\Telegram\Services\SpamCleaner;
 use App\Http\Controllers\Controller;
+use App\Models\Telegram\TelegramSpamAdmin;
 use App\Models\Telegram\TelegramSpamMessage;
 use App\Models\Telegram\TelegramSpamSender;
 use Illuminate\Http\JsonResponse;
@@ -32,6 +34,7 @@ final class GroupInviteSpamController extends Controller
     public function __construct(
         private readonly JoinBotSettings $settings,
         private readonly SpamCleaner $spam,
+        private readonly SpamAdmins $admins,
     ) {}
 
     public function show(Request $request): JsonResponse
@@ -78,6 +81,7 @@ final class GroupInviteSpamController extends Controller
                 'username' => $row->username,
                 'name' => $row->name,
                 'kind' => $row->kind,
+                'reason' => $row->reason,
                 'text' => $row->text !== null ? mb_substr($row->text, 0, 300) : null,
                 'status' => $row->status,
                 'error' => $row->error,
@@ -99,15 +103,17 @@ final class GroupInviteSpamController extends Controller
                 'deleted' => TelegramSpamMessage::query()->where('status', TelegramSpamMessage::STATUS_DELETED)->where('removed_at', '>=', $today)->count(),
                 'failed' => TelegramSpamMessage::query()->where('status', TelegramSpamMessage::STATUS_FAILED)->where('updated_at', '>=', $today)->count(),
             ],
-            'pending' => (int) $pending->sum(),
+            /* The list's and the links'. */
+            'pending' => TelegramSpamMessage::query()->where('status', TelegramSpamMessage::STATUS_PENDING)->count(),
             'total_deleted' => (int) TelegramSpamSender::query()->sum('deleted_count'),
             'senders' => $senders,
             'messages' => $messages,
             'list_size' => self::LIST_SIZE,
             'max_delay' => JoinBotSettings::MAX_SPAM_DELAY,
-            /* Who may forward a spammer's message to the bot. */
+            /* Who may forward a spammer's message to the bot: the owner and the admins of the anti-spam. */
             'forward' => [
-                'moderators' => $this->settings->moderators(),
+                'owner' => $this->admins->owner(),
+                'admins' => TelegramSpamAdmin::query()->where(fn ($q) => $q->whereNotNull('telegram_user_id')->orWhereNotNull('username'))->count(),
             ],
         ]);
     }
@@ -165,33 +171,23 @@ final class GroupInviteSpamController extends Controller
 
     /**
      * How many seconds after it was sent a message goes, whether the owner
-     * is told of each (without a sound), and who may forward spam to the
-     * bot (Telegram ids; none - whoever the reports go to).
+     * is told of each (without a sound), whether every message with a link
+     * goes too (the owner gets its copy). Who may forward spam to the bot:
+     * the admins' page (GroupInviteSpamAdminController).
      */
     public function settings(Request $request): JsonResponse
     {
         $data = $request->validate([
             'delay' => ['required', 'integer', 'min:0', 'max:' . JoinBotSettings::MAX_SPAM_DELAY],
             'notify' => ['required', 'boolean'],
-            'moderators' => ['sometimes', 'nullable', 'string', 'max:1000'],
+            'links' => ['sometimes', 'boolean'],
         ]);
 
-        $moderators = null;
-
-        if ($request->has('moderators')) {
-            $words = preg_split('/[\s,;]+/u', trim((string) ($data['moderators'] ?? '')), -1, PREG_SPLIT_NO_EMPTY) ?: [];
-            $invalid = array_filter($words, static fn (string $word) => preg_match('/^\d{3,16}$/', $word) !== 1);
-
-            if ($invalid !== []) {
-                return response()->json([
-                    'message' => __('driver_check.invites.spam.messages.bad_moderators', ['words' => implode(', ', array_slice($invalid, 0, 5))]),
-                ], 422);
-            }
-
-            $moderators = array_values(array_unique(array_map('intval', $words)));
-        }
-
-        $this->settings->saveSpam((int) $data['delay'], (bool) $data['notify'], $moderators);
+        $this->settings->saveSpam(
+            (int) $data['delay'],
+            (bool) $data['notify'],
+            array_key_exists('links', $data) ? (bool) $data['links'] : null,
+        );
 
         return response()->json(['message' => __('driver_check.invites.spam.messages.saved', ['n' => (int) $data['delay']])]);
     }

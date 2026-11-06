@@ -23,9 +23,10 @@ use Throwable;
  * forwarded a channel's post into the group - then the owner is told to add
  * them by ID or @username on the page.
  *
- * Only the moderators may do it (JoinBotSettings::moderators()); anybody
- * else writing to the bot gets no answer. An anonymous admin of a group, our
- * own accounts, the moderators and the bot itself are never listed.
+ * Only the admins of the anti-spam may do it (SpamAdmins: the owner and
+ * the panel's list); anybody else writing to the bot gets no answer. An
+ * anonymous admin of a group, our own accounts, the admins and the bot
+ * itself are never listed.
  *
  * An add-on: a trouble of its own is logged and never stops the bot.
  */
@@ -34,11 +35,14 @@ final class ForwardedSpam
     /** @var array<string, true> albums answered already: one answer for all their parts */
     private array $albums = [];
 
-    public function __construct(private readonly JoinBotSettings $settings) {}
+    public function __construct(
+        private readonly JoinBotSettings $settings,
+        private readonly SpamAdmins $admins,
+    ) {}
 
     /**
-     * A message to the bot in its own chat. A moderator's forward: its
-     * author onto the list; anything else from a moderator gets a word on
+     * A message to the bot in its own chat. An admin's forward: its
+     * author onto the list; anything else from an admin gets a word on
      * how it works. Others: no answer.
      *
      * @param array<string, mixed>   $message
@@ -54,8 +58,8 @@ final class ForwardedSpam
         }
 
         try {
-            if (! in_array((int) $from['id'], $this->settings->moderators(), true)) {
-                $say('forward: not a moderator, no answer: ' . JoinRequestService::who($from));
+            if (! $this->admins->isAdmin($from)) {
+                $say('forward: not an admin, no answer: ' . JoinRequestService::who($from));
 
                 return;
             }
@@ -128,7 +132,7 @@ final class ForwardedSpam
             return $this->line('anonymous_admin');
         }
 
-        if ($this->isOurs((int) $actor['id'])) {
+        if ($this->isOurs($actor)) {
             $say("forward: {$who} is ours, not listed");
 
             return $this->line('ours', ['who' => $who]);
@@ -141,12 +145,16 @@ final class ForwardedSpam
     }
 
     /**
-     * Our bot, a moderator, one of our accounts.
+     * Our bot, an admin of the anti-spam, one of our accounts.
+     *
+     * @param array<string, mixed> $actor
      */
-    private function isOurs(int $id): bool
+    private function isOurs(array $actor): bool
     {
+        $id = (int) $actor['id'];
+
         return $id === (int) ($this->settings->current()['bot']['id'] ?? 0)
-            || in_array($id, $this->settings->moderators(), true)
+            || $this->admins->isAdmin($actor)
             || TelegramAccount::query()->where('telegram_user_id', $id)->exists();
     }
 

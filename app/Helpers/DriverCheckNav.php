@@ -128,6 +128,7 @@ final class DriverCheckNav
             ],
             'spam' => [
                 ['spam_list', 'group-invites/spam', 'shield'],
+                ['spam_admins', 'group-invites/spam/admins', 'users'],
                 ['spam_messages', 'group-invites/spam/messages', 'trash'],
             ],
         ]],

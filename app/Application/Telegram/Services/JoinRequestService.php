@@ -34,12 +34,14 @@ use Throwable;
  *
  * Every action of the bot is reported to the owner (JoinBotReporter).
  *
- * The messages of the people on the spam list are deleted a few seconds
- * after they were sent (SpamCleaner): the bot, an admin of the group, gets
- * every message there, and deletes the due ones between its asks.
+ * The messages of the people on the spam list, and every message with a
+ * link (the owner gets a copy of it), are deleted a few seconds after they
+ * were sent (SpamCleaner): the bot, an admin of the group, gets every
+ * message there, and deletes the due ones between its asks.
  *
- * The owner forwards a spammer's message to the bot: its author goes onto
- * the spam list (ForwardedSpam).
+ * An admin of the anti-spam forwards a spammer's message to the bot: its
+ * author goes onto the spam list (ForwardedSpam). Somebody opens an invite
+ * link the panel made: they are an admin of the anti-spam (SpamAdmins).
  *
  * The bot is asked by getUpdates (long polling), a minute at a time, from
  * the scheduler: no webhook, nothing public to set up.
@@ -54,7 +56,7 @@ final class JoinRequestService
      * among them is muted; message: what is written there - the spam list's
      * messages are deleted - and the owner's forwards in the bot's own chat.
      */
-    private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member', 'message'];
+    private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member', 'message', 'edited_message'];
 
     /** What a muted bot may not do in the group: anything. */
     private const RIGHTS = [
@@ -91,6 +93,7 @@ final class JoinRequestService
         private readonly JoinBotReporter $reporter,
         private readonly SpamCleaner $spam,
         private readonly ForwardedSpam $forwards,
+        private readonly SpamAdmins $admins,
     ) {}
 
     /**
@@ -353,9 +356,19 @@ final class JoinRequestService
     private function handle(BotApi $api, array $update, array &$totals, callable $say): void
     {
         if (is_array($update['message'] ?? null)) {
-            $this->spam->take($update['message'], $say);
-            /* In the bot's own chat: the owner's forward of a spammer's message. */
-            $this->forwards->take($api, $update['message'], $say);
+            $this->spam->take($api, $update['message'], $say);
+
+            /* In the bot's own chat: an admin's invite link opened, or an admin's forward of a spammer's message. */
+            if (! $this->admins->takeStart($api, $update['message'], $say)) {
+                $this->forwards->take($api, $update['message'], $say);
+            }
+
+            return;
+        }
+
+        /* A message edited to carry a link goes as one sent with it. */
+        if (is_array($update['edited_message'] ?? null)) {
+            $this->spam->take($api, $update['edited_message'], $say);
 
             return;
         }

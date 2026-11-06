@@ -166,11 +166,13 @@ final class JoinBotSettings
     /**
      * The spam list's settings: a message goes $delay seconds after it was
      * sent; $notify: the owner is told of each, without a sound (to the
-     * chat the reports go to); $moderators: the Telegram ids typed in the
-     * panel of whoever may forward spam to the bot (ForwardedSpam) - empty:
-     * whoever the reports go to (moderators()).
+     * chat the reports go to); $links: every message with a link goes as
+     * well, whoever wrote it but the group's admins and ours, and the owner
+     * gets a copy of it (SpamCleaner) - on until the panel says otherwise.
+     * Who may forward spam to the bot and keep their links: the admins of
+     * the anti-spam (SpamAdmins).
      *
-     * @return array{delay: int, notify: bool, moderators: list<int>}
+     * @return array{delay: int, notify: bool, links: bool}
      */
     public function spam(): array
     {
@@ -182,42 +184,24 @@ final class JoinBotSettings
         return [
             'delay' => $delay === false ? self::DEFAULT_SPAM_DELAY : max(0, min(self::MAX_SPAM_DELAY, $delay)),
             'notify' => filter_var($saved['notify'] ?? true, FILTER_VALIDATE_BOOLEAN),
-            'moderators' => array_values(array_unique(array_map('intval', array_filter(
-                is_array($saved['moderators'] ?? null) ? $saved['moderators'] : [],
-                static fn ($id) => is_numeric($id) && (int) $id > 0,
-            )))),
+            'links' => filter_var($saved['links'] ?? true, FILTER_VALIDATE_BOOLEAN),
         ];
     }
 
     /**
-     * @param list<int>|null $moderators null: kept as they are
+     * @param bool|null $links null: kept as it is
      */
-    public function saveSpam(int $delay, bool $notify, ?array $moderators = null): void
+    public function saveSpam(int $delay, bool $notify, ?bool $links = null): void
     {
+        $saved = TelegramSetting::get(self::SPAM_KEY);
+
         TelegramSetting::set(self::SPAM_KEY, [
             'delay' => max(0, min(self::MAX_SPAM_DELAY, $delay)),
             'notify' => $notify,
-            'moderators' => $moderators ?? $this->spam()['moderators'],
+            'links' => $links ?? $this->spam()['links'],
+            /* The ids of the old field, until the admins' migration has taken them over. */
+            ...(is_array($saved) && isset($saved['moderators']) ? ['moderators' => $saved['moderators']] : []),
         ]);
-    }
-
-    /**
-     * Who may forward spam to the bot: the ids typed in the panel; none
-     * typed - the person the reports go to (a group's chat id is nobody).
-     *
-     * @return list<int>
-     */
-    public function moderators(): array
-    {
-        $typed = $this->spam()['moderators'];
-
-        if ($typed !== []) {
-            return $typed;
-        }
-
-        $chat = (string) $this->reports()['chat_id'];
-
-        return preg_match('/^\d{3,16}$/', $chat) === 1 ? [(int) $chat] : [];
     }
 
     /**

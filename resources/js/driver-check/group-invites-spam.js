@@ -55,8 +55,8 @@ export function groupInvitesSpamPage(config) {
         /* The settings form: filled from the first answer and after a save, not by the refreshes in between. */
         delay: 15,
         notifyOn: true,
-        /* Who may forward spam to the bot: Telegram ids, as typed. */
-        moderators: '',
+        /* Every message with a link goes too, the owner gets its copy. */
+        linksOn: true,
         settingsFilled: false,
 
         init() {
@@ -90,7 +90,7 @@ export function groupInvitesSpamPage(config) {
                 if (!this.settingsFilled) {
                     this.delay = this.data.settings.delay;
                     this.notifyOn = this.data.settings.notify;
-                    this.moderators = (this.data.settings.moderators ?? []).join(', ');
+                    this.linksOn = this.data.settings.links;
                     this.settingsFilled = true;
                 }
             } catch (error) {
@@ -178,10 +178,15 @@ export function groupInvitesSpamPage(config) {
             return s.forward_hint.replace(':bot', '@' + this.bot.username);
         },
 
+        /* You and N admins; nobody - nobody may yet. */
         forwardWho() {
-            const ids = this.data.forward.moderators;
+            const { owner, admins } = this.data.forward;
 
-            return ids.length ? s.forward_who.replace(':ids', ids.join(', ')) : s.forward_nobody;
+            if (!owner && !admins) {
+                return s.forward_nobody;
+            }
+
+            return s.forward_who.replace(':n', this.number(admins + (owner ? 1 : 0)));
         },
 
         statuses() {
@@ -294,7 +299,7 @@ export function groupInvitesSpamPage(config) {
                 const json = await requestJson(this.endpoints.settings, 'PATCH', {
                     delay: Number(this.delay),
                     notify: this.notifyOn,
-                    moderators: this.moderators.trim(),
+                    links: this.linksOn,
                 });
                 notify(json.message);
                 this.settingsFilled = false;

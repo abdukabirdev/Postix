@@ -30,10 +30,11 @@ final class JoinBotReporter
      * @param string               $key     driver_check.invites.bot.report.<key>
      * @param array<string, mixed> $replace
      * @param bool                 $silent  arrives without a sound (the spam list's deletions)
+     * @param int|null             $replyTo a message of the owner's chat it answers (the copy it tells about)
      *
      * @return bool whether it got through
      */
-    public function send(string $key, array $replace = [], bool $silent = false): bool
+    public function send(string $key, array $replace = [], bool $silent = false, ?int $replyTo = null): bool
     {
         try {
             $reports = $this->settings->reports();
@@ -49,11 +50,57 @@ final class JoinBotReporter
                 $replace['reason'] = self::reason((string) $replace['reason'], $reports['locale']);
             }
 
-            $text = (string) __("driver_check.invites.bot.report.{$key}", $replace, $reports['locale']);
+            /* A part left empty (the copy shows the text) leaves no blank line behind. */
+            $text = rtrim((string) __("driver_check.invites.bot.report.{$key}", $replace, $reports['locale']));
 
-            return $this->deliver($token, $reports['chat_id'], $text, $silent) === null;
+            return $this->deliver($token, $reports['chat_id'], $text, $silent, $replyTo) === null;
         } catch (Throwable) {
             return false;
+        }
+    }
+
+    /**
+     * A message of a group as it is - text, photo, video, the buttons - into
+     * the owner's chat, without a sound, before the bot deletes it. Telegram
+     * does not copy everything (a group that forbids copying, a quiz):
+     * null, and the report quotes the text instead.
+     *
+     * @return int|null the copy's message id in the owner's chat
+     */
+    public function copy(int $fromChatId, int $messageId): ?int
+    {
+        try {
+            $reports = $this->settings->reports();
+            $token = $this->settings->token();
+
+            if (! $reports['enabled'] || $reports['chat_id'] === null || $token === null) {
+                return null;
+            }
+
+            $api = new BotApi($token);
+            $params = [
+                'chat_id' => $reports['chat_id'],
+                'from_chat_id' => $fromChatId,
+                'message_id' => $messageId,
+                'disable_notification' => true,
+            ];
+
+            try {
+                $copy = $api->call('copyMessage', $params, 10);
+            } catch (BotApiError $e) {
+                if ($e->getCode() !== 429 || $e->retryAfter <= 0 || $e->retryAfter > self::WAIT_IN_PLACE) {
+                    return null;
+                }
+
+                sleep($e->retryAfter);
+                $copy = $api->call('copyMessage', $params, 10);
+            }
+
+            $id = is_array($copy) ? (int) ($copy['message_id'] ?? 0) : 0;
+
+            return $id > 0 ? $id : null;
+        } catch (Throwable) {
+            return null;
         }
     }
 
@@ -95,7 +142,7 @@ final class JoinBotReporter
     /**
      * @return string|null null: it got through; else why not
      */
-    private function deliver(string $token, string $chatId, string $text, bool $silent = false): ?string
+    private function deliver(string $token, string $chatId, string $text, bool $silent = false, ?int $replyTo = null): ?string
     {
         $api = new BotApi($token);
 
@@ -106,6 +153,7 @@ final class JoinBotReporter
                     'text' => mb_substr($text, 0, 4000),
                     'link_preview_options' => ['is_disabled' => true],
                     ...($silent ? ['disable_notification' => true] : []),
+                    ...($replyTo !== null ? ['reply_parameters' => ['message_id' => $replyTo, 'allow_sending_without_reply' => true]] : []),
                 ], 10);
 
                 $this->remember(['sent_at' => now()->toIso8601String(), 'error' => null, 'error_at' => null]);

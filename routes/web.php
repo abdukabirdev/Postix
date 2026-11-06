@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
 use App\Http\Controllers\Api\Telegram\GroupInviteRankingController;
 use App\Http\Controllers\Api\Telegram\DriverGroupController;
 use App\Http\Controllers\Api\Telegram\GroupInviteBotController;
+use App\Http\Controllers\Api\Telegram\GroupInviteSpamAdminController;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
 use App\Http\Controllers\Api\Telegram\GroupInviteController;
 use App\Http\Controllers\Api\Telegram\GroupInviteGroupController;
@@ -442,6 +443,11 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/group-invites/spam/messages',
             [DriverCheckController::class, 'groupInvitesSpamMessages']
         )->name('driver-check.group-invites.spam.messages');
+
+        Route::get(
+            '/group-invites/spam/admins',
+            [DriverCheckController::class, 'groupInvitesSpamAdmins']
+        )->name('driver-check.group-invites.spam.admins');
 
         /*
          * Join group: the marked accounts find groups and join them by
@@ -970,6 +976,14 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::patch('/spam', 'settings')->name('api.telegram.group-invites.spam.settings');
                     Route::post('/spam/senders', 'store')->name('api.telegram.group-invites.spam.store');
                     Route::delete('/spam/senders/{spamSender}', 'destroy')->name('api.telegram.group-invites.spam.destroy');
+                });
+
+                /* The admins of the anti-spam: their links stay, they may forward spam to the bot; invite links for them. */
+                Route::controller(GroupInviteSpamAdminController::class)->group(function () {
+                    Route::get('/spam/admins', 'show')->name('api.telegram.group-invites.spam.admins');
+                    Route::post('/spam/admins', 'store')->name('api.telegram.group-invites.spam.admins.store');
+                    Route::post('/spam/admins/invite', 'invite')->name('api.telegram.group-invites.spam.admins.invite');
+                    Route::delete('/spam/admins/{spamAdmin}', 'destroy')->name('api.telegram.group-invites.spam.admins.destroy');
                 });
             });
 

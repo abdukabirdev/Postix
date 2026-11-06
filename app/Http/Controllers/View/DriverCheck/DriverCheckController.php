@@ -381,6 +381,12 @@ final class DriverCheckController extends Controller
         );
     }
 
+    /* The admins of the anti-spam: their links stay, they may forward spam; invite links for them. */
+    public function groupInvitesSpamAdmins()
+    {
+        return view('pages.driver-check.group-invites-spam-admins');
+    }
+
     public function groupJoin()
     {
         return view(

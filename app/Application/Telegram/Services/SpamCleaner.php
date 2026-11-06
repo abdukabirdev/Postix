@@ -6,6 +6,7 @@ namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\BotApi;
 use App\Application\Telegram\Support\BotApiError;
+use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramSpamMessage;
 use App\Models\Telegram\TelegramSpamSender;
@@ -33,6 +34,15 @@ use Throwable;
  * their first message tells the id; a channel writing in the group too.
  * Service lines (joined, left) are left alone.
  *
+ * Links (on until the panel says otherwise): every message with a link
+ * goes the same way, whoever wrote it - a link in the text or the caption,
+ * one hidden under a word, a button with a link; a message edited to carry
+ * one too. Spared: the group's admins (and the group itself writing as its
+ * anonymous admin, its channel's posts), our bot, the admins of the
+ * anti-spam (SpamAdmins: the owner and the panel's list), our own
+ * accounts. Right before it is deleted the owner gets a copy of it as it
+ * was, without a sound, and the report answers the copy.
+ *
  * An add-on: a trouble of its own (a table not migrated yet, a database
  * error) is logged and never stops the bot letting people in.
  */
@@ -49,6 +59,12 @@ final class SpamCleaner
     /** A trouble of the database: the deleting rests this long, seconds, the poll goes on. */
     private const REST = 60;
 
+    /** A group's admins are asked of Telegram again after this long, seconds. */
+    private const ADMINS_TTL = 300;
+
+    /** A message is a link one when its text has one of these, besides the links Telegram marks itself. */
+    private const LINK_PATTERN = '~https?://|www\.|\b(?:t|telegram)\.me/~iu';
+
     /**
      * What a message carries; the first one found is its kind. A message
      * with none of them is a service line (joined, left, a new title).
@@ -61,19 +77,24 @@ final class SpamCleaner
     /** Telegram asked to wait, or the database failed: no deleting before this time(). */
     private int $restUntil = 0;
 
+    /** @var array<int, array{at: int, ids: list<int>}> each group's admins, as Telegram said them last */
+    private array $adminsOf = [];
+
     public function __construct(
         private readonly JoinBotSettings $settings,
         private readonly JoinBotReporter $reporter,
+        private readonly SpamAdmins $admins,
     ) {}
 
     /**
-     * A message the bot got. Someone on the list wrote it in a group: it is
-     * written down to go `delay` seconds after it was sent.
+     * A message the bot got (or one edited). Someone on the list wrote it in
+     * a group, or it carries a link: it is written down to go `delay`
+     * seconds after it was sent.
      *
      * @param array<string, mixed>   $message
      * @param callable(string): void $say
      */
-    public function take(array $message, callable $say): void
+    public function take(BotApi $api, array $message, callable $say): void
     {
         try {
             $chat = (array) ($message['chat'] ?? []);
@@ -88,22 +109,32 @@ final class SpamCleaner
                 return;
             }
 
+            $settings = $this->settings->spam();
+            $link = $settings['links'] && self::hasLink($message);
             $found = $this->find($message);
 
-            if ($found === null) {
+            if ($found !== null) {
+                [$sender, $actor] = $found;
+                $this->learn($sender, $actor);
+            } elseif ($link) {
+                $sender = null;
+                $actor = self::actor($message);
+
+                if ($actor === null || $this->spares($api, (int) $chat['id'], $message, $actor)) {
+                    return;
+                }
+            } else {
                 return;
             }
 
-            [$sender, $actor] = $found;
-            $this->learn($sender, $actor);
-
             $sentAt = isset($message['date']) ? now()->setTimestamp((int) $message['date']) : now();
-            $deleteAt = $sentAt->copy()->addSeconds($this->settings->spam()['delay']);
+            $deleteAt = $sentAt->copy()->addSeconds($settings['delay']);
 
             $row = TelegramSpamMessage::query()->firstOrCreate(
                 ['chat_id' => (int) $chat['id'], 'message_id' => (int) $message['message_id']],
                 [
-                    'spam_sender_id' => $sender->id,
+                    'spam_sender_id' => $sender?->id,
+                    'reason' => $link ? TelegramSpamMessage::REASON_LINK : TelegramSpamMessage::REASON_LIST,
                     'chat_title' => self::cut($chat['title'] ?? null, 255),
                     'telegram_user_id' => (int) $actor['id'],
                     'username' => self::username($actor['username'] ?? null),
@@ -117,7 +148,7 @@ final class SpamCleaner
             );
 
             if ($row->wasRecentlyCreated) {
-                $say('spam: ' . JoinRequestService::who($actor) . ' in ' . ($chat['title'] ?? $chat['id']) . ", goes at {$deleteAt->format('H:i:s')}");
+                $say(($link ? 'spam: a link of ' : 'spam: ') . JoinRequestService::who($actor) . ' in ' . ($chat['title'] ?? $chat['id']) . ", goes at {$deleteAt->format('H:i:s')}");
             }
         } catch (Throwable $e) {
             Log::warning('Join bot: a message of the spam list could not be written down', ['error' => $e->getMessage()]);
@@ -254,12 +285,16 @@ final class SpamCleaner
     }
 
     /**
-     * Off the list: their messages still waiting stay in the group.
+     * Off the list: their messages still waiting stay in the group - but
+     * one with a link, that goes as anybody's would.
      */
     public function remove(TelegramSpamSender $sender): void
     {
         DB::transaction(function () use ($sender) {
-            $sender->messages()->where('status', TelegramSpamMessage::STATUS_PENDING)->delete();
+            $sender->messages()
+                ->where('status', TelegramSpamMessage::STATUS_PENDING)
+                ->where('reason', TelegramSpamMessage::REASON_LIST)
+                ->delete();
             $sender->delete();
         });
     }
@@ -275,6 +310,8 @@ final class SpamCleaner
      */
     private function delete(BotApi $api, int $chatId, Collection $rows, callable $say): void
     {
+        $this->copyLinks($chatId, $rows);
+
         $ids = $rows->pluck('message_id')->map(static fn ($id) => (int) $id)->all();
         $error = null;
 
@@ -308,7 +345,7 @@ final class SpamCleaner
             return;
         }
 
-        foreach ($rows->groupBy(static fn (TelegramSpamMessage $row) => $row->telegram_user_id ?? 0) as $theirs) {
+        foreach ($rows->groupBy(static fn (TelegramSpamMessage $row) => ($row->telegram_user_id ?? 0) . ':' . $row->reason) as $theirs) {
             if ($deleted && $theirs->first()->spam_sender_id !== null) {
                 TelegramSpamSender::query()
                     ->whereKey($theirs->first()->spam_sender_id)
@@ -320,9 +357,35 @@ final class SpamCleaner
     }
 
     /**
-     * The owner is told without a sound: whose message, where, what it said.
+     * The messages with a link, each into the owner's chat as it is, right
+     * before they go. A copy made is written down at once: a sweep tried
+     * again does not send it twice. Telegram did not copy it: 0, the report
+     * quotes the text.
      *
-     * @param Collection<int, TelegramSpamMessage> $theirs one person's messages in one chat
+     * @param Collection<int, TelegramSpamMessage> $rows
+     */
+    private function copyLinks(int $chatId, Collection $rows): void
+    {
+        if (! $this->settings->spam()['notify']) {
+            return;
+        }
+
+        foreach ($rows as $row) {
+            if ($row->reason !== TelegramSpamMessage::REASON_LINK || $row->copy_message_id !== null) {
+                continue;
+            }
+
+            $row->copy_message_id = $this->reporter->copy($chatId, (int) $row->message_id) ?? 0;
+            $row->save();
+        }
+    }
+
+    /**
+     * The owner is told without a sound: whose message, where, what it said.
+     * A link one answers its copy, and quotes the text only when there is
+     * no copy.
+     *
+     * @param Collection<int, TelegramSpamMessage> $theirs one person's messages in one chat, of one reason
      */
     private function report(Collection $theirs, ?string $error): void
     {
@@ -333,17 +396,21 @@ final class SpamCleaner
         $first = $theirs->first();
         $locale = $this->settings->reports()['locale'];
         $shown = $theirs->first(static fn (TelegramSpamMessage $row) => $row->text !== null) ?? $first;
+        $link = $first->reason === TelegramSpamMessage::REASON_LINK;
+        $copy = $link ? $theirs->pluck('copy_message_id')->first(static fn ($id) => (int) $id > 0) : null;
+        $prefix = $link ? 'link' : 'spam';
 
         $this->reporter->send(
-            $error !== null ? 'spam_failed' : ($theirs->count() > 1 ? 'spam_deleted_many' : 'spam_deleted'),
+            $error !== null ? "{$prefix}_failed" : ($theirs->count() > 1 ? "{$prefix}_deleted_many" : "{$prefix}_deleted"),
             [
                 'who' => JoinRequestService::who(['first_name' => $first->name, 'username' => $first->username, 'id' => $first->telegram_user_id]),
                 'group' => $first->chat_title ?: (string) $first->chat_id,
                 'n' => $theirs->count(),
-                'what' => self::what($shown, $locale),
+                'what' => $copy !== null ? '' : self::what($shown, $locale),
                 'reason' => $error,
             ],
             silent: true,
+            replyTo: $copy !== null ? (int) $copy : null,
         );
     }
 
@@ -393,6 +460,124 @@ final class SpamCleaner
         }
 
         return null;
+    }
+
+    /**
+     * Who wrote it: the chat it was written as (a channel, the group's
+     * anonymous admin), else the person.
+     *
+     * @param array<string, mixed> $message
+     *
+     * @return array<string, mixed>|null
+     */
+    private static function actor(array $message): ?array
+    {
+        foreach ([$message['sender_chat'] ?? null, $message['from'] ?? null] as $actor) {
+            if (is_array($actor) && ! empty($actor['id'])) {
+                return $actor;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * A link of whom stays: the group itself (its anonymous admin) and the
+     * posts of its channel, our bot, an admin of the anti-spam, our own accounts, an admin
+     * of the group. The admins not known (Telegram out of reach, never
+     * asked): it stays - an admin's message is not deleted by a guess.
+     *
+     * @param array<string, mixed> $message
+     * @param array<string, mixed> $actor
+     */
+    private function spares(BotApi $api, int $chatId, array $message, array $actor): bool
+    {
+        $id = (int) $actor['id'];
+
+        if ($id === $chatId || ! empty($message['is_automatic_forward'])) {
+            return true;
+        }
+
+        if ($id === (int) ($this->settings->current()['bot']['id'] ?? 0)
+            || $this->admins->isAdmin($actor)
+            || TelegramAccount::query()->where('telegram_user_id', $id)->exists()) {
+            return true;
+        }
+
+        /* Written as a channel: a channel is no admin of the group. */
+        if (isset($message['sender_chat'])) {
+            return false;
+        }
+
+        $admins = $this->admins($api, $chatId);
+
+        return $admins === null || in_array($id, $admins, true);
+    }
+
+    /**
+     * The group's admins, asked of Telegram every ADMINS_TTL seconds; out of
+     * reach - the last known ones, or null.
+     *
+     * @return list<int>|null
+     */
+    private function admins(BotApi $api, int $chatId): ?array
+    {
+        $known = $this->adminsOf[$chatId] ?? null;
+
+        if ($known !== null && time() - $known['at'] < self::ADMINS_TTL) {
+            return $known['ids'];
+        }
+
+        try {
+            $list = (array) $api->call('getChatAdministrators', ['chat_id' => $chatId], 10);
+        } catch (BotApiError $e) {
+            Log::warning('Join bot: the admins of a group could not be read', ['chat_id' => $chatId, 'error' => $e->getMessage()]);
+
+            return $known['ids'] ?? null;
+        }
+
+        $ids = [];
+
+        foreach ($list as $member) {
+            $user = is_array($member) ? ($member['user'] ?? null) : null;
+
+            if (is_array($user) && ! empty($user['id'])) {
+                $ids[] = (int) $user['id'];
+            }
+        }
+
+        $this->adminsOf[$chatId] = ['at' => time(), 'ids' => $ids];
+
+        return $ids;
+    }
+
+    /**
+     * A link in the text or the caption (one Telegram marks, one hidden
+     * under a word, one it did not mark), or a button with a link.
+     *
+     * @param array<string, mixed> $message
+     */
+    private static function hasLink(array $message): bool
+    {
+        foreach ([$message['entities'] ?? [], $message['caption_entities'] ?? []] as $entities) {
+            foreach ((array) $entities as $entity) {
+                if (is_array($entity) && in_array($entity['type'] ?? null, ['url', 'text_link'], true)) {
+                    return true;
+                }
+            }
+        }
+
+        foreach ((array) ($message['reply_markup']['inline_keyboard'] ?? []) as $buttons) {
+            foreach ((array) $buttons as $button) {
+                if (is_array($button) && (! empty($button['url']) || ! empty($button['login_url']) || ! empty($button['web_app']))) {
+                    return true;
+                }
+            }
+        }
+
+        $text = self::textOf($message);
+
+        return $text !== null && preg_match(self::LINK_PATTERN, $text) === 1;
     }
 
     /**

@@ -6,6 +6,7 @@ use App\Application\Telegram\Services\JoinBotSettings;
 use App\Application\Telegram\Services\JoinRequestService;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
 use App\Models\Telegram\TelegramSetting;
+use App\Models\Telegram\TelegramSpamAdmin;
 use App\Models\Telegram\TelegramSpamSender;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Client\Request;
@@ -52,6 +53,8 @@ final class ForwardedSpamTest extends TestCase
         (include database_path('migrations/2026_10_30_100000_keep_telegram_group_invite_history.php'))->up();
         (include database_path('migrations/2026_11_02_110000_create_telegram_join_requests_table.php'))->up();
         (include database_path('migrations/2026_11_03_100000_create_telegram_spam_tables.php'))->up();
+        (include database_path('migrations/2026_11_06_100000_add_reason_to_telegram_spam_messages.php'))->up();
+        (include database_path('migrations/2026_11_06_110000_create_telegram_spam_admins_table.php'))->up();
 
         DB::table('telegram_accounts')->insert(['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001]);
         TelegramSetting::set(JoinBotSettings::KEY, ['token' => self::TOKEN, 'enabled' => true, 'bot' => ['id' => 555, 'username' => 'our_join_bot', 'name' => 'Join']]);
@@ -163,26 +166,45 @@ final class ForwardedSpamTest extends TestCase
         $this->assertStringStartsWith('👋 Перешлите мне сообщение спамера', $answers[0]['text']);
     }
 
-    public function test_the_panel_names_who_may_forward(): void
+    public function test_the_owner_and_the_admins_of_the_anti_spam_may_forward(): void
     {
+        TelegramSpamAdmin::query()->create(['telegram_user_id' => 111222333]);
+        TelegramSpamAdmin::query()->create(['username' => 'dispatcher']);
+        /* An invite link nobody opened: nobody yet. */
+        TelegramSpamAdmin::query()->create(['invite_token' => 'adm_abcdefghijkl', 'invite_expires_at' => now()->addDay()]);
+
+        $origin = ['type' => 'user', 'sender_user' => ['id' => 701, 'is_bot' => false, 'first_name' => 'Ali'], 'date' => now()->timestamp - 60];
+
+        $this->fakeTelegram([
+            $this->forward(30, 300, $origin, from: 111222333),
+            /* Put on by @username: may forward, and is known by the id from now on. */
+            [
+                'update_id' => 31,
+                'message' => [
+                    'message_id' => 301,
+                    'from' => ['id' => 444555666, 'is_bot' => false, 'first_name' => 'Disp', 'username' => 'Dispatcher'],
+                    'chat' => ['id' => 444555666, 'type' => 'private', 'first_name' => 'Disp'],
+                    'date' => now()->timestamp,
+                    'forward_origin' => $origin,
+                    'text' => 'Buy now',
+                ],
+            ],
+            /* Somebody else: no answer. */
+            $this->forward(32, 302, $origin, from: 999000999),
+        ]);
+
+        $this->poll();
+
+        $this->assertSame([300, 301], collect($this->answers())->pluck('reply_parameters.message_id')->all());
+        $this->assertSame([444555666, 'Disp'], array_values(TelegramSpamAdmin::query()->where('username', 'dispatcher')->first(['telegram_user_id', 'name'])->toArray()));
+
+        $forward = $this->app->make(GroupInviteSpamController::class)->show(new \Illuminate\Http\Request)->getData(true)['forward'];
+        $this->assertSame(['owner' => self::OWNER, 'admins' => 2], $forward);
+
+        /* The settings of the page keep what they are not sent. */
         $settings = $this->app->make(JoinBotSettings::class);
-        $controller = $this->app->make(GroupInviteSpamController::class);
-
-        $this->assertSame([self::OWNER], $settings->moderators());
-
-        $controller->settings(new \Illuminate\Http\Request(['delay' => 10, 'notify' => true, 'moderators' => '111222333, 444555666 111222333']));
-        $this->assertSame([111222333, 444555666], $settings->moderators());
-        $this->assertSame([111222333, 444555666], $controller->show(new \Illuminate\Http\Request)->getData(true)['forward']['moderators']);
-
-        $this->assertSame(422, $controller->settings(new \Illuminate\Http\Request(['delay' => 10, 'notify' => true, 'moderators' => '111222333 @ali']))->getStatusCode());
-
-        /* Not sent: kept. */
-        $controller->settings(new \Illuminate\Http\Request(['delay' => 5, 'notify' => false]));
-        $this->assertSame([5, false, [111222333, 444555666]], array_values($settings->spam()));
-
-        /* Emptied: whoever the reports go to again. */
-        $controller->settings(new \Illuminate\Http\Request(['delay' => 5, 'notify' => false, 'moderators' => '']));
-        $this->assertSame([self::OWNER], $settings->moderators());
+        $this->app->make(GroupInviteSpamController::class)->settings(new \Illuminate\Http\Request(['delay' => 5, 'notify' => false]));
+        $this->assertSame(['delay' => 5, 'notify' => false, 'links' => true], $settings->spam());
     }
 
     private function poll(): void

@@ -8,11 +8,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * A message of someone on the spam list: waiting for its time, deleted, or
- * one the bot could not delete.
+ * A message of someone on the spam list, or one with a link: waiting for
+ * its time, deleted, or one the bot could not delete.
  *
  * @property int                             $id
  * @property int|null                        $spam_sender_id
+ * @property string                          $reason
  * @property int                             $chat_id
  * @property string|null                     $chat_title
  * @property int                             $message_id
@@ -21,6 +22,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string|null                     $name
  * @property string                          $kind
  * @property string|null                     $text
+ * @property int|null                        $copy_message_id
  * @property \Illuminate\Support\Carbon      $delete_at
  * @property string                          $status
  * @property string|null                     $error
@@ -34,8 +36,15 @@ class TelegramSpamMessage extends Model
 
     public const STATUS_FAILED = 'failed';
 
+    /** Its author is on the spam list. */
+    public const REASON_LIST = 'list';
+
+    /** It carries a link: the owner gets a copy before it goes. */
+    public const REASON_LINK = 'link';
+
     protected $fillable = [
         'spam_sender_id',
+        'reason',
         'chat_id',
         'chat_title',
         'message_id',
@@ -44,6 +53,7 @@ class TelegramSpamMessage extends Model
         'name',
         'kind',
         'text',
+        'copy_message_id',
         'sent_at',
         'delete_at',
         'status',
@@ -57,6 +67,7 @@ class TelegramSpamMessage extends Model
             'chat_id' => 'integer',
             'message_id' => 'integer',
             'telegram_user_id' => 'integer',
+            'copy_message_id' => 'integer',
             'sent_at' => 'datetime',
             'delete_at' => 'datetime',
             'removed_at' => 'datetime',

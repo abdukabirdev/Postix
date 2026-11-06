@@ -121,7 +121,10 @@
                                 <div class="min-w-0">
                                     <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.spam.forward_title') }}</h2>
                                     <p class="mt-1 text-[12.5px] leading-snug text-gray-600 dark:text-gray-300" x-text="forwardHint()"></p>
-                                    <p class="mt-1.5 text-[11.5px] leading-snug" :class="data.forward.moderators.length ? 'text-gray-400' : 'text-warning-700 dark:text-warning-400'" x-text="forwardWho()"></p>
+                                    <p class="mt-1.5 text-[11.5px] leading-snug" :class="data.forward.owner || data.forward.admins ? 'text-gray-400' : 'text-warning-700 dark:text-warning-400'" x-text="forwardWho()"></p>
+                                    <x-driver-check.button size="sm" variant="ghost" icon="users" :href="route('driver-check.group-invites.spam.admins')" class="mt-2 -ml-2">
+                                        {{ __('driver_check.tree.pages.spam_admins') }}
+                                    </x-driver-check.button>
                                 </div>
                             </div>
                         </x-driver-check.surface>
@@ -149,10 +152,17 @@
                                     <p class="mt-1.5 text-[11.5px] leading-snug text-gray-400" x-text="s.notify_hint.replace(':chat', data.reports.chat_id || '—')"></p>
                                 </div>
 
-                                <x-driver-check.field :label="__('driver_check.invites.spam.moderators')" for="dc-spam-moderators">
-                                    <x-driver-check.input id="dc-spam-moderators" inputmode="numeric" autocomplete="off" maxlength="1000" x-model="moderators" ::placeholder="data.reports.chat_id || ''" />
-                                    <p class="mt-1.5 text-[11.5px] leading-snug text-gray-400 dark:text-gray-500" x-text="s.moderators_hint.replace(':chat', data.reports.chat_id || '—')"></p>
-                                </x-driver-check.field>
+                                <div>
+                                    <label class="flex cursor-pointer items-center gap-2 text-[12.5px] font-medium text-gray-700 dark:text-gray-200">
+                                        <span class="relative inline-flex h-6 w-10 shrink-0 items-center">
+                                            <input type="checkbox" class="peer sr-only" x-model="linksOn" :disabled="busy">
+                                            <span class="absolute inset-0 rounded-full bg-gray-300 transition peer-checked:bg-brand-500 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 dark:bg-gray-700"></span>
+                                            <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
+                                        </span>
+                                        <span>{{ __('driver_check.invites.spam.links') }}</span>
+                                    </label>
+                                    <p class="mt-1.5 text-[11.5px] leading-snug text-gray-400" x-text="s.links_hint.replace(':chat', data.reports.chat_id || '—')"></p>
+                                </div>
 
                                 <x-driver-check.button type="submit" ::disabled="busy" class="self-start">
                                     {{ __('driver_check.invites.spam.save') }}
@@ -253,6 +263,7 @@
                                     <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-gray-950 dark:text-white">
                                         <span class="font-medium" x-text="who(row)"></span>
                                         <span x-show="whoLine(row)" class="text-[11.5px] tabular-nums text-gray-400" x-text="whoLine(row)"></span>
+                                        <span x-show="row.reason === 'link'" x-cloak class="rounded-md bg-brand-50 px-1.5 py-0.5 text-[10.5px] font-semibold text-brand-700 dark:bg-brand-500/10 dark:text-brand-400">{{ __('driver_check.invites.spam.reason_link') }}</span>
                                     </p>
                                     <p x-show="kindLabel(row) || row.text" class="mt-0.5 line-clamp-3 break-words text-[12.5px] text-gray-600 dark:text-gray-300">
                                         <span x-show="kindLabel(row)" x-cloak class="mr-1 rounded bg-gray-100 px-1 py-px text-[11px] font-medium text-gray-500 dark:bg-white/[0.07] dark:text-gray-400" x-text="kindLabel(row)"></span>
