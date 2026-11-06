@@ -6,7 +6,6 @@ namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\BotApi;
 use App\Application\Telegram\Support\BotApiError;
-use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramSpamMessage;
 use App\Models\Telegram\TelegramSpamSender;
@@ -34,14 +33,14 @@ use Throwable;
  * their first message tells the id; a channel writing in the group too.
  * Service lines (joined, left) are left alone.
  *
- * Links (on until the panel says otherwise): every message with a link
- * goes the same way, whoever wrote it - a link in the text or the caption,
- * one hidden under a word, a button with a link; a message edited to carry
- * one too. Spared: the group's admins (and the group itself writing as its
- * anonymous admin, its channel's posts), our bot, the admins of the
- * anti-spam (SpamAdmins: the owner and the panel's list), our own
- * accounts. Right before it is deleted the owner gets a copy of it as it
- * was, without a sound, and the report answers the copy.
+ * Links (on until the panel says otherwise): a message with an http(s)://
+ * link goes the same way - in the text or the caption, hidden under a
+ * word, on a button; a message edited to carry one too - unless its author
+ * is an admin of the bot (SpamAdmins: the owner and the Admins page) or of
+ * the group (the group writing as its anonymous admin and its channel's
+ * posts too). Such a one is written down as kept, with why, so the panel
+ * shows why it stayed. Right before a link goes the owner gets a copy of
+ * it as it was, without a sound, and the report answers the copy.
  *
  * An add-on: a trouble of its own (a table not migrated yet, a database
  * error) is logged and never stops the bot letting people in.
@@ -62,8 +61,8 @@ final class SpamCleaner
     /** A group's admins are asked of Telegram again after this long, seconds. */
     private const ADMINS_TTL = 300;
 
-    /** A message is a link one when its text has one of these, besides the links Telegram marks itself. */
-    private const LINK_PATTERN = '~https?://|www\.|\b(?:t|telegram)\.me/~iu';
+    /** A link: http:// or https://, in the text, under a word or on a button. */
+    private const LINK_PATTERN = '~https?://~i';
 
     /**
      * What a message carries; the first one found is its kind. A message
@@ -112,6 +111,8 @@ final class SpamCleaner
             $settings = $this->settings->spam();
             $link = $settings['links'] && self::hasLink($message);
             $found = $this->find($message);
+            /* Why a link stays: its author is an admin. */
+            $kept = null;
 
             if ($found !== null) {
                 [$sender, $actor] = $found;
@@ -120,15 +121,17 @@ final class SpamCleaner
                 $sender = null;
                 $actor = self::actor($message);
 
-                if ($actor === null || $this->spares($api, (int) $chat['id'], $message, $actor)) {
+                if ($actor === null) {
                     return;
                 }
+
+                $kept = $this->keeps($api, (int) $chat['id'], $message, $actor);
             } else {
                 return;
             }
 
             $sentAt = isset($message['date']) ? now()->setTimestamp((int) $message['date']) : now();
-            $deleteAt = $sentAt->copy()->addSeconds($settings['delay']);
+            $deleteAt = $kept !== null ? now() : $sentAt->copy()->addSeconds($settings['delay']);
 
             $row = TelegramSpamMessage::query()->firstOrCreate(
                 ['chat_id' => (int) $chat['id'], 'message_id' => (int) $message['message_id']],
@@ -143,12 +146,15 @@ final class SpamCleaner
                     'text' => self::cut(self::textOf($message), self::TEXT),
                     'sent_at' => $sentAt,
                     'delete_at' => $deleteAt,
-                    'status' => TelegramSpamMessage::STATUS_PENDING,
+                    'status' => $kept !== null ? TelegramSpamMessage::STATUS_KEPT : TelegramSpamMessage::STATUS_PENDING,
+                    /* For a kept one: why it stayed. */
+                    'error' => $kept,
                 ],
             );
 
             if ($row->wasRecentlyCreated) {
-                $say(($link ? 'spam: a link of ' : 'spam: ') . JoinRequestService::who($actor) . ' in ' . ($chat['title'] ?? $chat['id']) . ", goes at {$deleteAt->format('H:i:s')}");
+                $say(($link ? 'spam: a link of ' : 'spam: ') . JoinRequestService::who($actor) . ' in ' . ($chat['title'] ?? $chat['id'])
+                    . ($kept !== null ? ", kept ({$kept})" : ", goes at {$deleteAt->format('H:i:s')}"));
             }
         } catch (Throwable $e) {
             Log::warning('Join bot: a message of the spam list could not be written down', ['error' => $e->getMessage()]);
@@ -482,36 +488,37 @@ final class SpamCleaner
     }
 
     /**
-     * A link of whom stays: the group itself (its anonymous admin) and the
-     * posts of its channel, our bot, an admin of the anti-spam, our own accounts, an admin
-     * of the group. The admins not known (Telegram out of reach, never
-     * asked): it stays - an admin's message is not deleted by a guess.
+     * Why a link stays, or null - it goes. It stays when its author is an
+     * admin of the bot (the owner, the Admins page) or of the group (the
+     * group itself writing as its anonymous admin, its channel's posts
+     * too). The group's admins not known (Telegram out of reach): it stays
+     * too - an admin's message is not deleted by a guess.
      *
      * @param array<string, mixed> $message
      * @param array<string, mixed> $actor
      */
-    private function spares(BotApi $api, int $chatId, array $message, array $actor): bool
+    private function keeps(BotApi $api, int $chatId, array $message, array $actor): ?string
     {
-        $id = (int) $actor['id'];
-
-        if ($id === $chatId || ! empty($message['is_automatic_forward'])) {
-            return true;
+        if ($this->admins->isAdmin($actor)) {
+            return TelegramSpamMessage::KEPT_BOT_ADMIN;
         }
 
-        if ($id === (int) ($this->settings->current()['bot']['id'] ?? 0)
-            || $this->admins->isAdmin($actor)
-            || TelegramAccount::query()->where('telegram_user_id', $id)->exists()) {
-            return true;
+        if ((int) $actor['id'] === $chatId || ! empty($message['is_automatic_forward'])) {
+            return TelegramSpamMessage::KEPT_GROUP_ADMIN;
         }
 
         /* Written as a channel: a channel is no admin of the group. */
         if (isset($message['sender_chat'])) {
-            return false;
+            return null;
         }
 
         $admins = $this->admins($api, $chatId);
 
-        return $admins === null || in_array($id, $admins, true);
+        if ($admins === null) {
+            return TelegramSpamMessage::KEPT_ADMINS_UNKNOWN;
+        }
+
+        return in_array((int) $actor['id'], $admins, true) ? TelegramSpamMessage::KEPT_GROUP_ADMIN : null;
     }
 
     /**
@@ -552,32 +559,38 @@ final class SpamCleaner
     }
 
     /**
-     * A link in the text or the caption (one Telegram marks, one hidden
-     * under a word, one it did not mark), or a button with a link.
+     * An http(s):// link in the text or the caption, one hidden under a
+     * word, or one on a button. A bare "site.uz" or "t.me/name" is no link.
      *
      * @param array<string, mixed> $message
      */
     private static function hasLink(array $message): bool
     {
+        $urls = [self::textOf($message)];
+
         foreach ([$message['entities'] ?? [], $message['caption_entities'] ?? []] as $entities) {
             foreach ((array) $entities as $entity) {
-                if (is_array($entity) && in_array($entity['type'] ?? null, ['url', 'text_link'], true)) {
-                    return true;
+                if (is_array($entity) && ($entity['type'] ?? null) === 'text_link') {
+                    $urls[] = $entity['url'] ?? null;
                 }
             }
         }
 
         foreach ((array) ($message['reply_markup']['inline_keyboard'] ?? []) as $buttons) {
             foreach ((array) $buttons as $button) {
-                if (is_array($button) && (! empty($button['url']) || ! empty($button['login_url']) || ! empty($button['web_app']))) {
-                    return true;
+                if (is_array($button)) {
+                    array_push($urls, $button['url'] ?? null, $button['login_url']['url'] ?? null, $button['web_app']['url'] ?? null);
                 }
             }
         }
 
-        $text = self::textOf($message);
+        foreach ($urls as $url) {
+            if (is_string($url) && preg_match(self::LINK_PATTERN, $url) === 1) {
+                return true;
+            }
+        }
 
-        return $text !== null && preg_match(self::LINK_PATTERN, $text) === 1;
+        return false;
     }
 
     /**

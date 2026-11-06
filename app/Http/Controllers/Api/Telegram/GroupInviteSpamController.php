@@ -29,6 +29,7 @@ final class GroupInviteSpamController extends Controller
         TelegramSpamMessage::STATUS_PENDING,
         TelegramSpamMessage::STATUS_DELETED,
         TelegramSpamMessage::STATUS_FAILED,
+        TelegramSpamMessage::STATUS_KEPT,
     ];
 
     public function __construct(

@@ -981,6 +981,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                 /* The admins of the anti-spam: their links stay, they may forward spam to the bot; invite links for them. */
                 Route::controller(GroupInviteSpamAdminController::class)->group(function () {
                     Route::get('/spam/admins', 'show')->name('api.telegram.group-invites.spam.admins');
+                    Route::get('/spam/admins/groups', 'groups')->name('api.telegram.group-invites.spam.admins.groups');
                     Route::post('/spam/admins', 'store')->name('api.telegram.group-invites.spam.admins.store');
                     Route::post('/spam/admins/invite', 'invite')->name('api.telegram.group-invites.spam.admins.invite');
                     Route::delete('/spam/admins/{spamAdmin}', 'destroy')->name('api.telegram.group-invites.spam.admins.destroy');

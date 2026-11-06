@@ -9,7 +9,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * A message of someone on the spam list, or one with a link: waiting for
- * its time, deleted, or one the bot could not delete.
+ * its time, deleted, one the bot could not delete, or a link it left
+ * because an admin wrote it.
  *
  * @property int                             $id
  * @property int|null                        $spam_sender_id
@@ -35,6 +36,18 @@ class TelegramSpamMessage extends Model
     public const STATUS_DELETED = 'deleted';
 
     public const STATUS_FAILED = 'failed';
+
+    /** A link left in the group: its author is an admin. `error` says why (KEPT_*). */
+    public const STATUS_KEPT = 'kept';
+
+    /** Kept: the author is an admin of the bot (the owner, the Admins page). */
+    public const KEPT_BOT_ADMIN = 'bot_admin';
+
+    /** Kept: the author is an admin of the group (or the group, its channel). */
+    public const KEPT_GROUP_ADMIN = 'group_admin';
+
+    /** Kept: the bot could not learn the group's admins from Telegram. */
+    public const KEPT_ADMINS_UNKNOWN = 'admins_unknown';
 
     /** Its author is on the spam list. */
     public const REASON_LIST = 'list';

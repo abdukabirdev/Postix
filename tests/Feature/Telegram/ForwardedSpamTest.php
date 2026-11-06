@@ -41,6 +41,7 @@ final class ForwardedSpamTest extends TestCase
             $table->id();
             $table->string('phone')->nullable();
             $table->bigInteger('telegram_user_id')->nullable();
+            $table->string('username')->nullable();
             $table->boolean('is_authorized')->default(true);
             $table->timestamps();
         });
@@ -56,7 +57,7 @@ final class ForwardedSpamTest extends TestCase
         (include database_path('migrations/2026_11_06_100000_add_reason_to_telegram_spam_messages.php'))->up();
         (include database_path('migrations/2026_11_06_110000_create_telegram_spam_admins_table.php'))->up();
 
-        DB::table('telegram_accounts')->insert(['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001]);
+        DB::table('telegram_accounts')->insert(['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001, 'username' => 'OurDriver']);
         TelegramSetting::set(JoinBotSettings::KEY, ['token' => self::TOKEN, 'enabled' => true, 'bot' => ['id' => 555, 'username' => 'our_join_bot', 'name' => 'Join']]);
     }
 
@@ -164,6 +165,61 @@ final class ForwardedSpamTest extends TestCase
         $this->assertCount(1, $answers);
         $this->assertSame([self::OWNER, 111], [(int) $answers[0]['chat_id'], $answers[0]['reply_parameters']['message_id']]);
         $this->assertStringStartsWith('👋 Перешлите мне сообщение спамера', $answers[0]['text']);
+    }
+
+    public function test_an_id_a_username_a_link_a_contact_or_a_mention_sent_to_the_bot_go_onto_the_list(): void
+    {
+        TelegramSpamSender::query()->create(['username' => 'known', 'note' => 'typed']);
+        TelegramSpamAdmin::query()->create(['username' => 'dispatcher']);
+
+        $this->fakeTelegram([
+            /* Several in one message, the words around passed over. */
+            $this->forward(70, 120, null, ['text' => "спамеры: 7010001 @Spam_One\nhttps://t.me/spam_two @known"]),
+            $this->forward(71, 121, null, ['contact' => ['phone_number' => '+998901112233', 'first_name' => 'Vali', 'last_name' => 'Ads', 'user_id' => 7020002]]),
+            $this->forward(72, 122, null, [
+                'text' => 'Bobur',
+                'entities' => [['type' => 'text_mention', 'offset' => 0, 'length' => 5, 'user' => ['id' => 7030003, 'is_bot' => false, 'first_name' => 'Bobur']]],
+            ]),
+            /* Ours: an account by id and by @username, an admin, the bot. */
+            $this->forward(73, 123, null, ['text' => '9001 @ourdriver @dispatcher @our_join_bot 555']),
+            /* A contact without Telegram, a word that names nobody. */
+            $this->forward(74, 124, null, ['contact' => ['phone_number' => '+998900000000', 'first_name' => 'Nobody']]),
+            $this->forward(75, 125, null, ['text' => 'привет']),
+        ]);
+
+        $this->poll();
+
+        $this->assertEqualsCanonicalizing(
+            [[7010001, null, null, 'Прислано боту'], [null, 'spam_one', null, 'Прислано боту'], [null, 'spam_two', null, 'Прислано боту'], [null, 'known', null, 'typed'],
+                [7020002, null, 'Vali Ads', 'Прислано боту'], [7030003, null, 'Bobur', 'Прислано боту']],
+            TelegramSpamSender::query()->get()->map(fn ($s) => [$s->telegram_user_id, $s->username, $s->name, $s->note])->all(),
+        );
+
+        $answers = collect($this->answers())->mapWithKeys(fn ($a) => [$a['reply_parameters']['message_id'] => $a['text']])->all();
+
+        $this->assertSame(implode("\n\n", [
+            '🚫 ID 7010001 — добавил в «Антиспам». Его новые сообщения в группах буду удалять.',
+            '🚫 @spam_one — добавил в «Антиспам». Его новые сообщения в группах буду удалять.',
+            '🚫 @spam_two — добавил в «Антиспам». Его новые сообщения в группах буду удалять.',
+            '🚫 @known уже в «Антиспаме» — его новые сообщения удаляю.',
+        ]), $answers[120]);
+        $this->assertStringStartsWith('🚫 Vali Ads (ID 7020002) — добавил', $answers[121]);
+        $this->assertStringStartsWith('🚫 Bobur (ID 7030003) — добавил', $answers[122]);
+        $this->assertSame(5, substr_count($answers[123], 'в «Антиспам» не добавляю'));
+        $this->assertStringStartsWith('⚠️ У этого контакта нет Telegram', $answers[124]);
+        $this->assertStringStartsWith('👋 Перешлите мне сообщение спамера', $answers[125]);
+    }
+
+    public function test_a_stranger_naming_somebody_gets_no_answer_and_lists_nobody(): void
+    {
+        $this->fakeTelegram([
+            $this->forward(80, 130, null, ['text' => '7010001 @spam_one'], from: 999000999),
+        ]);
+
+        $this->poll();
+
+        $this->assertSame(0, TelegramSpamSender::query()->count());
+        $this->assertSame([], $this->answers());
     }
 
     public function test_the_owner_and_the_admins_of_the_anti_spam_may_forward(): void

@@ -166,9 +166,10 @@ final class JoinBotSettings
     /**
      * The spam list's settings: a message goes $delay seconds after it was
      * sent; $notify: the owner is told of each, without a sound (to the
-     * chat the reports go to); $links: every message with a link goes as
-     * well, whoever wrote it but the group's admins and ours, and the owner
-     * gets a copy of it (SpamCleaner) - on until the panel says otherwise.
+     * chat the reports go to); $links: every message with an http(s) link
+     * goes as well, unless an admin of the bot or of the group wrote it, and
+     * the owner gets a copy of it (SpamCleaner) - on until the panel says
+     * otherwise.
      * Who may forward spam to the bot and keep their links: the admins of
      * the anti-spam (SpamAdmins).
      *

@@ -6,6 +6,7 @@ namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\BotApi;
 use App\Application\Telegram\Support\BotApiError;
+use App\Models\Telegram\TelegramInviteGroup;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramSpamAdmin;
 use Illuminate\Support\Facades\DB;
@@ -166,6 +167,75 @@ final class SpamAdmins
         $bot = (string) ($this->settings->current()['bot']['username'] ?? '');
 
         return $bot !== '' && $admin->invite_token !== null ? "https://t.me/{$bot}?start={$admin->invite_token}" : null;
+    }
+
+    /**
+     * Each of our groups (not archived) as Telegram has it now: its admins -
+     * their links stay there - and how our bot stands in it: ok (an admin
+     * that may delete), no_delete (an admin without that right), not_admin
+     * (a plain member: it does not even see the messages), absent, unknown
+     * (the group's chat is not known yet), error.
+     *
+     * @return list<array{id: int, title: string, bot: string, error: string|null, admins: list<array{id: int, name: string|null, username: string|null, creator: bool, anonymous: bool, is_bot: bool}>}>
+     */
+    public function groups(): array
+    {
+        $current = $this->settings->current();
+
+        if ($current['token'] === null) {
+            return [];
+        }
+
+        $api = new BotApi($current['token']);
+        $botId = (int) ($current['bot']['id'] ?? 0);
+
+        return TelegramInviteGroup::query()
+            ->orderByDesc('is_active')
+            ->orderByDesc('id')
+            ->get()
+            ->map(function (TelegramInviteGroup $group) use ($api, $botId): array {
+                $row = ['id' => $group->id, 'title' => $group->title ?: $group->link, 'bot' => 'unknown', 'error' => null, 'admins' => []];
+                $chat = $group->telegram_chat_id ?: ($group->isInvite() ? null : '@' . ltrim($group->link, '@'));
+
+                if ($chat === null) {
+                    return $row;
+                }
+
+                try {
+                    $list = (array) $api->call('getChatAdministrators', ['chat_id' => $chat], 8);
+                } catch (BotApiError $e) {
+                    return [...$row, 'bot' => in_array($e->getCode(), [400, 403], true) ? 'absent' : 'error', 'error' => $e->reason()];
+                }
+
+                $row['bot'] = 'not_admin';
+
+                foreach ($list as $member) {
+                    $user = is_array($member) ? (array) ($member['user'] ?? []) : [];
+
+                    if (empty($user['id'])) {
+                        continue;
+                    }
+
+                    if ((int) $user['id'] === $botId) {
+                        $row['bot'] = ($member['status'] ?? null) === 'creator' || ! empty($member['can_delete_messages']) ? 'ok' : 'no_delete';
+
+                        continue;
+                    }
+
+                    $row['admins'][] = [
+                        'id' => (int) $user['id'],
+                        'name' => SpamCleaner::nameOf($user),
+                        'username' => $user['username'] ?? null,
+                        'creator' => ($member['status'] ?? null) === 'creator',
+                        'anonymous' => ! empty($member['is_anonymous']),
+                        'is_bot' => ! empty($user['is_bot']),
+                    ];
+                }
+
+                return $row;
+            })
+            ->values()
+            ->all();
     }
 
     /**

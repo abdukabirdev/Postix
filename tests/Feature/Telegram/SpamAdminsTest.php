@@ -6,6 +6,7 @@ use App\Application\Telegram\Services\JoinBotSettings;
 use App\Application\Telegram\Services\JoinRequestService;
 use App\Application\Telegram\Services\SpamAdmins;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamAdminController;
+use App\Models\Telegram\TelegramInviteGroup;
 use App\Models\Telegram\TelegramSetting;
 use App\Models\Telegram\TelegramSpamAdmin;
 use App\Models\Telegram\TelegramSpamMessage;
@@ -118,7 +119,10 @@ final class SpamAdminsTest extends TestCase
         $this->assertStringStartsWith('⚠️ Эта ссылка уже использована', $this->said(5353));
         $this->assertContains("👮 Ali (@Ali, ID 4242) стал админом антиспама по пригласительной ссылке\nAli, диспетчер", $this->saidAll(self::OWNER));
 
-        $this->assertSame([8], TelegramSpamMessage::query()->pluck('message_id')->all());
+        $this->assertSame(
+            [7 => 'kept', 8 => 'deleted'],
+            TelegramSpamMessage::query()->orderBy('message_id')->pluck('status', 'message_id')->all(),
+        );
 
         $page = $controller->show()->getData(true);
         $this->assertSame([[], true], [$page['invites'], $page['admins'][0]['by_invite']]);
@@ -160,6 +164,33 @@ final class SpamAdminsTest extends TestCase
 
         TelegramSetting::set(JoinBotSettings::KEY, ['token' => null, 'enabled' => false, 'bot' => []]);
         $this->assertSame(422, $controller->invite(new \Illuminate\Http\Request)->getStatusCode());
+    }
+
+    public function test_the_page_shows_each_groups_admins_and_whether_the_bot_may_delete_there(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'title' => 'Drivers UZ', 'telegram_chat_id' => self::CHAT, 'is_active' => true]);
+        TelegramInviteGroup::query()->create(['link' => 'old_group', 'title' => 'Old', 'telegram_chat_id' => -1005555, 'is_active' => false]);
+
+        Http::fake(function (Request $request) {
+            $chat = (int) $request->data()['chat_id'];
+
+            return Http::response($chat === self::CHAT
+                ? ['ok' => true, 'result' => [
+                    ['status' => 'creator', 'user' => ['id' => self::OWNER, 'is_bot' => false, 'first_name' => 'Owner']],
+                    ['status' => 'administrator', 'can_delete_messages' => true, 'user' => ['id' => 555, 'is_bot' => true, 'first_name' => 'Join', 'username' => 'our_join_bot']],
+                    ['status' => 'administrator', 'is_anonymous' => true, 'user' => ['id' => 7001, 'is_bot' => false, 'first_name' => 'Ali', 'username' => 'ali']],
+                ]]
+                : ['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: chat not found']);
+        });
+
+        $groups = $this->app->make(GroupInviteSpamAdminController::class)->groups()->getData(true)['groups'];
+
+        $this->assertSame(['Drivers UZ', 'ok'], [$groups[0]['title'], $groups[0]['bot']]);
+        $this->assertSame(
+            [[self::OWNER, true, false], [7001, false, true]],
+            collect($groups[0]['admins'])->map(fn (array $admin) => [$admin['id'], $admin['creator'], $admin['anonymous']])->all(),
+        );
+        $this->assertSame(['absent', 'chat not found'], [$groups[1]['bot'], $groups[1]['error']]);
     }
 
     public function test_the_old_fields_ids_come_over_as_admins(): void

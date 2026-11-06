@@ -59,6 +59,16 @@ final class GroupInviteSpamAdminController extends Controller
     }
 
     /**
+     * The admins of each of our groups, from Telegram (their links stay
+     * there), and whether our bot may delete there. Asked apart from show():
+     * it calls Telegram once a group.
+     */
+    public function groups(): JsonResponse
+    {
+        return response()->json(['groups' => $this->admins->groups()]);
+    }
+
+    /**
      * IDs, @usernames or t.me links: whoever is not an admin yet becomes
      * one. What was not understood is named back.
      */

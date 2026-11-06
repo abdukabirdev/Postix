@@ -33,6 +33,11 @@ export function groupInvitesSpamAdminsPage(config) {
         busy: false,
         timer: null,
 
+        /* Each of our groups with its admins from Telegram: asked apart, it is slower. */
+        groups: [],
+        groupsLoading: false,
+        groupsLoaded: false,
+
         entries: '',
         note: '',
         inviteNote: '',
@@ -43,6 +48,7 @@ export function groupInvitesSpamAdminsPage(config) {
 
         init() {
             this.load();
+            this.loadGroups();
 
             this.timer = setInterval(() => {
                 if (document.visibilityState === 'visible' && !this.busy) {
@@ -73,6 +79,51 @@ export function groupInvitesSpamAdminsPage(config) {
             } finally {
                 this.loading = false;
             }
+        },
+
+        async loadGroups() {
+            if (this.groupsLoading) {
+                return;
+            }
+
+            this.groupsLoading = true;
+
+            try {
+                this.groups = (await requestJson(this.endpoints.groups)).groups ?? [];
+                this.groupsLoaded = true;
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.groupsLoading = false;
+            }
+        },
+
+        refresh() {
+            this.load();
+            this.loadGroups();
+        },
+
+        /* How our bot stands in the group: may delete, or why it cannot. */
+        botBadge(group) {
+            const good = 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400';
+            const bad = 'bg-error-50 text-error-700 dark:bg-error-500/10 dark:text-error-400';
+            const plain = 'bg-gray-100 text-gray-600 dark:bg-white/[0.07] dark:text-gray-300';
+            const tone = { ok: good, no_delete: bad, not_admin: bad, absent: bad }[group.bot] ?? plain;
+
+            return { tone, text: s.admins.bot_states[group.bot] ?? group.bot };
+        },
+
+        groupAdminName(admin) {
+            return admin.name || (admin.username ? '@' + admin.username : 'ID ' + admin.id);
+        },
+
+        /* владелец · анонимно · бот */
+        groupAdminTag(admin) {
+            return [
+                admin.creator ? s.admins.tags.creator : null,
+                admin.anonymous ? s.admins.tags.anonymous : null,
+                admin.is_bot ? s.admins.tags.bot : null,
+            ].filter(Boolean).join(' · ');
         },
 
         /* Ali Valiyev, else @ali, else the id. */

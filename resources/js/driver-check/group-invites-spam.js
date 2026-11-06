@@ -22,6 +22,7 @@ const STATUS_DOTS = {
     pending: 'text-warning-500 animate-pulse',
     deleted: 'text-success-500',
     failed: 'text-error-500',
+    kept: 'text-gray-400',
 };
 
 export function groupInvitesSpamPage(config) {
@@ -190,7 +191,7 @@ export function groupInvitesSpamPage(config) {
         },
 
         statuses() {
-            return ['all', 'pending', 'deleted', 'failed'].map((value) => ({ value, label: s.statuses[value] }));
+            return ['all', 'pending', 'deleted', 'failed', 'kept'].map((value) => ({ value, label: s.statuses[value] }));
         },
 
         setStatus(value) {
@@ -234,6 +235,11 @@ export function groupInvitesSpamPage(config) {
 
             if (row.status === 'deleted') {
                 return s.status_deleted.replace(':time', this.clock(row.removed_at));
+            }
+
+            /* A link left: an admin wrote it. */
+            if (row.status === 'kept') {
+                return s.status_kept.replace(':why', s.kept[row.error] ?? row.error ?? '');
             }
 
             return s.status_failed.replace(':error', b.errors_tg[row.error] ?? this.errorLabel(row.error));
