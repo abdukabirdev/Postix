@@ -1976,6 +1976,15 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(2, $response->json('hours.0.added'));
 
         $accounts = collect($response->json('accounts'))->keyBy('id');
+        /* The heavy parts only when asked for. */
+        $this->assertSame([null, null, 1], [$accounts[1]['contacts'], $accounts[1]['contacts_untried'], $accounts[1]['calls_today']]);
+        $this->assertNull($response->json('history'));
+
+        $response = $this->getJson("{$url}?days=2&lines=50&full=1", ['Authorization' => "Bearer {$token}"])->assertOk();
+
+        $this->assertStringNotContainsString('998900000001', $response->getContent());
+
+        $accounts = collect($response->json('accounts'))->keyBy('id');
         $this->assertSame([2, 0, 1], [$accounts[1]['contacts'], $accounts[1]['contacts_untried'], $accounts[1]['calls_today']]);
         $this->assertSame(0, $accounts[2]['contacts']);
 
@@ -2014,7 +2023,7 @@ final class GroupInviteTest extends TestCase
         $try($new, $p4, 2, TelegramGroupInvite::STATUS_NOT_ADDED, '2026-11-04 10:02:00');
         $try($new, $p5, 1, TelegramGroupInvite::STATUS_INVITED, '2026-11-04 10:03:00');
 
-        $history = $this->app->make(\App\Application\Telegram\Services\GroupInviteReport::class)->build(1, 0)['history'];
+        $history = $this->app->make(\App\Application\Telegram\Services\GroupInviteReport::class)->build(1, 0, full: true)['history'];
 
         $here = $history['current_group'];
         $this->assertSame([$new->id, 5, 2, 3], [$here['group_id'], $here['total']['tried'], $here['total']['added'], $here['total']['not_added']]);

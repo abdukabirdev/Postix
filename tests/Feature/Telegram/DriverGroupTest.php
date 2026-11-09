@@ -430,6 +430,52 @@ final class DriverGroupTest extends TestCase
         $this->assertSame(['+998901110003'], array_column($found['data'], 'phone'));
     }
 
+    public function test_the_accounts_report_tells_who_holds_each_account_and_why_the_invites_pass_it_by(): void
+    {
+        config(['services.telegram.report_token' => str_repeat('t', 40)]);
+
+        $this->phone('+998901110001', 501, 1, hash: 111);
+        $this->phone('+998901110002', 502, 2, hash: 222);
+        $this->app->make(DriverGroupService::class)->queueAll();
+
+        DB::table('telegram_accounts')->insert(['id' => 3, 'phone' => '+998900000003', 'telegram_user_id' => 9003, 'session_path' => '/sessions/3', 'is_authorized' => true]);
+
+        TelegramAccountProcess::query()->create([
+            'telegram_account_id' => 1,
+            'process' => ProcessEnum::ContactSync->value,
+            'is_busy' => true,
+            'busy_at' => now()->subHours(8),
+        ]);
+        TelegramAccountProcess::query()->create([
+            'telegram_account_id' => 2,
+            'process' => ProcessEnum::GroupInvite->value,
+            'meta' => ['rest_until' => now()->addHours(3)->toIso8601String(), 'rest_kind' => 'wait', 'rest_reason' => 'FLOOD_WAIT_X'],
+        ]);
+
+        $this->getJson(route('telegram.report.accounts'))->assertNotFound();
+
+        $json = $this->getJson(route('telegram.report.accounts'), ['Authorization' => 'Bearer ' . str_repeat('t', 40)])
+            ->assertOk()
+            ->json();
+
+        $accounts = collect($json['accounts'])->keyBy('id');
+
+        $this->assertSame(['busy:contact_sync'], $accounts[1]['invite']['blockers']);
+        $this->assertSame(480, $accounts[1]['processes']['contact_sync']['busy_minutes']);
+        $this->assertSame(['resting:wait'], $accounts[2]['invite']['blockers']);
+        $this->assertTrue($accounts[3]['invite']['free_now']);
+
+        $this->assertSame(1, $json['summary']['invite']['free_now']);
+        $this->assertSame(['busy:contact_sync' => 1, 'resting:wait' => 1], $json['summary']['invite']['stopped_by']);
+        $this->assertSame(['rows' => 1, 'busy' => 1, 'busy_stale' => 1, 'resting' => 0, 'unavailable' => 0, 'failing' => 0], $json['summary']['processes']['contact_sync']);
+
+        /* The drivers wait for the account that found them, as the page sees it. */
+        $this->assertSame(['state' => 'ready', 'until' => null, 'reason' => null], $accounts[2]['drivers']['state']);
+        $this->assertSame(1, $accounts[1]['drivers']['waiting']);
+        $this->assertSame(2, $json['summary']['drivers']['waiting']);
+        $this->assertStringNotContainsString('+99890', json_encode($json, JSON_UNESCAPED_UNICODE));
+    }
+
     /*
     |--------------------------------------------------------------------------
     | Helpers

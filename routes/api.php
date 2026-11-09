@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\Auth\AuthController;
+use App\Http\Controllers\Api\Telegram\AccountsReportController;
 use App\Http\Controllers\Api\Telegram\ContactSyncDevReportController;
 use App\Http\Controllers\Api\Telegram\GroupInviteReportController;
 use App\Http\Controllers\Api\Telegram\TelegramAccountController;
@@ -22,6 +23,11 @@ Route::post('/telegram/webhook', TelegramBotWebhookController::class)
 Route::get('/telegram/report/group-invites', GroupInviteReportController::class)
     ->middleware('throttle:30,1')
     ->name('telegram.report.group-invites');
+
+// Where every account stands (which process holds it, why the invites pass it by) and the drivers into a group, the same token.
+Route::get('/telegram/report/accounts', AccountsReportController::class)
+    ->middleware('throttle:30,1')
+    ->name('telegram.report.accounts');
 
 // The contact sync's report for the developer, the same token.
 Route::get('/telegram/report/contact-sync', ContactSyncDevReportController::class)

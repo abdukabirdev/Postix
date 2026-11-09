@@ -18,7 +18,8 @@ use Illuminate\Http\Request;
  * not exist; a wrong token gets the same 404.
  *
  * ?days=1..14 (3), ?lines=0..1000 (200): the log lines, the latest or,
- * with ?run_id=, those of one run.
+ * with ?run_id=, those of one run. ?full=1: the heavy parts too (the
+ * history of people tried in several groups, each account's contacts).
  */
 final class GroupInviteReportController extends Controller
 {
@@ -31,7 +32,7 @@ final class GroupInviteReportController extends Controller
         $query = $this->reportQuery($request);
 
         return response()->json(
-            $report->build($query['days'], $query['lines'], $query['run_id']),
+            $report->build($query['days'], $query['lines'], $query['run_id'], $request->boolean('full')),
             200,
             [],
             JSON_UNESCAPED_UNICODE,

@@ -40,9 +40,14 @@ final class GroupInviteReport
     ) {}
 
     /**
+     * @param bool $full also the heavy parts: the history of the people
+     *                   tried in more than one group, and each account's
+     *                   contacts - on a big base they take past the 60 s
+     *                   nginx waits
+     *
      * @return array<string, mixed>
      */
-    public function build(int $days = 3, int $lines = 200, ?string $runId = null): array
+    public function build(int $days = 3, int $lines = 200, ?string $runId = null, bool $full = false): array
     {
         $from = now()->subDays(max(1, $days) - 1)->startOfDay();
         $config = $this->settings->current();
@@ -76,8 +81,8 @@ final class GroupInviteReport
             'account_days' => $this->accountDays($from),
             'events' => $this->events($from),
             'stops' => $this->stops($from),
-            'accounts' => $this->accounts($config, $group),
-            'history' => $this->history($group),
+            'accounts' => $this->accounts($config, $group, $full),
+            'history' => $full ? $this->history($group) : null,
             'log' => $this->log($lines, $runId),
         ];
     }
@@ -489,7 +494,7 @@ final class GroupInviteReport
      *
      * @return list<array<string, mixed>>
      */
-    private function accounts(array $config, ?TelegramInviteGroup $group): array
+    private function accounts(array $config, ?TelegramInviteGroup $group, bool $full): array
     {
         $states = TelegramAccountProcess::query()->get()->groupBy('telegram_account_id');
         $calls = TelegramGroupInviteLog::callsToday();
@@ -499,7 +504,7 @@ final class GroupInviteReport
         return TelegramAccount::query()
             ->orderBy('id')
             ->get()
-            ->map(function (TelegramAccount $account) use ($states, $calls, $listeners, $joining, $config, $group) {
+            ->map(function (TelegramAccount $account) use ($states, $calls, $listeners, $joining, $config, $group, $full) {
                 $mine = $states->get($account->id) ?? collect();
                 $invite = $mine->first(fn ($state) => self::processOf($state) === ProcessEnum::GroupInvite->value);
                 $meta = $this->invites->meta($account);
@@ -537,8 +542,8 @@ final class GroupInviteReport
                     'run_share' => GroupInviteSettings::runShare(isset($meta['cap']) ? max(1, min($warm, (int) $meta['cap'])) : $warm, $config),
                     'calls_today' => $calls[$account->id] ?? 0,
                     'lookups_today' => $this->invites->resolvesToday($account->id),
-                    'contacts' => $this->contacts($account->id)->count(),
-                    'contacts_untried' => $group ? $this->untried($group)->whereIn('id', $this->contacts($account->id))->count() : null,
+                    'contacts' => $full ? $this->contacts($account->id)->count() : null,
+                    'contacts_untried' => $full && $group ? $this->untried($group)->whereIn('id', $this->contacts($account->id))->count() : null,
                 ];
             })
             ->all();
