@@ -45,8 +45,12 @@
                     <span x-text="d.add_all + ((data?.counts?.not_queued ?? 0) > 0 ? ' · ' + number(data.counts.not_queued) : '')"></span>
                 </x-driver-check.button>
 
-                <x-driver-check.button variant="danger" icon="stop" x-show="running" x-cloak x-on:click="stop()" ::disabled="busy || now?.stop_asked">
+                <x-driver-check.button variant="danger" icon="stop" x-show="running || !paused()" x-cloak x-on:click="stop()" ::disabled="busy || now?.stop_asked || (!running && !data?.group)" :title="__('driver_check.drivers_group.stop_hint')">
                     <span x-text="now?.stop_asked ? d.stopping : d.stop"></span>
+                </x-driver-check.button>
+
+                <x-driver-check.button icon="play" x-show="!running && paused()" x-cloak x-on:click="run()" ::disabled="busy || !data?.group">
+                    <span x-text="d.run"></span>
                 </x-driver-check.button>
             </x-slot:actions>
         </x-driver-check.page-header>
@@ -90,6 +94,8 @@
                                 </div>
                             </template>
 
+                            <p x-show="paused()" x-cloak class="mt-2 text-[12.5px] font-medium text-warning-600 dark:text-warning-400" x-text="pausedLabel()"></p>
+
                             <p x-show="groupError()" x-cloak class="mt-2 text-[12.5px] font-medium text-error-600 dark:text-error-400" x-text="groupError()"></p>
                             <p class="mt-3 text-[12px] leading-snug text-gray-400" x-text="d.now.schedule"></p>
                             <p class="mt-1 text-[12px] tabular-nums text-gray-500" x-text="d.counts.today.replace(':tried', number(data.today.tried)).replace(':added', number(data.today.added))"></p>
@@ -99,7 +105,7 @@
                             <x-driver-check.button size="sm" icon="refresh" x-on:click="retry()" ::disabled="busy || !data.group || counts().retryable === 0">
                                 <span x-text="d.retry + (counts().retryable > 0 ? ' · ' + number(counts().retryable) : '')"></span>
                             </x-driver-check.button>
-                            <x-driver-check.button size="sm" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy || !data.group || counts().pending === 0" :title="__('driver_check.drivers_group.run_hint')">
+                            <x-driver-check.button size="sm" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy || !data.group || (counts().pending === 0 && !paused())" :title="__('driver_check.drivers_group.run_hint')">
                                 <span x-text="d.run + (counts().pending > 0 ? ' · ' + number(counts().pending) : '')"></span>
                             </x-driver-check.button>
                         </div>

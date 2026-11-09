@@ -160,8 +160,9 @@ export function groupInvitesDriversPage(config) {
             this.post(this.endpoints.retry, d.retry_confirm.replace(':n', this.number(this.data?.counts?.retryable ?? 0)));
         },
 
+        /* Stops the run going on, and the scheduler until "Continue": a run starts every minute by itself. */
         async stop() {
-            if (this.busy || !this.running || !window.confirm(d.stop_confirm)) {
+            if (this.busy || !window.confirm(d.stop_confirm)) {
                 return;
             }
 
@@ -245,6 +246,17 @@ export function groupInvitesDriversPage(config) {
         | What runs now
         |--------------------------------------------------------------
         */
+
+        /* Stopped from the panel: nothing starts by itself until "Continue". */
+        paused() {
+            return !!this.data?.paused;
+        },
+
+        pausedLabel() {
+            const at = this.data?.settings?.paused_at;
+
+            return at ? d.now.paused.replace(':time', this.time(at)) : d.now.paused_no_time;
+        },
 
         doingLabel() {
             return d.now.doing[this.now?.doing] ?? d.now.doing.starting;

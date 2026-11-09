@@ -323,6 +323,7 @@
                                         <p x-show="running" x-cloak class="mt-0.5 text-[12.5px] text-gray-500" x-text="whereLabel()"></p>
                                         <p x-show="now?.totals" x-cloak class="mt-1 text-[12.5px] tabular-nums text-gray-600 dark:text-gray-300" x-text="summary(now?.totals)"></p>
                                         <p x-show="groupError()" x-cloak class="mt-1 text-[12.5px] font-medium text-error-600 dark:text-error-400" x-text="groupError()"></p>
+                                        <p x-show="paused()" x-cloak class="mt-1 text-[12.5px] font-medium text-warning-600 dark:text-warning-400" x-text="pausedLabel()"></p>
                                         <p class="mt-1 text-[12px] tabular-nums text-gray-400">
                                             <span x-text="data.group.title"></span>
                                             <span x-text="' · ' + d.statuses.invited + ' ' + number(counts().invited) + ' · ' + d.statuses.pending + ' ' + number(counts().pending)"></span>
@@ -337,10 +338,10 @@
                         <x-driver-check.button size="sm" icon="users" x-show="!running" x-on:click="addAll()" ::disabled="busy || !data?.group || (data?.counts?.not_queued ?? 0) === 0">
                             <span x-text="d.add_all + ((data?.counts?.not_queued ?? 0) > 0 ? ' · ' + number(data.counts.not_queued) : '')"></span>
                         </x-driver-check.button>
-                        <x-driver-check.button size="sm" variant="primary" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy || !data?.group || counts().pending === 0">
+                        <x-driver-check.button size="sm" variant="primary" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy || !data?.group || (counts().pending === 0 && !paused())">
                             <span x-text="d.run + (counts().pending > 0 ? ' · ' + number(counts().pending) : '')"></span>
                         </x-driver-check.button>
-                        <x-driver-check.button size="sm" variant="danger" icon="stop" x-show="running" x-cloak x-on:click="stop()" ::disabled="busy || now?.stop_asked">
+                        <x-driver-check.button size="sm" variant="danger" icon="stop" x-show="running || !paused()" x-cloak x-on:click="stop()" ::disabled="busy || now?.stop_asked || (!running && !data?.group)">
                             <span x-text="now?.stop_asked ? d.stopping : d.stop"></span>
                         </x-driver-check.button>
                     </div>

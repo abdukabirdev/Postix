@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Console\Commands\Telegram;
 
 use App\Application\Telegram\Services\DriverGroupService;
+use App\Application\Telegram\Services\DriverGroupSettings;
 use App\Application\Telegram\Support\SignalStop;
 use App\Telegram\TelegramProcessLock;
 use Illuminate\Console\Command;
@@ -28,7 +29,7 @@ final class TelegramDriverGroupAddCommand extends Command
 
     protected $description = 'Add the drivers found in Telegram into the group picked in the panel';
 
-    public function handle(DriverGroupService $drivers): int
+    public function handle(DriverGroupService $drivers, DriverGroupSettings $settings): int
     {
         EventLoop::setErrorHandler(static function (Throwable $e): void {
             if (SignalStop::handle($e, fn () => DriverGroupService::requestStop(null))) {
@@ -46,7 +47,8 @@ final class TelegramDriverGroupAddCommand extends Command
         /* The drivers checked since the last minute: queued even while a run goes on, it picks them up. */
         $drivers->queueResolved();
 
-        if ($trigger === 'schedule' && ! $drivers->hasPending()) {
+        /* Stopped from the panel: only a start button starts it again. */
+        if ($trigger === 'schedule' && ($settings->paused() || ! $drivers->hasPending())) {
             return self::SUCCESS;
         }
 

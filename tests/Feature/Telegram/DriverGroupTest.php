@@ -9,6 +9,7 @@ use App\Application\Telegram\Services\DriverGroupSettings;
 use App\Application\Telegram\Services\MadelineService;
 use App\Application\Telegram\Support\SessionProbe;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
+use App\Jobs\Telegram\StartDriverGroupAddJob;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountProcess;
 use App\Models\Telegram\TelegramDriverGroupAdd;
@@ -20,6 +21,7 @@ use danog\MadelineProto\API;
 use danog\MadelineProto\RPCErrorException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Schema;
 use Mockery;
 use ReflectionClass;
@@ -428,6 +430,51 @@ final class DriverGroupTest extends TestCase
         $found = $this->getJson(route('api.telegram.group-invites.drivers.rows', ['q' => '0003']))->assertOk()->json();
 
         $this->assertSame(['+998901110003'], array_column($found['data'], 'phone'));
+    }
+
+    public function test_stop_holds_the_runs_every_minute_until_continue(): void
+    {
+        Queue::fake();
+        $this->phone('+998901110001', 501, 1, hash: 111);
+        $this->fakeTelegram(invite: fn (int $account, int $user) => $this->added([$user]));
+
+        $service = $this->app->make(DriverGroupService::class);
+        $settings = $this->app->make(DriverGroupSettings::class);
+        $service->queueAll();
+
+        /* Nothing runs: the stop still holds the scheduler. */
+        $this->actingAsDriverCheck()->postJson(route('api.telegram.group-invites.drivers.stop'))->assertOk();
+
+        $this->assertTrue($settings->paused());
+        $this->assertFalse($settings->active());
+        $this->assertTrue($this->getJson(route('api.telegram.group-invites.drivers'))->json('paused'));
+
+        $this->artisan('telegram:driver-group-add', ['--trigger' => 'schedule'])->assertSuccessful();
+        /* A run started some other way while stopped ends at once. */
+        $service->run(trigger: 'manual');
+
+        $this->assertCount(0, $this->calls);
+        $this->assertSame(1, TelegramDriverGroupAdd::query()->where('status', TelegramDriverGroupAdd::STATUS_PENDING)->count());
+        /* The account it took for the first turn is not left busy for the invites. */
+        $this->assertFalse((bool) TelegramAccountProcess::query()->where('telegram_account_id', 1)->where('process', ProcessEnum::DriverGroupAdd->value)->value('is_busy'));
+
+        /* The settings saved meanwhile keep the stop. */
+        $this->putJson(route('api.telegram.group-invites.drivers.settings'), [
+            'group_id' => $this->group->id,
+            'on_resolve' => true,
+            'per_account_day' => 25,
+            'delay_min' => 0,
+            'delay_max' => 0,
+        ])->assertOk();
+
+        $this->assertTrue($settings->paused());
+
+        /* "Continue" lifts it and starts the run. */
+        $this->postJson(route('api.telegram.group-invites.drivers.run'))->assertOk();
+
+        $this->assertFalse($settings->paused());
+        $this->assertTrue($settings->active());
+        Queue::assertPushed(StartDriverGroupAddJob::class);
     }
 
     public function test_the_accounts_report_tells_who_holds_each_account_and_why_the_invites_pass_it_by(): void

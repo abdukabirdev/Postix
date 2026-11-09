@@ -84,7 +84,9 @@ final class DriverGroupController extends Controller
 
         return response()->json([
             'running' => $running,
-            'now' => self::now($running),
+            'now' => self::now($running, $config['paused']),
+            /* Stopped from the panel: the scheduler starts nothing until a start button. */
+            'paused' => $config['paused'],
             'settings' => $config,
             'groups' => $groups,
             'group' => $group ? [
@@ -219,6 +221,7 @@ final class DriverGroupController extends Controller
         }
 
         $made = $this->drivers->queueAll();
+        $this->settings->resume();
         $this->start();
 
         return response()->json([
@@ -228,7 +231,8 @@ final class DriverGroupController extends Controller
     }
 
     /**
-     * The queue as it is: the run starts now, not at the next minute.
+     * "Continue": a stop from the panel is lifted, and the queue as it is
+     * starts now, not at the next minute.
      */
     public function run(): JsonResponse
     {
@@ -236,12 +240,16 @@ final class DriverGroupController extends Controller
             return $this->noGroup();
         }
 
+        $resumed = $this->settings->resume();
+
         if (TelegramProcessLock::isHeld(TelegramDriverGroupAddCommand::LOCK_NAME)) {
             return response()->json(['message' => __('driver_check.drivers_group.messages.already_running')], 409);
         }
 
         if (! $this->drivers->hasPending()) {
-            return response()->json(['message' => __('driver_check.drivers_group.messages.nothing_waiting')], 422);
+            return $resumed
+                ? response()->json(['message' => __('driver_check.drivers_group.messages.resumed_empty')])
+                : response()->json(['message' => __('driver_check.drivers_group.messages.nothing_waiting')], 422);
         }
 
         $this->start();
@@ -261,6 +269,7 @@ final class DriverGroupController extends Controller
         $back = $this->drivers->retry();
 
         if ($back > 0) {
+            $this->settings->resume();
             $this->start();
         }
 
@@ -269,10 +278,17 @@ final class DriverGroupController extends Controller
         ]);
     }
 
+    /**
+     * "Stop": the run going on finishes the driver in hand and ends, and
+     * the scheduler starts no new one until "Continue" - with a run every
+     * minute a stop of the run alone would last a minute.
+     */
     public function stop(): JsonResponse
     {
+        $this->settings->pause();
+
         if (! TelegramProcessLock::isHeld(TelegramDriverGroupAddCommand::LOCK_NAME)) {
-            return response()->json(['message' => __('driver_check.drivers_group.messages.not_running')], 409);
+            return response()->json(['message' => __('driver_check.drivers_group.messages.paused')]);
         }
 
         $now = (array) TelegramSetting::get(DriverGroupService::NOW_KEY, []);
@@ -351,7 +367,7 @@ final class DriverGroupController extends Controller
      *
      * @return array<string, mixed>|null
      */
-    private static function now(bool $running): ?array
+    private static function now(bool $running, bool $paused): ?array
     {
         $now = TelegramSetting::get(DriverGroupService::NOW_KEY);
 
@@ -363,7 +379,7 @@ final class DriverGroupController extends Controller
 
         return [
             ...$now,
-            'stop_asked' => $running && ($stop === '*' || ($stop !== null && $stop === ($now['run_id'] ?? null))),
+            'stop_asked' => $running && ($paused || $stop === '*' || ($stop !== null && $stop === ($now['run_id'] ?? null))),
             /* The run died without saying it finished. */
             'broken' => ! $running && ($now['finished_at'] ?? null) === null,
         ];

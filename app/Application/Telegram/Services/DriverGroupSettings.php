@@ -24,7 +24,7 @@ final class DriverGroupSettings
     ];
 
     /**
-     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int}
+     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int, paused: bool, paused_at: string|null}
      */
     public function defaults(): array
     {
@@ -42,11 +42,19 @@ final class DriverGroupSettings
             'per_account_day' => 25,
             'delay_min' => 20,
             'delay_max' => 40,
+            /*
+             * Stopped from the panel: the scheduler starts no run until
+             * "Continue" (or another start button) is pressed. The queue
+             * loses nothing meanwhile - the drivers checked while it stood
+             * are read from the checks when it goes on.
+             */
+            'paused' => false,
+            'paused_at' => null,
         ];
     }
 
     /**
-     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int}
+     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int, paused: bool, paused_at: string|null}
      */
     public function current(): array
     {
@@ -61,7 +69,7 @@ final class DriverGroupSettings
      *
      * @param array<string, mixed> $input
      *
-     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int}
+     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int, paused: bool, paused_at: string|null}
      */
     public function save(array $input): array
     {
@@ -82,6 +90,37 @@ final class DriverGroupSettings
     }
 
     /**
+     * The panel's "Stop": no run starts by itself until resume().
+     */
+    public function pause(): void
+    {
+        if (! $this->current()['paused']) {
+            TelegramSetting::set(self::KEY, [...$this->current(), 'paused' => true, 'paused_at' => now()->toIso8601String()]);
+        }
+    }
+
+    /**
+     * A start button pressed: the scheduler starts the runs again.
+     *
+     * @return bool whether it was stopped
+     */
+    public function resume(): bool
+    {
+        if (! $this->current()['paused']) {
+            return false;
+        }
+
+        TelegramSetting::set(self::KEY, [...$this->current(), 'paused' => false, 'paused_at' => null]);
+
+        return true;
+    }
+
+    public function paused(): bool
+    {
+        return $this->current()['paused'];
+    }
+
+    /**
      * The group the drivers go into; null when none is picked, or it was archived.
      */
     public function group(): ?TelegramInviteGroup
@@ -92,17 +131,18 @@ final class DriverGroupSettings
     }
 
     /**
-     * Whether there is anything for the scheduler to ask about.
+     * Whether there is anything for the scheduler to ask about: a group
+     * picked, and not stopped from the panel.
      */
     public function active(): bool
     {
-        return $this->group() !== null;
+        return ! $this->paused() && $this->group() !== null;
     }
 
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int}
+     * @return array{group_id: int|null, on_resolve: bool, on_resolve_since: string|null, per_account_day: int, delay_min: int, delay_max: int, paused: bool, paused_at: string|null}
      */
     private function normalise(array $input): array
     {
@@ -117,6 +157,10 @@ final class DriverGroupSettings
         $values['group_id'] = is_numeric($values['group_id']) && (int) $values['group_id'] > 0 ? (int) $values['group_id'] : null;
         $values['on_resolve_since'] = is_string($values['on_resolve_since']) && strtotime($values['on_resolve_since']) !== false
             ? $values['on_resolve_since']
+            : null;
+        $values['paused'] = filter_var($values['paused'], FILTER_VALIDATE_BOOLEAN);
+        $values['paused_at'] = $values['paused'] && is_string($values['paused_at']) && strtotime($values['paused_at']) !== false
+            ? $values['paused_at']
             : null;
 
         return $values;

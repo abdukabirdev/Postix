@@ -311,6 +311,7 @@ final class DriverGroupService
 
     /**
      * Asked from the panel: the run finishes the driver in hand and ends.
+     * The panel's "Stop" also stops the scheduler (DriverGroupSettings::pause()).
      */
     public static function requestStop(?string $runId): void
     {
@@ -368,6 +369,7 @@ final class DriverGroupService
 
         while ($plan !== null && ! $this->stopping()) {
             [$account, $rows, $fallback] = $plan;
+            $plan = null;
 
             $totals['accounts']++;
             $say("Account #{$account->id} {$account->phone}: {$rows->count()} drivers" . ($fallback ? ' (for another account)' : ''));
@@ -398,6 +400,11 @@ final class DriverGroupService
 
             $group->refresh();
             $plan = $this->next($group, $config);
+        }
+
+        /* Taken for a turn the stop came before: not left busy for the other processes. */
+        if ($plan !== null) {
+            $this->pool->release($plan[0], ProcessEnum::DriverGroupAdd);
         }
 
         $this->finish($totals);
@@ -1587,7 +1594,8 @@ final class DriverGroupService
         $this->stopLookedAt = time();
         $asked = TelegramSetting::get(self::STOP_KEY);
 
-        if ($asked === '*' || ($asked !== null && $asked === $this->runId)) {
+        /* Stopped from the panel while no run went on, and the scheduler started one in the same minute. */
+        if ($asked === '*' || ($asked !== null && $asked === $this->runId) || $this->settings->paused()) {
             $this->stopping = true;
             $this->now['stop_asked'] = true;
             $this->doing('stopping');
