@@ -31,10 +31,11 @@ final class JoinBotReporter
      * @param array<string, mixed> $replace
      * @param bool                 $silent  arrives without a sound (the spam list's deletions)
      * @param int|null             $replyTo a message of the owner's chat it answers (the copy it tells about)
+     * @param array<string, mixed>|null $buttons an inline keyboard under it (SpamBan's button)
      *
      * @return bool whether it got through
      */
-    public function send(string $key, array $replace = [], bool $silent = false, ?int $replyTo = null): bool
+    public function send(string $key, array $replace = [], bool $silent = false, ?int $replyTo = null, ?array $buttons = null): bool
     {
         try {
             $reports = $this->settings->reports();
@@ -53,7 +54,7 @@ final class JoinBotReporter
             /* A part left empty (the copy shows the text) leaves no blank line behind. */
             $text = rtrim((string) __("driver_check.invites.bot.report.{$key}", $replace, $reports['locale']));
 
-            return $this->deliver($token, $reports['chat_id'], $text, $silent, $replyTo) === null;
+            return $this->deliver($token, $reports['chat_id'], $text, $silent, $replyTo, $buttons) === null;
         } catch (Throwable) {
             return false;
         }
@@ -140,9 +141,11 @@ final class JoinBotReporter
     }
 
     /**
+     * @param array<string, mixed>|null $buttons
+     *
      * @return string|null null: it got through; else why not
      */
-    private function deliver(string $token, string $chatId, string $text, bool $silent = false, ?int $replyTo = null): ?string
+    private function deliver(string $token, string $chatId, string $text, bool $silent = false, ?int $replyTo = null, ?array $buttons = null): ?string
     {
         $api = new BotApi($token);
 
@@ -154,6 +157,7 @@ final class JoinBotReporter
                     'link_preview_options' => ['is_disabled' => true],
                     ...($silent ? ['disable_notification' => true] : []),
                     ...($replyTo !== null ? ['reply_parameters' => ['message_id' => $replyTo, 'allow_sending_without_reply' => true]] : []),
+                    ...($buttons !== null ? ['reply_markup' => $buttons] : []),
                 ], 10);
 
                 $this->remember(['sent_at' => now()->toIso8601String(), 'error' => null, 'error_at' => null]);

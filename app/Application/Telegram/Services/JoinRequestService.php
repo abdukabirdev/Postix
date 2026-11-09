@@ -54,9 +54,10 @@ final class JoinRequestService
     /**
      * chat_member: who came into a group where the bot is an admin - a bot
      * among them is muted; message: what is written there - the spam list's
-     * messages are deleted - and the owner's forwards in the bot's own chat.
+     * messages are deleted - and the owner's forwards in the bot's own chat;
+     * callback_query: "Exclude from the groups" pressed under a report.
      */
-    private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member', 'message', 'edited_message'];
+    private const UPDATES = ['chat_join_request', 'my_chat_member', 'chat_member', 'message', 'edited_message', 'callback_query'];
 
     /** What a muted bot may not do in the group: anything. */
     private const RIGHTS = [
@@ -94,6 +95,7 @@ final class JoinRequestService
         private readonly SpamCleaner $spam,
         private readonly ForwardedSpam $forwards,
         private readonly SpamAdmins $admins,
+        private readonly SpamBan $bans,
     ) {}
 
     /**
@@ -369,6 +371,12 @@ final class JoinRequestService
         /* A message edited to carry a link goes as one sent with it. */
         if (is_array($update['edited_message'] ?? null)) {
             $this->spam->take($api, $update['edited_message'], $say);
+
+            return;
+        }
+
+        if (is_array($update['callback_query'] ?? null)) {
+            $this->bans->take($api, $update['callback_query'], $say);
 
             return;
         }

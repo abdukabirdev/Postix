@@ -1433,6 +1433,22 @@ return [
                 'bot_error' => "❗ Telegram ishlashimga yo'l qo'ymayapti: :reason",
                 'test' => "👋 Tekshiruv: :bot botining hisobotlari shu yerga keladi",
             ],
+            'ban' => [
+                'button' => '🚫 Guruhlardan chiqarish',
+                'done' => '🚫 Guruhlarimizdan chiqarildi: :n / :total (bosdi: :admin)',
+                'partly' => "🚫 Guruhlarimizdan chiqarildi: :n / :total (bosdi: :admin)\nBo'lmadi:\n:why",
+                'done_short' => 'Guruhlardan chiqarildi: :n',
+                'none' => "Birorta guruhdan chiqarib bo'lmadi:\n:why",
+                'no_groups' => 'Bot chiqara oladigan guruh yo\'q',
+                'not_admin' => 'Faqat bot adminlari chiqara oladi',
+                'ours' => 'Bu bizning akkaunt, bot yoki admin — chiqarmayman',
+                'error' => 'Bo\'lmadi, yana urinib ko\'ring',
+                'errors' => [
+                    'IS_ADMIN' => 'u guruh admini',
+                    'NO_RIGHT' => 'botda «Foydalanuvchilarni bloklash» huquqi yo\'q',
+                    'BOT_NOT_IN_CHAT' => 'bot guruhda yo\'q',
+                ],
+            ],
             'errors_tg' => [
                 'HIDE_REQUESTER_MISSING' => 'Ariza allaqachon ko\'rib chiqilgan yoki qaytarib olingan',
                 'USER_CHANNELS_TOO_MUCH' => 'Odam allaqachon juda ko\'p guruhda',

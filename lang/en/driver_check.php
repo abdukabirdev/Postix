@@ -1433,6 +1433,22 @@ return [
                 'bot_error' => "❗ Telegram does not let me work: :reason",
                 'test' => "👋 A test: reports of the bot :bot will come here",
             ],
+            'ban' => [
+                'button' => '🚫 Exclude from the groups',
+                'done' => '🚫 Excluded from our groups: :n of :total (pressed by :admin)',
+                'partly' => "🚫 Excluded from our groups: :n of :total (pressed by :admin)\nDid not work:\n:why",
+                'done_short' => 'Excluded from groups: :n',
+                'none' => "Could not exclude from any group:\n:why",
+                'no_groups' => 'No group where the bot may exclude',
+                'not_admin' => 'Only admins of the bot may exclude',
+                'ours' => 'Ours (an account, the bot or an admin) - not excluded',
+                'error' => 'It did not work, try again',
+                'errors' => [
+                    'IS_ADMIN' => 'an admin of the group',
+                    'NO_RIGHT' => 'the bot has no "Ban users" right',
+                    'BOT_NOT_IN_CHAT' => 'the bot is not in the group',
+                ],
+            ],
             'errors_tg' => [
                 'HIDE_REQUESTER_MISSING' => 'The request was handled already or taken back',
                 'USER_CHANNELS_TOO_MUCH' => 'The person is in too many groups already',

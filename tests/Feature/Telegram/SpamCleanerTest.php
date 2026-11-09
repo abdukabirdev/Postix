@@ -444,20 +444,103 @@ final class SpamCleanerTest extends TestCase
         $this->assertSame([62, TelegramSpamMessage::REASON_LINK, null], [$row->message_id, $row->reason, $row->spam_sender_id]);
     }
 
+    public function test_the_report_carries_a_button_that_excludes_the_author_from_our_groups(): void
+    {
+        TelegramInviteGroup::query()->create(['title' => 'Drivers UZ', 'link' => '+abc', 'telegram_chat_id' => self::CHAT, 'is_active' => true]);
+        TelegramInviteGroup::query()->create(['title' => 'Cargo', 'link' => 'cargo_uz', 'is_active' => false]);
+        /* Joined by an invite link only, its chat never seen: the bot cannot name it. */
+        TelegramInviteGroup::query()->create(['title' => 'Hidden', 'link' => '+hidden', 'is_active' => false]);
+
+        $report = '🔗 Удалил сообщение со ссылкой от Ads (@ads, ID 801) в «Drivers UZ»';
+
+        /* The link, its report, and the owner pressing the button under it. */
+        $this->fakeTelegram(
+            updates: [
+                $this->message(130, 71, ['id' => 801, 'first_name' => 'Ads', 'username' => 'ads'], ['text' => 'https://ads.example']),
+                $this->press(131, 'ban:801', ['id' => (int) JoinBotSettings::DEFAULT_REPORT_CHAT, 'first_name' => 'Owner'], $report),
+            ],
+            ban: fn (array $params) => $params['chat_id'] === '@cargo_uz'
+                ? ['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: not enough rights to restrict/unrestrict chat member']
+                : ['ok' => true, 'result' => true],
+        );
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $sent = collect($this->sent)->firstWhere('method', 'sendMessage')['params'];
+        $this->assertSame($report, $sent['text']);
+        $this->assertSame([[['text' => '🚫 Исключить из групп', 'callback_data' => 'ban:801']]], $sent['reply_markup']['inline_keyboard']);
+        $this->assertContains('callback_query', collect($this->sent)->firstWhere('method', 'getUpdates')['params']['allowed_updates']);
+
+        $bans = collect($this->sent)->where('method', 'banChatMember')->map(fn ($call) => [$call['params']['chat_id'], $call['params']['user_id']])->values()->all();
+        $this->assertSame([[self::CHAT, 801], ['@cargo_uz', 801]], $bans);
+
+        $edit = collect($this->sent)->firstWhere('method', 'editMessageText')['params'];
+        $this->assertSame([JoinBotSettings::DEFAULT_REPORT_CHAT, 500, []], [(string) $edit['chat_id'], $edit['message_id'], $edit['reply_markup']['inline_keyboard']]);
+        $this->assertSame(
+            $report . "\n\n🚫 Исключён из наших групп: 1 из 2 (нажал Owner)\nНе вышло:\n«Cargo» — у бота нет права «Блокировать пользователей»",
+            $edit['text'],
+        );
+        $this->assertSame('Исключён из групп: 1', collect($this->sent)->firstWhere('method', 'answerCallbackQuery')['params']['text']);
+    }
+
+    public function test_only_an_admin_of_the_bot_may_press_it_and_never_against_one_of_ours(): void
+    {
+        TelegramInviteGroup::query()->create(['title' => 'Drivers UZ', 'link' => '+abc', 'telegram_chat_id' => self::CHAT, 'is_active' => true]);
+
+        $this->fakeTelegram(updates: [
+            /* A stranger who got hold of the button. */
+            $this->press(140, 'ban:801', ['id' => 4242, 'first_name' => 'Stranger'], 'report'),
+            /* One of our accounts: never. */
+            $this->press(141, 'ban:9001', ['id' => (int) JoinBotSettings::DEFAULT_REPORT_CHAT, 'first_name' => 'Owner'], 'report'),
+        ]);
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $this->assertFalse(collect($this->sent)->contains('method', 'banChatMember'));
+        $this->assertFalse(collect($this->sent)->contains('method', 'editMessageText'));
+
+        $answers = collect($this->sent)->where('method', 'answerCallbackQuery')->values();
+        $this->assertSame(['Исключать могут только админы бота', true], [$answers[0]['params']['text'], $answers[0]['params']['show_alert']]);
+        $this->assertSame('Это наш аккаунт, бот или админ — не исключаю', $answers[1]['params']['text']);
+    }
+
+    /**
+     * A press of a report's button.
+     *
+     * @param array<string, mixed> $from
+     *
+     * @return array<string, mixed>
+     */
+    private function press(int $updateId, string $data, array $from, string $text): array
+    {
+        return [
+            'update_id' => $updateId,
+            'callback_query' => [
+                'id' => 'cb' . $updateId,
+                'from' => ['is_bot' => false, ...$from],
+                'data' => $data,
+                'message' => [
+                    'message_id' => 500,
+                    'chat' => ['id' => (int) JoinBotSettings::DEFAULT_REPORT_CHAT, 'type' => 'private'],
+                    'text' => $text,
+                ],
+            ],
+        ];
+    }
+
     /**
      * The Bot API: getUpdates (the updates once, nothing after the offset
      * passed them), deleteMessage(s), sendMessage, getChatMember,
-     * copyMessage, getChatAdministrators (null: Telegram out of reach).
+     * copyMessage, getChatAdministrators (null: Telegram out of reach),
+     * banChatMember, editMessageText, answerCallbackQuery.
      *
      * @param list<array<string, mixed>> $updates
      * @param array<string, mixed>       $member
      * @param list<int>|null             $admins
      */
-    private function fakeTelegram(array $updates = [], ?callable $delete = null, array $member = ['status' => 'creator'], ?callable $copy = null, ?array $admins = [1]): void
+    private function fakeTelegram(array $updates = [], ?callable $delete = null, array $member = ['status' => 'creator'], ?callable $copy = null, ?array $admins = [1], ?callable $ban = null): void
     {
         $this->sent = [];
 
-        Http::fake(function (Request $request) use ($updates, $delete, $member, $copy, $admins) {
+        Http::fake(function (Request $request) use ($updates, $delete, $member, $copy, $admins, $ban) {
             $method = basename(parse_url($request->url(), PHP_URL_PATH));
             $params = $request->data();
             $this->sent[] = ['method' => $method, 'params' => $params];
@@ -474,6 +557,9 @@ final class SpamCleanerTest extends TestCase
                     ? ['ok' => true, 'result' => array_map(fn (int $id) => ['status' => 'administrator', 'user' => ['id' => $id, 'is_bot' => false]], $admins)]
                     : ['ok' => false, 'error_code' => 502, 'description' => 'Bad Gateway'],
                 'getChatMember' => ['ok' => true, 'result' => ['user' => ['id' => 555, 'is_bot' => true], ...$member]],
+                'banChatMember' => $ban !== null ? $ban($params) : ['ok' => true, 'result' => true],
+                'editMessageText' => ['ok' => true, 'result' => ['message_id' => 500]],
+                'answerCallbackQuery' => ['ok' => true, 'result' => true],
                 default => ['ok' => false, 'error_code' => 404, 'description' => 'Not Found'],
             });
         });

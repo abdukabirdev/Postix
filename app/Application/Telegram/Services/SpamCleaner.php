@@ -42,6 +42,10 @@ use Throwable;
  * shows why it stayed. Right before a link goes the owner gets a copy of
  * it as it was, without a sound, and the report answers the copy.
  *
+ * Nobody is removed on the bot's own: the report carries a button that
+ * removes the author from our groups when an admin of the bot presses it
+ * (SpamBan).
+ *
  * An add-on: a trouble of its own (a table not migrated yet, a database
  * error) is logged and never stops the bot letting people in.
  */
@@ -83,6 +87,7 @@ final class SpamCleaner
         private readonly JoinBotSettings $settings,
         private readonly JoinBotReporter $reporter,
         private readonly SpamAdmins $admins,
+        private readonly SpamBan $bans,
     ) {}
 
     /**
@@ -389,7 +394,7 @@ final class SpamCleaner
     /**
      * The owner is told without a sound: whose message, where, what it said.
      * A link one answers its copy, and quotes the text only when there is
-     * no copy.
+     * no copy. Under it, "Exclude from the groups" (SpamBan).
      *
      * @param Collection<int, TelegramSpamMessage> $theirs one person's messages in one chat, of one reason
      */
@@ -417,6 +422,7 @@ final class SpamCleaner
             ],
             silent: true,
             replyTo: $copy !== null ? (int) $copy : null,
+            buttons: $this->bans->button($first->telegram_user_id !== null ? (int) $first->telegram_user_id : null),
         );
     }
 
