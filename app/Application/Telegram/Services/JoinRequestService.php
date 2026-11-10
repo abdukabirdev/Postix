@@ -14,6 +14,7 @@ use App\Models\Telegram\TelegramScrapedUser;
 use DomainException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
@@ -96,6 +97,7 @@ final class JoinRequestService
         private readonly ForwardedSpam $forwards,
         private readonly SpamAdmins $admins,
         private readonly SpamBan $bans,
+        private readonly MemberEvents $members,
     ) {}
 
     /**
@@ -323,8 +325,10 @@ final class JoinRequestService
     }
 
     /**
-     * Someone came into a chat where our bot is an admin. A bot that came
-     * into one of our groups as a plain member is muted at once.
+     * A member of a chat where our bot is an admin changed: came, left, was
+     * removed, got or lost rights. In one of our groups it is written down
+     * with who did it (MemberEvents, the members page) - and a bot that came
+     * in as a plain member is muted at once.
      *
      * @param array<string, mixed>   $change
      * @param callable(string): void $say
@@ -334,13 +338,28 @@ final class JoinRequestService
         $member = (array) ($change['new_chat_member'] ?? []);
         $user = (array) ($member['user'] ?? []);
 
-        if (empty($user['is_bot']) || ($member['status'] ?? null) !== 'member' || empty($user['id'])) {
+        if (empty($user['id'])) {
             return;
         }
 
         $group = $this->ourGroup((array) ($change['chat'] ?? []));
 
         if ($group === null) {
+            return;
+        }
+
+        try {
+            $event = $this->members->record($change, $group);
+
+            if ($event !== null) {
+                $say("member {$event->event}" . ($event->actor_kind !== 'self' ? " by {$event->actor_kind}" : '') . ': ' . self::who($user) . ' -> ' . ($group->title ?: $group->link));
+            }
+        } catch (Throwable $e) {
+            /* A line of the history is not worth the bot's turn. */
+            Log::warning('Join bot: a member change could not be written down', ['message' => $e->getMessage()]);
+        }
+
+        if (empty($user['is_bot']) || ($member['status'] ?? null) !== 'member') {
             return;
         }
 

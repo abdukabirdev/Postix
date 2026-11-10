@@ -7,6 +7,7 @@ use App\Application\Telegram\Services\JoinBotSettings;
 use App\Application\Telegram\Services\JoinRequestService;
 use App\Http\Controllers\Api\Telegram\GroupInviteBotController;
 use App\Models\Telegram\TelegramGroupInvite;
+use App\Models\Telegram\TelegramGroupMemberEvent;
 use App\Models\Telegram\TelegramInviteGroup;
 use App\Models\Telegram\TelegramJoinRequest;
 use App\Models\Telegram\TelegramScrapedUser;
@@ -53,6 +54,7 @@ final class JoinRequestBotTest extends TestCase
         (include database_path('migrations/2026_11_03_100000_create_telegram_spam_tables.php'))->up();
         (include database_path('migrations/2026_11_06_100000_add_reason_to_telegram_spam_messages.php'))->up();
         (include database_path('migrations/2026_11_06_110000_create_telegram_spam_admins_table.php'))->up();
+        (include database_path('migrations/2026_11_10_110000_create_telegram_group_member_events_table.php'))->up();
 
         DB::table('telegram_accounts')->insert(['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001]);
     }
@@ -291,6 +293,83 @@ final class JoinRequestBotTest extends TestCase
         $this->assertTrue(TelegramScrapedUser::query()->where('telegram_user_id', 3001)->value('is_bot'));
         $this->assertSame(['🔇 Запретил писать боту Spam (@spam_bot, ID 3001) в «Drivers UZ»'], $this->reports());
         $this->assertContains('chat_member', collect($this->sent)->firstWhere('method', 'getUpdates')['params']['allowed_updates']);
+    }
+
+    public function test_every_change_of_a_member_is_written_down_with_who_did_it_and_our_added_people_are_marked(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'title' => 'Drivers UZ', 'telegram_chat_id' => -1001234, 'is_active' => true]);
+        $gone = TelegramScrapedUser::query()->create(['telegram_user_id' => 3002, 'first_name' => 'Ali']);
+        $kicked = TelegramScrapedUser::query()->create(['telegram_user_id' => 3006, 'first_name' => 'Vali']);
+
+        foreach ([$gone, $kicked] as $person) {
+            TelegramGroupInvite::query()->create([
+                'invite_group_id' => $group->id,
+                'scraped_user_id' => $person->id,
+                'telegram_account_id' => 1,
+                'status' => TelegramGroupInvite::STATUS_INVITED,
+                'via' => TelegramGroupInvite::VIA_CONTACT,
+                'attempted_at' => now()->subHour(),
+            ]);
+        }
+
+        $this->connect();
+
+        $change = fn (int $updateId, int $chatId, array $user, string $old, string $new, ?array $from = null, array $extra = []) => [
+            'update_id' => $updateId,
+            'chat_member' => [
+                'chat' => ['id' => $chatId, 'title' => 'Drivers UZ', 'type' => 'supergroup'],
+                'from' => $from ?? $user,
+                'date' => 1_800_000_000,
+                'old_chat_member' => ['status' => $old, 'user' => $user],
+                'new_chat_member' => ['status' => $new, 'user' => $user],
+                ...$extra,
+            ],
+        ];
+
+        $ali = ['id' => 3002, 'is_bot' => false, 'first_name' => 'Ali', 'username' => 'ali_uz'];
+        $vali = ['id' => 3006, 'is_bot' => false, 'first_name' => 'Vali'];
+        $admin = ['id' => 777, 'is_bot' => false, 'first_name' => 'Big', 'last_name' => 'Boss'];
+
+        $this->fakeTelegram(updates: [
+            /* Went by himself. */
+            $change(90, -1001234, $ali, 'member', 'left'),
+            /* Brought in by our account. */
+            $change(91, -1001234, ['id' => 3005, 'first_name' => 'New'], 'left', 'member', ['id' => 9001, 'first_name' => 'Ours']),
+            /* Taken out by an admin of the group. */
+            $change(92, -1001234, $vali, 'member', 'kicked', $admin),
+            /* Back by a request our bot approved. */
+            $change(93, -1001234, $ali, 'left', 'member', ['id' => 555, 'is_bot' => true, 'first_name' => 'Join'], ['via_join_request' => true]),
+            /* Somebody else's group: not ours to write. */
+            $change(94, -1009999, $vali, 'member', 'left'),
+        ]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $events = TelegramGroupMemberEvent::query()->orderBy('id')->get();
+
+        $this->assertSame(['left', 'added', 'removed', 'joined'], $events->pluck('event')->all());
+        $this->assertSame(['self', 'ours', 'other', 'bot'], $events->pluck('actor_kind')->all());
+        $this->assertSame([3002, 3005, 3006, 3002], $events->pluck('telegram_user_id')->all());
+        $this->assertSame([$group->id], $events->pluck('invite_group_id')->unique()->values()->all());
+
+        $this->assertSame(1, $events[0]->invited_by_account_id);
+        $this->assertSame('ali_uz', $events[0]->username);
+        $this->assertSame(1, $events[1]->actor_account_id);
+        $this->assertNull($events[1]->scraped_user_id);
+        $this->assertSame('Big Boss', $events[2]->actor_name);
+        $this->assertSame(777, $events[2]->actor_user_id);
+        $this->assertSame('request', $events[3]->via);
+        $this->assertSame('2027-01-15', $events[0]->happened_at->toDateString());
+
+        /* Vali is left since the admin removed him; Ali left and came back: in again. */
+        $this->assertSame(TelegramGroupInvite::STATUS_LEFT, TelegramGroupInvite::query()->where('scraped_user_id', $kicked->id)->value('status'));
+        $this->assertNotNull(TelegramGroupInvite::query()->where('scraped_user_id', $kicked->id)->value('left_at'));
+        $this->assertSame(TelegramGroupInvite::STATUS_INVITED, TelegramGroupInvite::query()->where('scraped_user_id', $gone->id)->value('status'));
+        $this->assertNull(TelegramGroupInvite::query()->where('scraped_user_id', $gone->id)->value('left_at'));
+
+        /* Nobody was muted or told: these are people, not bots. */
+        $this->assertCount(0, collect($this->sent)->where('method', 'restrictChatMember'));
+        $this->assertSame([], $this->reports());
     }
 
     public function test_our_accounts_request_the_invite_run_let_in_is_left_alone(): void
