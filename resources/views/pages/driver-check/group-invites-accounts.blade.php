@@ -19,6 +19,16 @@
             :description="__('driver_check.invites.accounts.description')"
         >
             <x-slot:actions>
+                {{-- Every account writes /start to @SpamBot: limited by Telegram or not, until when --}}
+                <x-driver-check.button
+                    size="sm"
+                    icon="shield"
+                    x-on:click="askSpamAll()"
+                    ::disabled="busy || spamChecking"
+                    :title="__('driver_check.invites.accounts.spam_hint')"
+                >
+                    <span x-text="spamChecking ? t.accounts.spam_checking : t.accounts.spam_ask_all"></span>
+                </x-driver-check.button>
                 <x-driver-check.button
                     size="icon"
                     x-on:click="load()"
@@ -224,6 +234,17 @@
                             <dd class="tabular-nums text-gray-950 dark:text-white" x-text="number(account.sent)"></dd>
                         </div>
                     </dl>
+
+                    {{-- What Telegram's own @SpamBot says about it --}}
+                    <div class="flex items-center justify-between gap-3 border-t border-gray-100 px-4 py-2 dark:border-gray-800">
+                        <p class="min-w-0 truncate text-[12px]" :class="spamTone(account)" x-bind:title="account.spam_check?.text || account.spam_check?.error || ''">
+                            <span x-text="spamLine(account)"></span>
+                            <span x-show="account.spam_check" x-cloak class="text-gray-400" x-text="' · ' + t.accounts.spam_asked_at.replace(':time', time(account.spam_check?.at))"></span>
+                        </p>
+                        <x-driver-check.button size="sm" variant="ghost" x-on:click="askSpam(account)" ::disabled="busy === account.id || spamChecking" :title="__('driver_check.invites.accounts.spam_hint')">
+                            {{ __('driver_check.invites.accounts.spam_ask') }}
+                        </x-driver-check.button>
+                    </div>
 
                     <div class="mt-auto flex items-center justify-between gap-3 border-t border-gray-100 bg-gray-25 px-4 py-2.5 dark:border-gray-800 dark:bg-white/[0.015]">
                         <p class="min-w-0 truncate text-[11.5px] text-gray-500" x-text="lastStopLine(account) || t.accounts.no_stops"></p>

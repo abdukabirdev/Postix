@@ -106,6 +106,24 @@ export function groupInvitesPage(config) {
             this.start(this.endpoints.checkLeft, t.overview.left_confirm);
         },
 
+        /* Every account asks @SpamBot about its limits; the answers come to the accounts page. Not a run: nothing to follow here. */
+        async askSpamBot() {
+            if (this.busy || !this.endpoints.spamCheck) {
+                return;
+            }
+
+            this.busy = true;
+
+            try {
+                const json = await requestJson(this.endpoints.spamCheck, 'POST', {});
+                notify(json.message);
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = false;
+            }
+        },
+
         async stop() {
             if (this.busy || !this.running || !window.confirm(t.stop_confirm)) {
                 return;

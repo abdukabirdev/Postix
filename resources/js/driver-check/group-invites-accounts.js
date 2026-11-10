@@ -82,6 +82,9 @@ export function groupInvitesAccountsPage(config) {
         error: null,
         loaded: false,
         accounts: [],
+        /* @SpamBot is being asked on the server now: the answers come to the cards as it goes. */
+        spamChecking: false,
+        spamPoll: null,
         limits: { batches_per_day: 0, batch_size: 0, usernames_per_day: 0 },
         recentDays: 3,
         ageBands: [],
@@ -109,6 +112,8 @@ export function groupInvitesAccountsPage(config) {
                 this.limits = json.limits ?? this.limits;
                 this.recentDays = json.recent_days ?? this.recentDays;
                 this.ageBands = json.age_bands ?? this.ageBands;
+                this.spamChecking = !!json.spam_checking;
+                this.spamChecking ? this.startSpamPoll() : this.stopSpamPoll();
                 this.loaded = true;
             } catch (error) {
                 this.error = error?.message || t.load_failed;
@@ -410,6 +415,97 @@ export function groupInvitesAccountsPage(config) {
             } finally {
                 this.busy = null;
             }
+        },
+
+        /* The asking goes on the server; while it does, the page looks again every few seconds. */
+        startSpamPoll() {
+            this.spamPoll ??= setInterval(() => {
+                if (document.visibilityState === 'visible' && !this.loading) {
+                    this.load();
+                }
+            }, 5000);
+        },
+
+        stopSpamPoll() {
+            if (this.spamPoll) {
+                clearInterval(this.spamPoll);
+                this.spamPoll = null;
+            }
+        },
+
+        destroy() {
+            this.stopSpamPoll();
+        },
+
+        async askSpam(account) {
+            if (this.busy) {
+                return;
+            }
+
+            this.busy = account.id;
+
+            try {
+                const json = await requestJson(`${this.endpoints.index}/${account.id}/spam-check`, 'POST', {});
+                notify(json.message);
+                this.spamChecking = true;
+                this.startSpamPoll();
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = null;
+            }
+        },
+
+        async askSpamAll() {
+            if (this.busy) {
+                return;
+            }
+
+            this.busy = 'all';
+
+            try {
+                const json = await requestJson(`${this.endpoints.index}/spam-check`, 'POST', {});
+                notify(json.message);
+                this.spamChecking = true;
+                this.startSpamPoll();
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = null;
+            }
+        },
+
+        /* What @SpamBot said the last time: free, limited until when, not read, not asked. */
+        spamLine(account) {
+            const check = account.spam_check;
+
+            if (!check) {
+                return t.accounts.spam_never;
+            }
+
+            if (check.status === 'free') {
+                return t.accounts.spam_free;
+            }
+
+            if (check.status === 'limited') {
+                return check.until ? t.accounts.spam_limited_until.replace(':time', this.time(check.until)) : t.accounts.spam_limited;
+            }
+
+            return check.status === 'failed' ? t.accounts.spam_failed : t.accounts.spam_unknown;
+        },
+
+        spamTone(account) {
+            const status = account.spam_check?.status;
+
+            if (status === 'free') {
+                return 'text-success-700 dark:text-success-400';
+            }
+
+            if (status === 'limited') {
+                return 'text-error-600 dark:text-error-400';
+            }
+
+            return status ? 'text-warning-600 dark:text-warning-400' : 'text-gray-400';
         },
     };
 }

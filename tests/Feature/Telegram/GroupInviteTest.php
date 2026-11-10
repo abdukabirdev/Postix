@@ -104,6 +104,8 @@ final class GroupInviteTest extends TestCase
         (include database_path('migrations/2026_10_29_160000_check_telegram_group_invites.php'))->up();
         (include database_path('migrations/2026_10_30_100000_keep_telegram_group_invite_history.php'))->up();
         (include database_path('migrations/2026_11_02_110000_create_telegram_join_requests_table.php'))->up();
+        (include database_path('migrations/2026_11_10_110000_create_telegram_group_member_events_table.php'))->up();
+        (include database_path('migrations/2026_11_10_120000_create_telegram_account_spam_checks_table.php'))->up();
 
         DB::table('telegram_accounts')->insert([
             ['id' => 1, 'phone' => '+998900000001', 'telegram_user_id' => 9001, 'session_path' => '/sessions/1'],
@@ -291,10 +293,10 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(GroupInviteService::KIND_NOT_ADDED, GroupInviteService::classify($rpc('USER_NOT_MUTUAL_CONTACT')));
 
         $this->assertSame(GroupInviteService::KIND_SPAM, GroupInviteService::classify($rpc('PEER_FLOOD')));
-        $this->assertSame(GroupInviteService::KIND_WAIT, GroupInviteService::classify(new RateLimitError('FLOOD_WAIT_30', 30, 420, '')));
-
         /* "Could not add participants": the account may add nobody, not the person's refusal. */
         $this->assertSame(GroupInviteService::KIND_LIMITED, GroupInviteService::classify($rpc('CHAT_MEMBER_ADD_FAILED')));
+        $this->assertSame(GroupInviteService::KIND_WAIT, GroupInviteService::classify(new RateLimitError('FLOOD_WAIT_30', 30, 420, '')));
+
         $this->assertSame(GroupInviteService::KIND_GROUP_DENIED, GroupInviteService::classify($rpc('CHAT_ADMIN_REQUIRED')));
         $this->assertSame(GroupInviteService::KIND_GROUP_GONE, GroupInviteService::classify($rpc('USERS_TOO_MUCH')));
 
@@ -440,8 +442,6 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(['accounts' => 0, 'batches' => 0, 'invited' => 0, 'not_added' => 0, 'already' => 0, 'sent' => 0, 'failed' => 0, 'left' => 0, 'stayed' => 0, 'back' => 0], $this->service->run());
     }
 
-    public function test_a_session_that_does_not_answer_rests_and_the_run_goes_on_with_the_others(): void
-    {
     public function test_could_not_add_participants_gives_the_people_back_and_rests_the_account_a_day_with_its_cap(): void
     {
         TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
@@ -491,6 +491,8 @@ final class GroupInviteTest extends TestCase
         $this->assertEqualsWithDelta(24 * 3600 + 900, strtotime($meta['rest_until']) - time(), 905);
     }
 
+    public function test_a_session_that_does_not_answer_rests_and_the_run_goes_on_with_the_others(): void
+    {
         TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
         $this->hold(1, $this->person(801, 'One'));
         $this->hold(2, $this->person(802, 'Two'));

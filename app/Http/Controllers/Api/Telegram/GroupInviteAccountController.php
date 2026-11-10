@@ -5,14 +5,19 @@ declare(strict_types=1);
 namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\GroupInviteSettings;
+use App\Application\Telegram\Services\SpamBotCheck;
 use App\Application\Telegram\Support\AccountAge;
 use App\Application\Telegram\Support\PhoneCountry;
+use App\Console\Commands\Telegram\TelegramSpamBotCheckCommand;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Http\Controllers\Controller;
+use App\Jobs\Telegram\StartSpamBotCheckJob;
 use App\Models\Telegram\TelegramAccount;
 use App\Models\Telegram\TelegramAccountProcess;
+use App\Models\Telegram\TelegramAccountSpamCheck;
 use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramGroupInviteLog;
+use App\Telegram\TelegramProcessLock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -90,11 +95,14 @@ final class GroupInviteAccountController extends Controller
             ->get()
             ->keyBy('telegram_account_id');
 
+        /* What @SpamBot said about each the last time it was asked. */
+        $spamChecks = SpamBotCheck::latest();
+
         $accounts = TelegramAccount::query()
             ->where('is_authorized', true)
             ->orderBy('id')
             ->get()
-            ->map(function (TelegramAccount $account) use ($byStatus, $recent, $callsToday, $firstDays, $lookupsToday, $addedToday, $contacts, $lastStops, $states, $config, $limit) {
+            ->map(function (TelegramAccount $account) use ($byStatus, $recent, $callsToday, $firstDays, $lookupsToday, $addedToday, $contacts, $lastStops, $states, $spamChecks, $config, $limit) {
                 $counts = GroupInviteGroupController::counts($byStatus->get($account->id, collect())->pluck('total', 'status')->all());
                 $lately = GroupInviteGroupController::counts($recent->get($account->id, collect())->pluck('total', 'status')->all());
                 $state = $states->get($account->id);
@@ -150,11 +158,13 @@ final class GroupInviteAccountController extends Controller
                         'rpc' => $stop->context['rpc'] ?? null,
                         'calls' => $stop->context['counters']['calls'] ?? null,
                     ] : null,
+                    'spam_check' => self::spamCheckOf($spamChecks->get($account->id)),
                 ];
             });
 
         return response()->json([
             'accounts' => $accounts->values(),
+            'spam_checking' => TelegramProcessLock::isHeld(TelegramSpamBotCheckCommand::LOCK_NAME),
             'recent_days' => self::RECENT_DAYS,
             'age_bands' => AccountAge::bands(),
             'limits' => [
@@ -214,6 +224,52 @@ final class GroupInviteAccountController extends Controller
         return response()->json([
             'message' => __('driver_check.invites.messages.account_enabled'),
         ]);
+    }
+
+    /**
+     * Ask @SpamBot about this account: is it limited by Telegram, until
+     * when. The answer comes to the card in a minute.
+     */
+    public function spamCheck(TelegramAccount $account): JsonResponse
+    {
+        return $this->askSpamBot(new StartSpamBotCheckJob($account->id), 'spam_check_queued');
+    }
+
+    /**
+     * Ask @SpamBot about every account, one after another.
+     */
+    public function spamCheckAll(): JsonResponse
+    {
+        return $this->askSpamBot(new StartSpamBotCheckJob(), 'spam_check_all_queued');
+    }
+
+    private function askSpamBot(StartSpamBotCheckJob $job, string $message): JsonResponse
+    {
+        if (TelegramProcessLock::isHeld(TelegramSpamBotCheckCommand::LOCK_NAME)) {
+            return response()->json(['message' => __('driver_check.invites.messages.spam_check_running')], 409);
+        }
+
+        dispatch($job->onQueue('telegram'));
+
+        return response()->json(['message' => __("driver_check.invites.messages.{$message}")]);
+    }
+
+    /**
+     * @return array{status: string, until: \Illuminate\Support\Carbon|null, text: string|null, error: string|null, at: \Illuminate\Support\Carbon}|null
+     */
+    private static function spamCheckOf(?TelegramAccountSpamCheck $check): ?array
+    {
+        if ($check === null) {
+            return null;
+        }
+
+        return [
+            'status' => $check->status,
+            'until' => $check->limited_until,
+            'text' => $check->text !== null ? mb_substr($check->text, 0, 400) : null,
+            'error' => $check->error,
+            'at' => $check->created_at,
+        ];
     }
 
     /**

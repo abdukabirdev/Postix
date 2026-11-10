@@ -199,6 +199,7 @@
                         check: @js(route('api.telegram.group-invites.check')),
                         checkLeft: @js(route('api.telegram.group-invites.check-left')),
                         stop: @js(route('api.telegram.group-invites.stop')),
+                        spamCheck: @js(route('api.telegram.group-invites.accounts.spam-check-all')),
                     },
                     links: {
                         people: @js(route('driver-check.group-invites.people')),
@@ -262,6 +263,9 @@
                                 </x-driver-check.button>
                                 <x-driver-check.button size="sm" icon="logout" x-on:click="checkLeft()" ::disabled="busy || data.added.still === 0" :title="__('driver_check.invites.overview.left_hint')">
                                     {{ __('driver_check.invites.overview.left_button') }}
+                                </x-driver-check.button>
+                                <x-driver-check.button size="sm" icon="shield" x-on:click="askSpamBot()" ::disabled="busy" :title="__('driver_check.invites.accounts.spam_hint')">
+                                    {{ __('driver_check.invites.accounts.spam_ask_all') }}
                                 </x-driver-check.button>
                             </div>
                         </template>

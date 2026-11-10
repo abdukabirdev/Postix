@@ -943,6 +943,9 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::get('/accounts', 'index')->name('api.telegram.group-invites.accounts');
                     Route::patch('/accounts/{account}', 'update')->name('api.telegram.group-invites.accounts.update');
                     Route::post('/accounts/{account}/enable', 'enable')->name('api.telegram.group-invites.accounts.enable');
+                    /* Ask @SpamBot whether Telegram limits the account (all of them, or one). */
+                    Route::post('/accounts/spam-check', 'spamCheckAll')->name('api.telegram.group-invites.accounts.spam-check-all');
+                    Route::post('/accounts/{account}/spam-check', 'spamCheck')->name('api.telegram.group-invites.accounts.spam-check');
                 });
 
                 Route::controller(GroupInviteAnalysisController::class)->group(function () {
@@ -977,14 +980,14 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::post('/bot/reports/test', 'testReport')->name('api.telegram.group-invites.bot.reports.test');
                 });
 
-                /* The spam list: the bot deletes what these people write in our groups. */
-                Route::controller(GroupInviteSpamController::class)->group(function () {
-                    Route::get('/spam', 'show')->name('api.telegram.group-invites.spam');
                 /* The members of our groups as the bot sees them change: came, left, removed and by whom. */
                 Route::controller(GroupInviteMemberController::class)->group(function () {
                     Route::get('/bot/members', 'show')->name('api.telegram.group-invites.bot.members');
                 });
 
+                /* The spam list: the bot deletes what these people write in our groups. */
+                Route::controller(GroupInviteSpamController::class)->group(function () {
+                    Route::get('/spam', 'show')->name('api.telegram.group-invites.spam');
                     Route::patch('/spam', 'settings')->name('api.telegram.group-invites.spam.settings');
                     Route::post('/spam/senders', 'store')->name('api.telegram.group-invites.spam.store');
                     Route::delete('/spam/senders/{spamSender}', 'destroy')->name('api.telegram.group-invites.spam.destroy');
