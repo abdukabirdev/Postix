@@ -92,8 +92,15 @@ use Throwable;
  *    itself (still in this run when that is soon). PEER_FLOOD means the
  *    account is spam-limited for invites: it rests a day, two the next time,
  *    up to a week, and its own daily cap drops to 70% of the calls it made
- *    that day; every clean day raises the cap by a quarter again. A dead or
- *    frozen session is taken out.
+ *    that day; every clean day raises the cap by a quarter again.
+ *    CHAT_MEMBER_ADD_FAILED ("could not add participants") on a call is
+ *    the account too: on 10.11 fourteen accounts got it on every call
+ *    from the first one, Telegram's long FLOOD_WAIT came two calls later,
+ *    while the other accounts kept adding into the same group - and the
+ *    people in those calls had been written off as "cannot be added". It
+ *    rests the account a day, longer when it comes again within a week,
+ *    and the people go back to the queue. A dead or frozen session is
+ *    taken out.
  *  - the group's. Gone for everybody (a dead link, a full group): it is
  *    switched off with the reason. Not for this account (not an admin,
  *    banned): the other accounts go on with it.
@@ -123,6 +130,9 @@ final class GroupInviteService
 
     /** The account is spam-limited: PEER_FLOOD. */
     public const KIND_SPAM = 'spam';
+
+    /** Telegram lets the account add nobody now: CHAT_MEMBER_ADD_FAILED. The people are not to blame. */
+    public const KIND_LIMITED = 'limited';
 
     /** The session is gone or frozen. */
     public const KIND_DEAD = 'dead';
@@ -167,9 +177,17 @@ final class GroupInviteService
     private const HUNG_AGAIN_DAYS = 3;
 
     /** The kinds that stop the account, not the group or the person. */
-    private const ACCOUNT_KINDS = [self::KIND_WAIT, self::KIND_SPAM, self::KIND_DEAD, self::KIND_TRANSIENT];
+    private const ACCOUNT_KINDS = [self::KIND_WAIT, self::KIND_SPAM, self::KIND_LIMITED, self::KIND_DEAD, self::KIND_TRANSIENT];
 
     private const SPAM_LIMITED = ['PEER_FLOOD', 'USER_RESTRICTED'];
+
+    /**
+     * "Could not add participants": Telegram's answer to an account it does
+     * not let add anybody, whoever is in the call (every call of fourteen
+     * accounts on 10.11, a long FLOOD_WAIT right after). Was taken for the
+     * person's refusal until then.
+     */
+    private const ADD_LIMITED = ['CHAT_MEMBER_ADD_FAILED'];
 
     /** A frozen account still logs in but can do nothing. */
     private const FROZEN = ['FROZEN_METHOD_INVALID', 'FROZEN_PARTICIPANT_MISSING'];
@@ -191,7 +209,6 @@ final class GroupInviteService
         'USER_BLOCKED',
         'USER_ID_INVALID',
         'PEER_ID_INVALID',
-        'CHAT_MEMBER_ADD_FAILED',
         'USERNAME_NOT_OCCUPIED',
         'USERNAME_INVALID',
     ];
@@ -235,6 +252,15 @@ final class GroupInviteService
 
     /** After a PEER_FLOOD the account's own daily cap: this share of the calls it made that day. */
     private const SPAM_CAP_SHARE = 0.7;
+
+    /**
+     * CHAT_MEMBER_ADD_FAILED: a day's rest, doubled when it comes again
+     * within LIMITED_MEMORY_DAYS, a week at most. The cap is left alone: the
+     * account had made no calls to measure by.
+     */
+    private const LIMITED_REST_HOURS = 24;
+
+    private const LIMITED_MEMORY_DAYS = 7;
 
     /** A clean day raises a lowered cap by this, one call at least. */
     private const CAP_GROWTH = 1.25;
@@ -782,6 +808,10 @@ final class GroupInviteService
             return self::KIND_SPAM;
         }
 
+        if (in_array($rpc, self::ADD_LIMITED, true)) {
+            return self::KIND_LIMITED;
+        }
+
         if (in_array($rpc, self::FROZEN, true)) {
             return self::KIND_DEAD;
         }
@@ -1170,6 +1200,29 @@ final class GroupInviteService
             'peer_floods' => $times,
             'cap' => $calls > 0 ? max(1, (int) floor($calls * self::SPAM_CAP_SHARE)) : max(1, intdiv($cap, 2)),
             'clean_day' => null,
+        ], $context);
+    }
+
+    /**
+     * CHAT_MEMBER_ADD_FAILED: Telegram lets this account add nobody for now.
+     * It rests a day; a second time within a week two days, then four, a
+     * week at most; after a quiet week the count starts over. Its cap stays
+     * as it is - the people in the call were not refused, they go back.
+     *
+     * @param array<string, mixed> $context what was refused: the step, the way, the size
+     */
+    public function addLimited(TelegramAccount $account, string $code, ?int $groupId = null, array $context = []): void
+    {
+        $meta = $this->meta($account);
+        $last = isset($meta['add_limited_at']) ? Carbon::parse($meta['add_limited_at']) : null;
+        $times = $last !== null && $last->gt(now()->subDays(self::LIMITED_MEMORY_DAYS))
+            ? (int) ($meta['add_limits'] ?? 0) + 1
+            : 1;
+        $hours = min(self::SPAM_REST_MAX_HOURS, self::LIMITED_REST_HOURS * 2 ** ($times - 1));
+
+        $this->rest($account, $hours * 3600 + random_int(0, 1800), self::KIND_LIMITED, $code, $groupId, [
+            'add_limits' => $times,
+            'add_limited_at' => now()->toIso8601String(),
         ], $context);
     }
 
@@ -3171,6 +3224,12 @@ final class GroupInviteService
 
         if ($kind === self::KIND_SPAM) {
             $this->spamLimited($account, $config, $code, $groupId, $context);
+
+            return;
+        }
+
+        if ($kind === self::KIND_LIMITED) {
+            $this->addLimited($account, $code, $groupId, $context);
 
             return;
         }

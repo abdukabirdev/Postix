@@ -293,6 +293,8 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(GroupInviteService::KIND_SPAM, GroupInviteService::classify($rpc('PEER_FLOOD')));
         $this->assertSame(GroupInviteService::KIND_WAIT, GroupInviteService::classify(new RateLimitError('FLOOD_WAIT_30', 30, 420, '')));
 
+        /* "Could not add participants": the account may add nobody, not the person's refusal. */
+        $this->assertSame(GroupInviteService::KIND_LIMITED, GroupInviteService::classify($rpc('CHAT_MEMBER_ADD_FAILED')));
         $this->assertSame(GroupInviteService::KIND_GROUP_DENIED, GroupInviteService::classify($rpc('CHAT_ADMIN_REQUIRED')));
         $this->assertSame(GroupInviteService::KIND_GROUP_GONE, GroupInviteService::classify($rpc('USERS_TOO_MUCH')));
 
@@ -440,6 +442,55 @@ final class GroupInviteTest extends TestCase
 
     public function test_a_session_that_does_not_answer_rests_and_the_run_goes_on_with_the_others(): void
     {
+    public function test_could_not_add_participants_gives_the_people_back_and_rests_the_account_a_day_with_its_cap(): void
+    {
+        TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $this->hold(1, $this->person(701, 'One'));
+        $this->hold(1, $this->person(702, 'Two'));
+        $this->hold(1, $this->person(703, 'Three'));
+        $config = $this->app->make(GroupInviteSettings::class)->current();
+
+        $this->fakeTelegram(invite: fn () => throw RPCErrorException::make('CHAT_MEMBER_ADD_FAILED', 400, ''));
+
+        $totals = $this->service->run();
+
+        /* Not split, nobody written off: the call was refused to the account. */
+        $this->assertSame(0, $totals['batches']);
+        $this->assertSame(0, $totals['failed']);
+        $this->assertSame(0, TelegramGroupInvite::query()->count());
+        $this->assertNull(TelegramScrapedUser::query()->where('telegram_user_id', 701)->value('can_add_to_group'));
+
+        $account = TelegramAccount::query()->find(1);
+        $meta = $this->service->meta($account);
+
+        $this->assertSame(GroupInviteService::KIND_LIMITED, $meta['rest_kind']);
+        $this->assertSame('CHAT_MEMBER_ADD_FAILED', $meta['rest_reason']);
+        $this->assertSame(1, $meta['add_limits']);
+        $this->assertArrayNotHasKey('cap', $meta);
+        $cap = $this->service->dailyCap($account, $config);
+        $this->assertEqualsWithDelta(24 * 3600 + 900, strtotime($meta['rest_until']) - time(), 905);
+
+        /* Again within the week: twice as long, the cap as it was. After a quiet week: a day again. */
+        $this->service->addLimited($account, 'CHAT_MEMBER_ADD_FAILED');
+        $meta = $this->service->meta($account);
+
+        $this->assertSame(2, $meta['add_limits']);
+        $this->assertSame($cap, $this->service->dailyCap($account, $config));
+        $this->assertEqualsWithDelta(48 * 3600 + 900, strtotime($meta['rest_until']) - time(), 905);
+
+        $state = TelegramAccountProcess::query()
+            ->where('telegram_account_id', 1)
+            ->where('process', ProcessEnum::GroupInvite->value)
+            ->first();
+        $state->update(['meta' => [...$state->meta, 'add_limited_at' => now()->subDays(8)->toIso8601String()]]);
+
+        $this->service->addLimited($account, 'CHAT_MEMBER_ADD_FAILED');
+        $meta = $this->service->meta($account);
+
+        $this->assertSame(1, $meta['add_limits']);
+        $this->assertEqualsWithDelta(24 * 3600 + 900, strtotime($meta['rest_until']) - time(), 905);
+    }
+
         TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
         $this->hold(1, $this->person(801, 'One'));
         $this->hold(2, $this->person(802, 'Two'));

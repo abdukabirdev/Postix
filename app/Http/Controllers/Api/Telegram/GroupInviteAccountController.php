@@ -206,7 +206,7 @@ final class GroupInviteAccountController extends Controller
                 $state->enable();
 
                 $meta = (array) $state->meta;
-                unset($meta['rest_until'], $meta['rest_kind'], $meta['rest_reason'], $meta['cap'], $meta['peer_floods'], $meta['clean_day']);
+                unset($meta['rest_until'], $meta['rest_kind'], $meta['rest_reason'], $meta['cap'], $meta['peer_floods'], $meta['clean_day'], $meta['add_limits'], $meta['add_limited_at']);
 
                 $state->update(['meta' => $meta === [] ? null : $meta]);
             });

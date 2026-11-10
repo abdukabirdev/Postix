@@ -1002,6 +1002,7 @@ return [
             'contacts' => 'Bazadagi kontaktlar',
             'contacts_can' => 'shundan bo\'ladi',
             'contacts_cannot' => 'shundan bo\'lmaydi',
+                'limited' => 'Telegram unga qo\'shishga ruxsat bermayapti (CHAT_MEMBER_ADD_FAILED)',
             'not_added' => 'Qo\'shilmadi',
             'failed' => 'Bo\'lmaydi',
             'sent' => 'Tekshirilmagan',
@@ -1143,6 +1144,7 @@ return [
             'all_accounts' => 'Barcha akkauntlar',
             'cols' => [
                 'at' => 'Qachon',
+                'limited' => 'Telegram qo\'shishga ruxsat bermayapti',
                 'account' => 'Akkaunt',
                 'reason' => 'Sabab',
                 'what' => 'Nimada',
@@ -1150,6 +1152,7 @@ return [
                 'tried' => 'Urindi, odam',
                 'quiet' => 'Indamay qo\'shilmadi',
                 'invited' => 'Qo\'shdi',
+                'limited' => 'CHAT_MEMBER_ADD_FAILED («ishtirokchilarni qo\'shib bo\'lmadi»): Telegram akkauntga hech kimni qo\'shishga ruxsat bermayapti — bir kun dam oladi, bir hafta ichida takrorlansa — ikki baravar uzoq; chaqiruvdagi odamlar navbatga qaytadi. 10.11 gacha odamning rad javobi deb hisoblanardi',
                 'lookups' => '@username',
                 'today' => 'Kunda: urindi / qo\'shdi',
                 'floods' => 'Oldingi floodlar',

@@ -1002,6 +1002,7 @@ return [
             'contacts' => 'Contacts in the base',
             'contacts_can' => 'of them can',
             'contacts_cannot' => 'of them cannot',
+                'limited' => 'Telegram lets it add nobody (CHAT_MEMBER_ADD_FAILED)',
             'not_added' => 'Not added',
             'failed' => 'Cannot',
             'sent' => 'Unchecked',
@@ -1143,6 +1144,7 @@ return [
             'all_accounts' => 'All accounts',
             'cols' => [
                 'at' => 'When',
+                'limited' => 'Telegram lets it add nobody',
                 'account' => 'Account',
                 'reason' => 'Reason',
                 'what' => 'On what',
@@ -1150,6 +1152,7 @@ return [
                 'tried' => 'Tried, people',
                 'quiet' => 'Silently left out',
                 'invited' => 'Added',
+                'limited' => 'CHAT_MEMBER_ADD_FAILED ("could not add participants"): Telegram lets the account add nobody — it rests a day, again within a week twice as long; the people of the call go back to the queue. Taken for the person\'s refusal before 10.11',
                 'lookups' => '@username',
                 'today' => 'That day: tried / added',
                 'floods' => 'Floods before',
