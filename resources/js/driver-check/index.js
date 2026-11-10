@@ -41,6 +41,7 @@ import { groupInvitesSettingsPage } from './group-invites-settings';
 import { groupInvitesBotPage } from './group-invites-bot';
 import { groupInvitesSpamPage } from './group-invites-spam';
 import { groupInvitesSpamAdminsPage } from './group-invites-spam-admins';
+import { groupInvitesMembersPage } from './group-invites-members';
 import { statusType } from './status';
 import { controlJoinSwitch, controlQueueCard } from './control';
 
@@ -1267,6 +1268,7 @@ export function registerDriverCheck(Alpine) {
     Alpine.data('dcGroupInvitesBot', groupInvitesBotPage);
     Alpine.data('dcGroupInvitesSpam', groupInvitesSpamPage);
     Alpine.data('dcGroupInvitesSpamAdmins', groupInvitesSpamAdminsPage);
+    Alpine.data('dcGroupInvitesMembers', groupInvitesMembersPage);
     Alpine.data('dcGroupJoin', groupJoinPage);
     Alpine.data('dcGroupJoinGroups', groupJoinGroupsPage);
     Alpine.data('dcGroupJoinPeople', groupJoinPeoplePage);

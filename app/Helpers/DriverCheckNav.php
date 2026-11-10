@@ -126,6 +126,9 @@ final class DriverCheckNav
             'requests' => [
                 ['bot_requests', 'group-invites/bot/requests', 'inbox'],
             ],
+            'members' => [
+                ['bot_members', 'group-invites/bot/members', 'logout'],
+            ],
             'spam' => [
                 ['spam_list', 'group-invites/spam', 'shield'],
                 ['spam_admins', 'group-invites/spam/admins', 'users'],

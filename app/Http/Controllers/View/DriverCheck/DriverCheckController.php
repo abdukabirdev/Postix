@@ -365,6 +365,12 @@ final class DriverCheckController extends Controller
         );
     }
 
+    /* Who came into our groups, who left, who was removed and by whom. */
+    public function groupInvitesBotMembers()
+    {
+        return view('pages.driver-check.group-invites-members');
+    }
+
     public function groupInvitesSpam()
     {
         return view(

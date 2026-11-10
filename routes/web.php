@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
 use App\Http\Controllers\Api\Telegram\GroupInviteRankingController;
 use App\Http\Controllers\Api\Telegram\DriverGroupController;
 use App\Http\Controllers\Api\Telegram\GroupInviteBotController;
+use App\Http\Controllers\Api\Telegram\GroupInviteMemberController;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamAdminController;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
 use App\Http\Controllers\Api\Telegram\GroupInviteController;
@@ -438,6 +439,12 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/group-invites/bot/requests',
             [DriverCheckController::class, 'groupInvitesBotRequests']
         )->name('driver-check.group-invites.bot.requests');
+
+        /* Who came into our groups, who left, who was removed and by whom. */
+        Route::get(
+            '/group-invites/bot/members',
+            [DriverCheckController::class, 'groupInvitesBotMembers']
+        )->name('driver-check.group-invites.bot.members');
 
         Route::get(
             '/group-invites/spam/messages',
@@ -973,6 +980,11 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                 /* The spam list: the bot deletes what these people write in our groups. */
                 Route::controller(GroupInviteSpamController::class)->group(function () {
                     Route::get('/spam', 'show')->name('api.telegram.group-invites.spam');
+                /* The members of our groups as the bot sees them change: came, left, removed and by whom. */
+                Route::controller(GroupInviteMemberController::class)->group(function () {
+                    Route::get('/bot/members', 'show')->name('api.telegram.group-invites.bot.members');
+                });
+
                     Route::patch('/spam', 'settings')->name('api.telegram.group-invites.spam.settings');
                     Route::post('/spam/senders', 'store')->name('api.telegram.group-invites.spam.store');
                     Route::delete('/spam/senders/{spamSender}', 'destroy')->name('api.telegram.group-invites.spam.destroy');
