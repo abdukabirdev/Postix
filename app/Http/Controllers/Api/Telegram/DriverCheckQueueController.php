@@ -27,9 +27,17 @@ final class DriverCheckQueueController extends Controller
         private readonly DriverCheckQueueMonitor $monitor,
     ) {}
 
-    public function summary(): JsonResponse
+    /**
+     * `part=classes`: only what is waiting by job class (a scan of every
+     * payload, the slow part); `part=core`: the rest without it; none: both.
+     */
+    public function summary(Request $request): JsonResponse
     {
-        return response()->json(['data' => $this->monitor->summary()]);
+        return match ($request->query('part')) {
+            'classes' => response()->json(['data' => ['classes' => $this->monitor->classesNow()]]),
+            'core' => response()->json(['data' => $this->monitor->summary(false)]),
+            default => response()->json(['data' => $this->monitor->summary()]),
+        };
     }
 
     public function jobs(Request $request): JsonResponse

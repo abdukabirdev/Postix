@@ -153,6 +153,8 @@ final class GroupInviteBase
     {
         Cache::forget(self::CACHE_KEY);
         Cache::forget(self::CACHE_KEY . ':u');
+        /* The kept queues carry this number in their key: a new one leaves them all behind. */
+        Cache::put(self::CACHE_KEY . ':v', (int) Cache::get(self::CACHE_KEY . ':v', 0) + 1, 86400 * 30);
     }
 
     /**
@@ -173,6 +175,23 @@ final class GroupInviteBase
             'proven' => $left()->where('can_add_to_group', true)->count(),
             'other' => $left()->whereNull('can_add_to_group')->count(),
         ];
+    }
+
+    /**
+     * The same, kept for CACHE_SECONDS: it is two scans of the whole base
+     * and the pages ask for it every few seconds. A reset or a retry
+     * (`forget()`) throws every kept one away.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return array{proven: int, other: int}
+     */
+    public function cachedQueue(TelegramInviteGroup $group, array $config): array
+    {
+        $key = self::CACHE_KEY . ':queue:' . (int) Cache::get(self::CACHE_KEY . ':v', 0)
+            . ':' . $group->id . ((bool) $config['use_usernames'] ? ':u' : '');
+
+        return Cache::remember($key, self::CACHE_SECONDS, fn () => $this->queue($group, $config));
     }
 
     /**

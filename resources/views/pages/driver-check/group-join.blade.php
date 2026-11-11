@@ -14,6 +14,7 @@
         },
         translations: @js(__('driver_check.join')),
         ui: @js(__('telegram.ui')),
+        part: @js($part),
     })"
 >
     <x-driver-check.shell>

@@ -29,12 +29,53 @@ export function systemPage(config) {
 
         listeners: [],
 
-        alerts: { configured: false, recent: [] },
+        alerts: { configured: false, kinds: [], recent: [] },
+
+        /* The alerts page narrows what it reads: one kind, words, how many. */
+        filters: { kind: '', search: '', limit: 50 },
+
+        opened: {},
 
         init() {
             this.load();
 
-            setInterval(() => this.load(true), 15000);
+            setInterval(() => {
+                if (document.visibilityState === 'visible') {
+                    this.load(true);
+                }
+            }, 15000);
+        },
+
+        /* What the page asks for: the map page the logics, the alerts page the problems - not both. */
+        url() {
+            const params = new URLSearchParams({ part: config.part === 'alerts' ? 'alerts' : 'map' });
+
+            if (config.part === 'alerts') {
+                params.set('limit', String(this.filters.limit));
+
+                if (this.filters.kind) {
+                    params.set('kind', this.filters.kind);
+                }
+
+                if (this.filters.search.trim() !== '') {
+                    params.set('search', this.filters.search.trim());
+                }
+            }
+
+            return `${this.endpoints.index}?${params}`;
+        },
+
+        applyFilters() {
+            this.load();
+        },
+
+        clearSearch() {
+            this.filters.search = '';
+            this.load();
+        },
+
+        toggle(alert) {
+            this.opened[alert.id] = !this.opened[alert.id];
         },
 
         async load(silent = false) {
@@ -45,7 +86,7 @@ export function systemPage(config) {
             this.error = null;
 
             try {
-                const response = await fetch(this.endpoints.index, {
+                const response = await fetch(this.url(), {
                     credentials: 'same-origin',
                     headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
                 });
@@ -56,9 +97,14 @@ export function systemPage(config) {
 
                 const json = await response.json();
 
-                this.logics = Array.isArray(json.logics) ? json.logics : [];
-                this.listeners = Array.isArray(json.listeners) ? json.listeners : [];
-                this.alerts = json.alerts || { configured: false, recent: [] };
+                if (config.part !== 'alerts') {
+                    this.logics = Array.isArray(json.logics) ? json.logics : [];
+                    this.listeners = Array.isArray(json.listeners) ? json.listeners : [];
+                }
+
+                if (json.alerts) {
+                    this.alerts = json.alerts;
+                }
             } catch (error) {
                 this.error = error?.message || t.errors.load;
             } finally {

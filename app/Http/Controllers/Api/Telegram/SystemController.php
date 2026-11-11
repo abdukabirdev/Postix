@@ -15,6 +15,7 @@ use App\Models\Telegram\TelegramListener;
 use App\Models\Telegram\TelegramScheduledMessage;
 use App\Telegram\TelegramProcessLock;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Throwable;
 
 /**
@@ -29,8 +30,17 @@ final class SystemController extends Controller
 
     public function __construct(private readonly DutyOwners $owners) {}
 
-    public function index(): JsonResponse
+    /**
+     * `part=alerts`: the problems alone (the alerts page), narrowed by `kind`,
+     * `search` and `limit`; `part=map`: the logics and their accounts alone.
+     * Without `part` both, as it used to be.
+     */
+    public function index(Request $request): JsonResponse
     {
+        if ($request->query('part') === 'alerts') {
+            return response()->json(['alerts' => $this->alerts($request)]);
+        }
+
         try {
             $listeners = TelegramListener::query()->with('account')->orderBy('name')->get();
         } catch (Throwable) {
@@ -78,7 +88,7 @@ final class SystemController extends Controller
             ['key' => 'group_join', 'movable' => false, 'accounts' => [], 'link' => '/driver-check/group-join'],
         ];
 
-        return response()->json([
+        $out = [
             'logics' => $logics,
             'listeners' => $listeners->map(fn (TelegramListener $l): array => [
                 'key' => $l->key,
@@ -87,11 +97,35 @@ final class SystemController extends Controller
                 'is_enabled' => (bool) $l->is_enabled,
                 'running' => $running[$l->key] ?? false,
             ])->all(),
-            'alerts' => [
-                'configured' => app(DeveloperAlerts::class)->configured(),
-                'recent' => $this->recentAlerts(),
-            ],
-        ]);
+        ];
+
+        if ($request->query('part') !== 'map') {
+            $out['alerts'] = $this->alerts($request);
+        }
+
+        return response()->json($out);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function alerts(Request $request): array
+    {
+        $limit = min(200, max(10, (int) $request->query('limit', self::RECENT_ALERTS)));
+        $kind = trim((string) $request->query('kind', ''));
+        $search = trim((string) $request->query('search', ''));
+
+        try {
+            $kinds = TelegramAlert::query()->distinct()->orderBy('kind')->pluck('kind')->all();
+        } catch (Throwable) {
+            $kinds = [];
+        }
+
+        return [
+            'configured' => app(DeveloperAlerts::class)->configured(),
+            'kinds' => $kinds,
+            'recent' => $this->recentAlerts($limit, $kind, $search),
+        ];
     }
 
     /**
@@ -157,12 +191,18 @@ final class SystemController extends Controller
     /**
      * @return list<array<string, mixed>>
      */
-    private function recentAlerts(): array
+    private function recentAlerts(int $limit = self::RECENT_ALERTS, string $kind = '', string $search = ''): array
     {
         try {
             return TelegramAlert::query()
+                ->when($kind !== '', fn ($q) => $q->where('kind', $kind))
+                ->when($search !== '', function ($q) use ($search) {
+                    $like = '%' . str_replace(['%', '_'], ['\%', '\_'], $search) . '%';
+
+                    $q->where(fn ($q) => $q->where('title', 'like', $like)->orWhere('details', 'like', $like));
+                })
                 ->orderByDesc('last_seen_at')
-                ->limit(self::RECENT_ALERTS)
+                ->limit($limit)
                 ->get()
                 ->map(fn (TelegramAlert $alert): array => [
                     'id' => $alert->id,

@@ -76,7 +76,7 @@ export function listenersPage(config) {
 
             /* Whether the processes are up changes without a click. */
             setInterval(() => {
-                if (!this.formOpen && !this.confirmOpen) {
+                if (!this.formOpen && !this.confirmOpen && document.visibilityState === 'visible') {
                     this.load(true);
                 }
             }, 15000);
@@ -96,7 +96,8 @@ export function listenersPage(config) {
                 this.accounts = Array.isArray(json.accounts) ? json.accounts : [];
                 this.duties = Array.isArray(json.duties) ? json.duties : [];
 
-                this.applyOwners(json.owners);
+                /* A look that nobody asked for does not wipe the choices not saved yet. */
+                this.applyOwners(json.owners, silent && this.ownersChanged());
             } catch (error) {
                 this.error = error?.message || t.errors.load;
             } finally {
@@ -110,12 +111,16 @@ export function listenersPage(config) {
         |----------------------------------------------------------------
         */
 
-        applyOwners(owners) {
+        applyOwners(owners, keepForms = false) {
             this.owners = {
                 duties: Array.isArray(owners?.duties) ? owners.duties : [],
                 roles: Array.isArray(owners?.roles) ? owners.roles : [],
                 options: Array.isArray(owners?.options) ? owners.options : [],
             };
+
+            if (keepForms) {
+                return;
+            }
 
             /* The saved choice, even when its listener is off for the moment: that is what the person set. */
             const form = {};

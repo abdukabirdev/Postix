@@ -41,10 +41,20 @@ final class ContactCatalogController extends Controller
             'sort' => ['nullable', 'in:created_at,added_at,name'],
             'direction' => ['nullable', 'in:asc,desc'],
             'per_page' => ['nullable', 'integer', 'min:5', 'max:100'],
+            /* The page asks for the readings apart from the list: they do not depend on its filters. */
+            'part' => ['nullable', 'in:stats,options'],
         ]);
 
         $direction = ($data['direction'] ?? 'desc') === 'asc' ? 'asc' : 'desc';
         $byLink = $this->skipsUsernames();
+
+        if (($data['part'] ?? null) === 'stats') {
+            return response()->json(['stats' => $this->stats($byLink)]);
+        }
+
+        if (($data['part'] ?? null) === 'options') {
+            return response()->json(['options' => $this->options()]);
+        }
 
         $query = TelegramScrapedUser::query()
             ->with(['groups:id,title,link', 'contact.account:id,phone,username', 'accountLinks.account:id,phone'])
@@ -95,7 +105,8 @@ final class ContactCatalogController extends Controller
                     ->whereColumn('telegram_account_contacts.scraped_user_id', 'telegram_scraped_users.id'),
                 $direction,
             ),
-            default => $query->orderBy('created_at', $direction),
+            /* The newest first is the order of the key: the people are written as they are found, and the key needs no sort of the whole table. */
+            default => null,
         };
 
         /* Accounts that have been read at least once: only for them "not on the account" is a fact. */
@@ -116,8 +127,6 @@ final class ContactCatalogController extends Controller
                 'from' => $page->firstItem(),
                 'to' => $page->lastItem(),
             ],
-            'stats' => $this->stats($byLink),
-            'options' => $this->options(),
         ]);
     }
 

@@ -2622,6 +2622,10 @@ return [
             'sent' => 'yuborilgan',
             'not_sent' => 'yuborilmagan',
             'empty' => 'Muammolar bo\'lmagan',
+            'search' => 'Sarlavha yoki matndagi so\'zlar',
+            'all_kinds' => 'Har qanday turi',
+            'kind' => 'Turi',
+            'limit' => 'Nechta ko\'rsatish',
         ],
     ],
 

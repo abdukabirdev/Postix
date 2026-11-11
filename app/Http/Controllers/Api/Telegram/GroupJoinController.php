@@ -219,13 +219,13 @@ final class GroupJoinController extends Controller
             'search' => ['nullable', 'string', 'max:100'],
             'phone' => ['nullable', 'boolean'],
             'per_page' => ['nullable', 'integer', 'min:5', 'max:100'],
+            /* `total`: only how many match - a count over the whole base, asked for after the list is on the screen. */
+            'part' => ['nullable', 'in:total'],
         ]);
 
         $term = trim((string) ($data['search'] ?? ''));
 
-        $people = TelegramScrapedUser::query()
-            ->with(['groups' => fn ($q) => $q->select('telegram_scrape_groups.id', 'title', 'link', 'type')])
-            ->withCount('groups')
+        $filtered = TelegramScrapedUser::query()
             ->where('is_bot', false)
             ->when(
                 filled($data['group_id'] ?? null),
@@ -253,11 +253,26 @@ final class GroupJoinController extends Controller
                         ->orWhere('username', 'like', $like));
                 }
             })
+            ;
+
+        if (($data['part'] ?? null) === 'total') {
+            return response()->json(['total' => (clone $filtered)->count(), 'all' => $this->peopleCount()]);
+        }
+
+        $perPage = (int) ($data['per_page'] ?? 30);
+        $current = max(1, $request->integer('page', 1));
+
+        /* One more than the page: whether there is a next one, without counting the base. */
+        $people = (clone $filtered)
+            ->with(['groups' => fn ($q) => $q->select('telegram_scrape_groups.id', 'title', 'link', 'type')])
+            ->withCount('groups')
             ->orderByDesc('id')
-            ->paginate((int) ($data['per_page'] ?? 30));
+            ->offset(($current - 1) * $perPage)
+            ->limit($perPage + 1)
+            ->get();
 
         return response()->json([
-            'data' => $people->getCollection()->map(fn (TelegramScrapedUser $user) => [
+            'data' => $people->take($perPage)->map(fn (TelegramScrapedUser $user) => [
                 'id' => $user->id,
                 'telegram_user_id' => $user->telegram_user_id,
                 'username' => $user->username,
@@ -272,14 +287,12 @@ final class GroupJoinController extends Controller
                 ])->values(),
             ])->values(),
             'meta' => [
-                'current_page' => $people->currentPage(),
-                'last_page' => $people->lastPage(),
-                'total' => $people->total(),
+                'current_page' => $current,
+                'has_more' => $people->count() > $perPage,
             ],
             'group' => filled($data['group_id'] ?? null)
                 ? TelegramScrapeGroup::query()->find((int) $data['group_id'], ['id', 'title', 'link', 'members_read', 'last_synced_at'])
                 : null,
-            'total' => $this->peopleCount(),
         ]);
     }
 

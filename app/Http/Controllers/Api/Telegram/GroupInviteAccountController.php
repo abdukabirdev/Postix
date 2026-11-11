@@ -38,10 +38,139 @@ final class GroupInviteAccountController extends Controller
 
     public function __construct(private readonly GroupInviteSettings $settings) {}
 
-    public function index(): JsonResponse
+    /**
+     * The page asks in stages (`part`), so that the list is on the screen
+     * before the heavy numbers are counted:
+     *
+     *   state     who they are, in or out, resting or held, the day's calls,
+     *             what @SpamBot said - a few small queries
+     *   numbers   what each got: all time, the last days, today, its last stop
+     *   contacts  what its contacts are worth for the invite - the heaviest
+     *
+     * Without `part` everything comes at once, as it used to.
+     */
+    public function index(Request $request): JsonResponse
+    {
+        return response()->json(match ($request->query('part')) {
+            'state' => $this->statePart(),
+            'numbers' => ['numbers' => (object) $this->numbersPart()],
+            'contacts' => ['contacts' => (object) self::contacts()],
+            default => $this->whole(),
+        });
+    }
+
+    /**
+     * Everything in one answer: each account with its numbers and contacts.
+     *
+     * @return array<string, mixed>
+     */
+    private function whole(): array
+    {
+        $state = $this->statePart();
+        $numbers = $this->numbersPart();
+        $contacts = self::contacts();
+
+        $state['accounts'] = collect($state['accounts'])
+            ->map(function (array $account) use ($numbers, $contacts): array {
+                $own = $contacts[$account['id']] ?? ['total' => 0, 'can' => 0, 'cannot' => 0];
+
+                return [
+                    ...$account,
+                    ...($numbers[$account['id']] ?? self::noNumbers()),
+                    'contacts' => $own['total'],
+                    'contacts_can' => $own['can'],
+                    'contacts_cannot' => $own['cannot'],
+                ];
+            })
+            ->values();
+
+        return $state;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function statePart(): array
     {
         $config = $this->settings->current();
         $limit = (int) $config['batches_per_day'];
+
+        $callsToday = TelegramGroupInviteLog::callsToday();
+        $firstDays = TelegramGroupInviteLog::firstCallDays();
+
+        $states = TelegramAccountProcess::query()
+            ->where('process', ProcessEnum::GroupInvite->value)
+            ->get()
+            ->keyBy('telegram_account_id');
+
+        /* What @SpamBot said about each the last time it was asked. */
+        $spamChecks = SpamBotCheck::latest();
+
+        /* Asked once, not for every account. */
+        $listeners = GroupInviteSettings::listenerIds();
+
+        $accounts = TelegramAccount::query()
+            ->where('is_authorized', true)
+            ->orderBy('id')
+            ->get()
+            ->map(function (TelegramAccount $account) use ($callsToday, $firstDays, $states, $spamChecks, $listeners, $config): array {
+                $state = $states->get($account->id);
+                $meta = (array) ($state?->meta ?? []);
+                $restUntil = GroupInviteController::future($meta['rest_until'] ?? null);
+                /* A new account makes a share of the calls on its first days. */
+                $day = TelegramGroupInviteLog::inviteDay($meta['first_day'] ?? $firstDays[$account->id] ?? null);
+                $share = GroupInviteSettings::warmShare($day, $config);
+                $warmCap = GroupInviteSettings::warmCap($day, $config);
+                $listener = in_array((int) $account->id, $listeners, true);
+
+                return [
+                    'id' => $account->id,
+                    'phone' => $account->phone,
+                    'username' => $account->username,
+                    /* By the number's calling code; how old by the Telegram id (AccountAge): for the page's tables by country and by age. */
+                    'country' => PhoneCountry::of($account->phone),
+                    'telegram_user_id' => $account->telegram_user_id !== null ? (int) $account->telegram_user_id : null,
+                    'age' => AccountAge::band($account->telegram_user_id),
+                    'is_primary' => $listener,
+                    'excluded' => in_array($account->id, $config['excluded_accounts'], true),
+                    'listener' => $listener,
+                    'calls_today' => (int) ($callsToday[$account->id] ?? 0),
+                    /* Lowered after a PEER_FLOOD, grows back by itself. */
+                    'cap' => isset($meta['cap']) ? min($warmCap, (int) $meta['cap']) : $warmCap,
+                    'cap_lowered' => isset($meta['cap']) && (int) $meta['cap'] < $warmCap,
+                    'warm_day' => $share < 1 ? $day : null,
+                    'warm_percent' => (int) round($share * 100),
+                    'peer_floods' => (int) ($meta['peer_floods'] ?? 0),
+                    'held' => $state !== null && ! $state->is_available,
+                    'held_reason' => $state !== null && ! $state->is_available ? $state->disabled_reason : null,
+                    'rest_until' => $restUntil,
+                    'rest_kind' => $restUntil !== null ? ($meta['rest_kind'] ?? null) : null,
+                    'rest_reason' => $restUntil !== null ? ($meta['rest_reason'] ?? null) : null,
+                    'spam_check' => self::spamCheckOf($spamChecks->get($account->id)),
+                ];
+            });
+
+        return [
+            'accounts' => $accounts->values()->all(),
+            'spam_checking' => TelegramProcessLock::isHeld(TelegramSpamBotCheckCommand::LOCK_NAME),
+            'recent_days' => self::RECENT_DAYS,
+            'age_bands' => AccountAge::bands(),
+            'limits' => [
+                'batches_per_day' => $limit,
+                'batch_size' => (int) $config['batch_size'],
+                'usernames_per_day' => $config['use_usernames'] ? (int) $config['usernames_per_day'] : 0,
+            ],
+        ];
+    }
+
+    /**
+     * What each account got, by its id. An account that never invited is
+     * not in the list: noNumbers() stands for it.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function numbersPart(): array
+    {
         $today = now()->startOfDay();
 
         $byStatus = TelegramGroupInvite::query()
@@ -60,9 +189,6 @@ final class GroupInviteAccountController extends Controller
             ->get()
             ->groupBy('telegram_account_id');
 
-        $callsToday = TelegramGroupInviteLog::callsToday();
-        $firstDays = TelegramGroupInviteLog::firstCallDays();
-
         $lookupsToday = TelegramGroupInvite::query()
             ->where('via', TelegramGroupInvite::VIA_USERNAME)
             ->whereIn('status', TelegramGroupInvite::SETTLED)
@@ -78,8 +204,6 @@ final class GroupInviteAccountController extends Controller
             ->groupBy('telegram_account_id')
             ->pluck('total', 'telegram_account_id');
 
-        $contacts = self::contacts();
-
         $lastStops = TelegramGroupInviteLog::query()
             ->whereIn('event', TelegramGroupInviteLog::STOP_EVENTS)
             ->whereIn('id', TelegramGroupInviteLog::query()
@@ -90,89 +214,53 @@ final class GroupInviteAccountController extends Controller
             ->get()
             ->keyBy('telegram_account_id');
 
-        $states = TelegramAccountProcess::query()
-            ->where('process', ProcessEnum::GroupInvite->value)
-            ->get()
-            ->keyBy('telegram_account_id');
+        $ids = collect([$byStatus->keys(), $lastStops->keys()])
+            ->flatten()
+            ->filter()
+            ->unique();
 
-        /* What @SpamBot said about each the last time it was asked. */
-        $spamChecks = SpamBotCheck::latest();
+        $out = [];
 
-        $accounts = TelegramAccount::query()
-            ->where('is_authorized', true)
-            ->orderBy('id')
-            ->get()
-            ->map(function (TelegramAccount $account) use ($byStatus, $recent, $callsToday, $firstDays, $lookupsToday, $addedToday, $contacts, $lastStops, $states, $spamChecks, $config, $limit) {
-                $counts = GroupInviteGroupController::counts($byStatus->get($account->id, collect())->pluck('total', 'status')->all());
-                $lately = GroupInviteGroupController::counts($recent->get($account->id, collect())->pluck('total', 'status')->all());
-                $state = $states->get($account->id);
-                $meta = (array) ($state?->meta ?? []);
-                $restUntil = GroupInviteController::future($meta['rest_until'] ?? null);
-                $stop = $lastStops->get($account->id);
-                $own = $contacts[$account->id] ?? ['total' => 0, 'can' => 0, 'cannot' => 0];
-                /* A new account makes a share of the calls on its first days. */
-                $day = TelegramGroupInviteLog::inviteDay($meta['first_day'] ?? $firstDays[$account->id] ?? null);
-                $share = GroupInviteSettings::warmShare($day, $config);
-                $warmCap = GroupInviteSettings::warmCap($day, $config);
+        foreach ($ids as $id) {
+            $counts = GroupInviteGroupController::counts($byStatus->get($id, collect())->pluck('total', 'status')->all());
+            $lately = GroupInviteGroupController::counts($recent->get($id, collect())->pluck('total', 'status')->all());
+            $stop = $lastStops->get($id);
 
-                return [
-                    'id' => $account->id,
-                    'phone' => $account->phone,
-                    'username' => $account->username,
-                    /* By the number's calling code; how old by the Telegram id (AccountAge): for the page's tables by country and by age. */
-                    'country' => PhoneCountry::of($account->phone),
-                    'telegram_user_id' => $account->telegram_user_id !== null ? (int) $account->telegram_user_id : null,
-                    'age' => AccountAge::band($account->telegram_user_id),
-                    'is_primary' => $account->isPrimary(),
-                    'excluded' => in_array($account->id, $config['excluded_accounts'], true),
-                    'listener' => in_array($account->id, GroupInviteSettings::listenerIds(), true),
-                    /* Its contacts in the base, and what the invite knows of them. */
-                    'contacts' => $own['total'],
-                    'contacts_can' => $own['can'],
-                    'contacts_cannot' => $own['cannot'],
-                    'calls_today' => (int) ($callsToday[$account->id] ?? 0),
-                    'added_today' => (int) ($addedToday[$account->id] ?? 0),
-                    'lookups_today' => (int) ($lookupsToday[$account->id] ?? 0),
-                    /* Lowered after a PEER_FLOOD, grows back by itself. */
-                    'cap' => isset($meta['cap']) ? min($warmCap, (int) $meta['cap']) : $warmCap,
-                    'cap_lowered' => isset($meta['cap']) && (int) $meta['cap'] < $warmCap,
-                    'warm_day' => $share < 1 ? $day : null,
-                    'warm_percent' => (int) round($share * 100),
-                    'peer_floods' => (int) ($meta['peer_floods'] ?? 0),
-                    ...$counts,
-                    /* The last RECENT_DAYS: people tried, how many of them got in, how many Telegram quietly left out. */
-                    'recent' => [
-                        'tried' => $lately['added'] + $lately['not_added'] + $lately['already'] + $lately['failed'],
-                        'added' => $lately['added'],
-                        'not_added' => $lately['not_added'],
-                    ],
-                    'held' => $state !== null && ! $state->is_available,
-                    'held_reason' => $state !== null && ! $state->is_available ? $state->disabled_reason : null,
-                    'rest_until' => $restUntil,
-                    'rest_kind' => $restUntil !== null ? ($meta['rest_kind'] ?? null) : null,
-                    'rest_reason' => $restUntil !== null ? ($meta['rest_reason'] ?? null) : null,
-                    'last_stop' => $stop ? [
-                        'at' => $stop->created_at,
-                        'event' => $stop->event,
-                        'kind' => $stop->context['kind'] ?? null,
-                        'rpc' => $stop->context['rpc'] ?? null,
-                        'calls' => $stop->context['counters']['calls'] ?? null,
-                    ] : null,
-                    'spam_check' => self::spamCheckOf($spamChecks->get($account->id)),
-                ];
-            });
+            $out[(int) $id] = [
+                'added_today' => (int) ($addedToday[$id] ?? 0),
+                'lookups_today' => (int) ($lookupsToday[$id] ?? 0),
+                ...$counts,
+                /* The last RECENT_DAYS: people tried, how many of them got in, how many Telegram quietly left out. */
+                'recent' => [
+                    'tried' => $lately['added'] + $lately['not_added'] + $lately['already'] + $lately['failed'],
+                    'added' => $lately['added'],
+                    'not_added' => $lately['not_added'],
+                ],
+                'last_stop' => $stop ? [
+                    'at' => $stop->created_at,
+                    'event' => $stop->event,
+                    'kind' => $stop->context['kind'] ?? null,
+                    'rpc' => $stop->context['rpc'] ?? null,
+                    'calls' => $stop->context['counters']['calls'] ?? null,
+                ] : null,
+            ];
+        }
 
-        return response()->json([
-            'accounts' => $accounts->values(),
-            'spam_checking' => TelegramProcessLock::isHeld(TelegramSpamBotCheckCommand::LOCK_NAME),
-            'recent_days' => self::RECENT_DAYS,
-            'age_bands' => AccountAge::bands(),
-            'limits' => [
-                'batches_per_day' => $limit,
-                'batch_size' => (int) $config['batch_size'],
-                'usernames_per_day' => $config['use_usernames'] ? (int) $config['usernames_per_day'] : 0,
-            ],
-        ]);
+        return $out;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private static function noNumbers(): array
+    {
+        return [
+            'added_today' => 0,
+            'lookups_today' => 0,
+            ...GroupInviteGroupController::counts([]),
+            'recent' => ['tried' => 0, 'added' => 0, 'not_added' => 0],
+            'last_stop' => null,
+        ];
     }
 
     /**

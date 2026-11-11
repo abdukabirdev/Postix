@@ -37,13 +37,87 @@ final class GroupInviteController extends Controller
     ) {}
 
     /**
-     * The overview: what runs now, the base in numbers, what the groups
-     * got, today, how the accounts stand, the last lines of the run log.
+     * The overview. The page asks in stages (`part`), the light ones first
+     * and the one it asks again while a run goes on (`now`) the lightest:
+     *
+     *   now      running or not, what it does, the last lines of the log
+     *   light    the settings and how the accounts stand
+     *   groups   what each group got, today, the current group's queue,
+     *            the last "who left" - scans of the invites table
+     *   base     the base in numbers (kept for half a minute)
+     *   day      the ideal day and how far the accounts are into it
+     *
+     * Without `part` everything comes at once, as it used to.
      */
-    public function show(): JsonResponse
+    public function show(Request $request): JsonResponse
     {
         $config = $this->settings->current();
+
+        return response()->json(match ($request->query('part')) {
+            'now' => $this->nowPart(),
+            'light' => $this->lightPart($config),
+            'groups' => $this->groupsPart($config),
+            'base' => ['base' => $this->base->cachedCounts($config)],
+            'day' => ['progress' => $this->progress->today($config)],
+            default => [
+                ...$this->nowPart(),
+                ...$this->lightPart($config),
+                ...$this->groupsPart($config),
+                'base' => $this->base->cachedCounts($config),
+                'progress' => $this->progress->today($config),
+            ],
+        });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function nowPart(): array
+    {
         $running = TelegramProcessLock::isHeld(TelegramGroupInviteCommand::LOCK_NAME);
+        $latest = TelegramGroupInviteLog::query()->where('event', 'started')->latest('id')->value('run_id');
+
+        return [
+            'running' => $running,
+            'now' => self::now($running),
+            'recent' => $latest !== null ? self::lines($latest, 8) : [],
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     *
+     * @return array<string, mixed>
+     */
+    private function lightPart(array $config): array
+    {
+        $states = TelegramAccountProcess::query()
+            ->where('process', ProcessEnum::GroupInvite->value)
+            ->get()
+            ->keyBy('telegram_account_id');
+
+        $accounts = TelegramAccount::query()->where('is_authorized', true)->pluck('id');
+        $taking = $accounts->reject(fn (int $id) => in_array($id, $config['excluded_accounts'], true));
+
+        return [
+            'accounts' => [
+                'total' => $accounts->count(),
+                'taking_part' => $taking->count(),
+                'resting' => $taking->filter(fn (int $id) => self::future(((array) ($states->get($id)?->meta ?? []))['rest_until'] ?? null) !== null)->count(),
+                'held' => $taking->filter(fn (int $id) => $states->has($id) && ! $states->get($id)->is_available)->count(),
+            ],
+            'settings' => $config,
+            'times' => GroupInviteSettings::times($config),
+        ];
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     *
+     * @return array<string, mixed>
+     */
+    private function groupsPart(array $config): array
+    {
         $today = now()->startOfDay();
 
         /* Archived groups are left out of the overview; their rows stay counted on the groups page. */
@@ -65,14 +139,6 @@ final class GroupInviteController extends Controller
                 ...GroupInviteGroupController::counts($byStatus->get($group->id, collect())->pluck('total', 'status')->all()),
             ]);
 
-        $states = TelegramAccountProcess::query()
-            ->where('process', ProcessEnum::GroupInvite->value)
-            ->get()
-            ->keyBy('telegram_account_id');
-
-        $accounts = TelegramAccount::query()->where('is_authorized', true)->pluck('id');
-        $taking = $accounts->reject(fn (int $id) => in_array($id, $config['excluded_accounts'], true));
-
         /* The button's run, or the lists an invite run reads before and after itself. */
         $lastLeft = TelegramGroupInviteLog::query()
             ->where(fn ($q) => $q
@@ -81,14 +147,9 @@ final class GroupInviteController extends Controller
             ->latest('id')
             ->first();
 
-        $latest = TelegramGroupInviteLog::query()->where('event', 'started')->latest('id')->value('run_id');
-
         $current = TelegramInviteGroup::current();
 
-        return response()->json([
-            'running' => $running,
-            'now' => self::now($running),
-            'base' => $this->base->cachedCounts($config),
+        return [
             'added' => [
                 'total' => (int) $groups->sum('added'),
                 'still' => (int) $groups->sum('invited'),
@@ -118,26 +179,16 @@ final class GroupInviteController extends Controller
             /* The one group people are added into now, and who is still left to try for it. */
             'current' => $current ? [
                 ...($groups->firstWhere('id', $current->id) ?? []),
-                'queue' => $this->base->queue($current, $config),
+                /* Two scans of the whole base: kept for half a minute. */
+                'queue' => $this->base->cachedQueue($current, $config),
             ] : null,
-            /* The ideal day and how far the accounts are into it. */
-            'progress' => $this->progress->today($config),
-            'accounts' => [
-                'total' => $accounts->count(),
-                'taking_part' => $taking->count(),
-                'resting' => $taking->filter(fn (int $id) => self::future(((array) ($states->get($id)?->meta ?? []))['rest_until'] ?? null) !== null)->count(),
-                'held' => $taking->filter(fn (int $id) => $states->has($id) && ! $states->get($id)->is_available)->count(),
-            ],
-            'settings' => $config,
-            'times' => GroupInviteSettings::times($config),
             'last_left_check' => $lastLeft ? [
                 'at' => $lastLeft->created_at,
                 'left' => (int) ($lastLeft->context['left'] ?? 0),
                 'stayed' => (int) ($lastLeft->context['stayed'] ?? 0),
                 'stopped' => (bool) ($lastLeft->context['stopped'] ?? false),
             ] : null,
-            'recent' => $latest !== null ? self::lines($latest, 8) : [],
-        ]);
+        ];
     }
 
     public function settings(): JsonResponse
@@ -262,6 +313,8 @@ final class GroupInviteController extends Controller
         $data = $request->validate([
             'run_id' => ['nullable', 'string', 'max:36'],
             'limit' => ['nullable', 'integer', 'min:20', 'max:1000'],
+            /* Only the lines after this one: a page that follows a live run asks for the new ones alone. */
+            'after' => ['nullable', 'integer', 'min:0'],
         ]);
 
         $starts = TelegramGroupInviteLog::query()
@@ -292,7 +345,7 @@ final class GroupInviteController extends Controller
         return response()->json([
             'run_id' => $runId,
             'runs' => $runs,
-            'lines' => $runId === null ? [] : self::lines($runId, (int) ($data['limit'] ?? 400)),
+            'lines' => $runId === null ? [] : self::lines($runId, (int) ($data['limit'] ?? 400), (int) ($data['after'] ?? 0)),
         ]);
     }
 
@@ -316,10 +369,11 @@ final class GroupInviteController extends Controller
      *
      * @return list<array<string, mixed>>
      */
-    private static function lines(string $runId, int $limit): array
+    private static function lines(string $runId, int $limit, int $after = 0): array
     {
         return TelegramGroupInviteLog::query()
             ->where('run_id', $runId)
+            ->when($after > 0, fn ($query) => $query->where('id', '>', $after))
             ->with(['account:id,phone', 'group:id,title,link'])
             ->latest('id')
             ->limit($limit)

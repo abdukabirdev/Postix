@@ -11,6 +11,7 @@
 
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify } from './group-invites-shared';
+import { stages } from './stages';
 
 /*
  * "Adds nobody": tried at least this many people in the last days and got
@@ -35,7 +36,47 @@ const SORTS = {
     /* The ones that tried enough first, worst share first; then the rest. */
     rate_worst: (a, b) => worstGroup(a) - worstGroup(b) || rateKey(a, 2) - rateKey(b, 2) || b.recent.tried - a.recent.tried,
     not_added_recent: (a, b) => b.recent.not_added - a.recent.not_added,
+    calls_today: (a, b) => b.calls_today - a.calls_today,
+    contacts: (a, b) => b.contacts - a.contacts,
+    not_added: (a, b) => b.not_added - a.not_added,
+    /* Limited by Telegram first, then the ones never asked, the free ones last. */
+    spam: (a, b) => spamRank(a) - spamRank(b),
+    /* Held first, then resting, then ready, the ones left out last. */
+    state: (a, b) => stateRank(a) - stateRank(b),
 };
+
+/* What an account has before its numbers and contacts are in. */
+const NO_NUMBERS = {
+    added_today: 0,
+    lookups_today: 0,
+    added: 0,
+    left: 0,
+    not_added: 0,
+    failed: 0,
+    already: 0,
+    sent: 0,
+    last_stop: null,
+};
+
+const NO_CONTACTS = { contacts: 0, contacts_can: 0, contacts_cannot: 0 };
+
+const noRecent = () => ({ tried: 0, added: 0, not_added: 0 });
+
+function spamRank(account) {
+    return { limited: 0, failed: 1, unknown: 2, free: 4 }[account.spam_check?.status] ?? 3;
+}
+
+function stateRank(account) {
+    if (account.excluded) {
+        return 3;
+    }
+
+    if (account.held) {
+        return 0;
+    }
+
+    return account.rest_until ? 1 : 2;
+}
 
 /* A region's flag from its two letters (regional indicator symbols). */
 export function flag(region) {
@@ -74,6 +115,12 @@ export function groupInvitesAccountsPage(config) {
     return {
         ...inviteHelpers(t),
 
+        /*
+         * Three stages, one after another: who they are and how they stand
+         * (fast), what each got, what its contacts are worth (the slowest).
+         */
+        ...stages({ state: 'loadState', numbers: 'loadNumbers', contacts: 'loadContacts' }),
+
         t,
         endpoints: config.endpoints,
 
@@ -91,6 +138,10 @@ export function groupInvitesAccountsPage(config) {
         view: 'all',
         quality: 'all',
         filters: { search: '', sort: 'id' },
+        /* The rows ticked for an action on several at once, by id. */
+        selected: {},
+        /* The row opened for its details. */
+        opened: null,
         /* The table of how well they add: by country or by age; a row picked narrows the cards to it. */
         statsBy: 'country',
         picked: null,
@@ -99,27 +150,81 @@ export function groupInvitesAccountsPage(config) {
             this.load();
         },
 
+        /* Everything again, stage by stage. `loading` and `loaded` are the first stage's: the list itself. */
         async load() {
             this.loading = true;
             this.error = null;
 
-            try {
-                const json = await requestJson(this.endpoints.index);
-                this.accounts = (json.accounts ?? []).map((account) => ({
-                    ...account,
-                    recent: account.recent ?? { tried: 0, added: 0, not_added: 0 },
-                }));
-                this.limits = json.limits ?? this.limits;
-                this.recentDays = json.recent_days ?? this.recentDays;
-                this.ageBands = json.age_bands ?? this.ageBands;
-                this.spamChecking = !!json.spam_checking;
-                this.spamChecking ? this.startSpamPoll() : this.stopSpamPoll();
-                this.loaded = true;
-            } catch (error) {
-                this.error = error?.message || t.load_failed;
-            } finally {
-                this.loading = false;
+            await this.loadStage('state');
+
+            this.error = this.stages.state.error;
+            this.loaded = this.stages.state.loaded;
+            this.loading = false;
+
+            if (this.loaded) {
+                await this.loadStages(['numbers', 'contacts']);
             }
+        },
+
+        /* Only how the accounts stand: after a button, and while @SpamBot is being asked. */
+        async reloadState() {
+            await this.loadStage('state');
+        },
+
+        async loadState() {
+            const json = await requestJson(`${this.endpoints.index}?part=state`);
+            const before = new Map(this.accounts.map((account) => [account.id, account]));
+
+            /* The numbers and contacts already on the screen stay until their own stages bring new ones. */
+            this.accounts = (json.accounts ?? []).map((account) => ({
+                ...NO_NUMBERS,
+                ...NO_CONTACTS,
+                recent: noRecent(),
+                ...this.kept(before.get(account.id)),
+                ...account,
+            }));
+
+            this.limits = json.limits ?? this.limits;
+            this.recentDays = json.recent_days ?? this.recentDays;
+            this.ageBands = json.age_bands ?? this.ageBands;
+            this.spamChecking = !!json.spam_checking;
+            this.spamChecking ? this.startSpamPoll() : this.stopSpamPoll();
+        },
+
+        kept(account) {
+            if (!account) {
+                return {};
+            }
+
+            const out = { recent: account.recent };
+
+            for (const key of [...Object.keys(NO_NUMBERS), ...Object.keys(NO_CONTACTS)]) {
+                out[key] = account[key];
+            }
+
+            return out;
+        },
+
+        async loadNumbers() {
+            const json = await requestJson(`${this.endpoints.index}?part=numbers`);
+            const numbers = json.numbers ?? {};
+
+            this.accounts.forEach((account) => {
+                Object.assign(account, NO_NUMBERS, { recent: noRecent() }, numbers[account.id] ?? {});
+            });
+        },
+
+        async loadContacts() {
+            const json = await requestJson(`${this.endpoints.index}?part=contacts`);
+            const contacts = json.contacts ?? {};
+
+            this.accounts.forEach((account) => {
+                const own = contacts[account.id];
+
+                account.contacts = own?.total ?? 0;
+                account.contacts_can = own?.can ?? 0;
+                account.contacts_cannot = own?.cannot ?? 0;
+            });
         },
 
         views() {
@@ -130,6 +235,20 @@ export function groupInvitesAccountsPage(config) {
                 { value: 'working', label: `${t.accounts.views.working} · ${count((a) => !a.excluded && !this.sitsOut(a))}` },
                 { value: 'resting', label: `${t.accounts.views.resting} · ${count((a) => !a.excluded && this.sitsOut(a))}` },
                 { value: 'excluded', label: `${t.accounts.views.excluded} · ${count((a) => a.excluded)}` },
+            ];
+        },
+
+        /* The same views as readings at the top of the page: a number and a filter in one. */
+        viewTiles() {
+            const count = (fn) => this.accounts.filter(fn).length;
+
+            return [
+                { value: 'all', label: t.accounts.views.all, total: this.accounts.length },
+                { value: 'working', label: t.accounts.views.working, total: count((a) => !a.excluded && !this.sitsOut(a)) },
+                { value: 'resting', label: t.accounts.views.resting, total: count((a) => !a.excluded && this.sitsOut(a)) },
+                { value: 'limited', label: t.accounts.table.views.limited, total: count((a) => a.spam_check?.status === 'limited') },
+                { value: 'unasked', label: t.accounts.table.views.unasked, total: count((a) => !a.spam_check) },
+                { value: 'excluded', label: t.accounts.views.excluded, total: count((a) => a.excluded) },
             ];
         },
 
@@ -202,11 +321,201 @@ export function groupInvitesAccountsPage(config) {
                     working: !account.excluded && !this.sitsOut(account),
                     resting: !account.excluded && this.sitsOut(account),
                     excluded: account.excluded,
+                    limited: account.spam_check?.status === 'limited',
+                    unasked: !account.spam_check,
                 })[this.view] ?? true)
                 .filter((account) => this.quality === 'all' || this.qualityOf(account) === this.quality)
                 .filter((account) => this.picked === null || this.groupOf(account, this.picked.by) === this.picked.key)
                 .filter((account) => this.matches(account))
                 .sort((a, b) => (SORTS[this.filters.sort] ?? SORTS.id)(a, b) || a.id - b.id);
+        },
+
+        /* A click on a column's head: that order; a second click puts them back in the order they were connected in. */
+        sortBy(key) {
+            this.filters.sort = this.filters.sort === key ? 'id' : key;
+        },
+
+        sortOn(key) {
+            return this.filters.sort === key ? 'desc' : null;
+        },
+
+        /* Ticks: one action on several accounts. The listener is never ticked - it never takes part. */
+        isSelected(account) {
+            return !!this.selected[account.id];
+        },
+
+        tick(account) {
+            if (account.listener) {
+                return;
+            }
+
+            if (this.selected[account.id]) {
+                delete this.selected[account.id];
+            } else {
+                this.selected[account.id] = true;
+            }
+        },
+
+        tickedAccounts() {
+            return this.accounts.filter((account) => this.selected[account.id]);
+        },
+
+        selectedCount() {
+            return Object.keys(this.selected).length;
+        },
+
+        allShownSelected() {
+            const rows = this.shown().filter((account) => !account.listener);
+
+            return rows.length > 0 && rows.every((account) => this.selected[account.id]);
+        },
+
+        tickAll() {
+            const rows = this.shown().filter((account) => !account.listener);
+
+            if (this.allShownSelected()) {
+                rows.forEach((account) => delete this.selected[account.id]);
+            } else {
+                rows.forEach((account) => {
+                    this.selected[account.id] = true;
+                });
+            }
+        },
+
+        clearSelected() {
+            this.selected = {};
+        },
+
+        /* In or out of the invites for every ticked account, one request after another. */
+        async bulkExclude(excluded) {
+            if (this.busy) {
+                return;
+            }
+
+            const rows = this.tickedAccounts().filter((account) => account.excluded !== excluded);
+
+            this.busy = 'bulk';
+
+            let done = 0;
+
+            try {
+                for (const account of rows) {
+                    const json = await requestJson(`${this.endpoints.index}/${account.id}`, 'PATCH', { excluded });
+                    account.excluded = json.excluded;
+                    done++;
+                }
+
+                notify(t.accounts.table.bulk.done.replace(':n', done));
+                this.clearSelected();
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = null;
+            }
+        },
+
+        /* Off the pause and off the rest for every ticked account that sits out. */
+        async bulkEnable() {
+            if (this.busy) {
+                return;
+            }
+
+            const rows = this.tickedAccounts().filter((account) => this.canEnable(account));
+
+            this.busy = 'bulk';
+
+            let done = 0;
+
+            try {
+                for (const account of rows) {
+                    await requestJson(`${this.endpoints.index}/${account.id}/enable`, 'POST', {});
+                    done++;
+                }
+
+                notify(t.accounts.table.bulk.done.replace(':n', done));
+                this.clearSelected();
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = null;
+                await this.reloadState();
+            }
+        },
+
+        bulkCanEnable() {
+            return this.tickedAccounts().some((account) => this.canEnable(account));
+        },
+
+        open(account) {
+            this.opened = this.opened === account.id ? null : account.id;
+        },
+
+        stateTone(account) {
+            if (account.excluded) {
+                return 'off';
+            }
+
+            if (account.held) {
+                return 'bad';
+            }
+
+            return account.rest_until ? 'warn' : 'ok';
+        },
+
+        /* The state in two or three words for the table; the whole line is in the row's details. */
+        stateShort(account) {
+            if (account.excluded) {
+                return account.listener ? t.accounts.table.states.listener : t.accounts.out;
+            }
+
+            if (account.held) {
+                return t.accounts.held;
+            }
+
+            return account.rest_until ? t.accounts.table.states.resting : t.accounts.table.states.ready;
+        },
+
+        /* Under the state: until when it rests. */
+        stateSub(account) {
+            return !account.excluded && !account.held && account.rest_until
+                ? t.accounts.table.until.replace(':time', this.time(account.rest_until))
+                : '';
+        },
+
+        /* Under the account's number: its id, calling code and age, short. */
+        accountSub(account) {
+            return [`#${account.id}`, account.country?.code ? `+${account.country.code}` : '', t.accounts.ages[account.age]].filter(Boolean).join(' · ');
+        },
+
+        /* Under the @SpamBot tag: until when it is limited, or when it was asked. */
+        spamSub(account) {
+            const check = account.spam_check;
+
+            if (!check) {
+                return '';
+            }
+
+            return check.status === 'limited' && check.until
+                ? t.accounts.table.until.replace(':time', this.time(check.until))
+                : t.accounts.spam_asked_at.replace(':time', this.time(check.at));
+        },
+
+        spamShort(account) {
+            const check = account.spam_check;
+
+            if (!check) {
+                return t.accounts.table.spam.never;
+            }
+
+            if (check.status === 'limited') {
+                return t.accounts.table.spam.limited;
+            }
+
+            return t.accounts.table.spam[check.status] ?? t.accounts.table.spam.unknown;
+        },
+
+        spamTag(account) {
+            return { free: 'ok', limited: 'bad', failed: 'warn', unknown: 'warn' }[account.spam_check?.status] ?? '';
         },
 
         recentLine(account) {
@@ -409,7 +718,7 @@ export function groupInvitesAccountsPage(config) {
             try {
                 const json = await requestJson(`${this.endpoints.index}/${account.id}/enable`, 'POST', {});
                 notify(json.message);
-                await this.load();
+                await this.reloadState();
             } catch (error) {
                 notify(error?.message || t.load_failed, false);
             } finally {
@@ -420,8 +729,8 @@ export function groupInvitesAccountsPage(config) {
         /* The asking goes on the server; while it does, the page looks again every few seconds. */
         startSpamPoll() {
             this.spamPoll ??= setInterval(() => {
-                if (document.visibilityState === 'visible' && !this.loading) {
-                    this.load();
+                if (document.visibilityState === 'visible' && !this.stages.state.loading) {
+                    this.reloadState();
                 }
             }, 5000);
         },
@@ -435,6 +744,7 @@ export function groupInvitesAccountsPage(config) {
 
         destroy() {
             this.stopSpamPoll();
+            this.stopStages();
         },
 
         async askSpam(account) {

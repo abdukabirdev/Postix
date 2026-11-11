@@ -9,6 +9,7 @@
         endpoints: { index: @js(route('api.telegram.system')) },
         translations: @js(__('telegram.system')),
         ui: @js(__('telegram.ui')),
+        part: @js($part),
     })"
 >
     <x-driver-check.shell>
@@ -119,52 +120,59 @@
 
         @if ($part === 'alerts')
         {{-- Problems told to the developer --}}
-        <x-driver-check.surface class="p-4">
-            <div class="flex flex-col gap-3">
-                <div x-show="!alerts.configured" x-cloak>
-                    <p
-                        x-show="!alerts.configured"
-                        x-cloak
-                        class="mt-1 text-[12px] text-warning-600 dark:text-warning-400"
-                        x-text="translations.alerts.not_configured"
-                    ></p>
+        <p x-show="!alerts.configured" x-cloak class="rounded-lg bg-warning-50 px-3 py-2 text-[12.5px] text-warning-700 dark:bg-warning-500/10 dark:text-warning-400" x-text="translations.alerts.not_configured"></p>
+
+        <x-driver-check.block>
+            <div class="dc-toolbar">
+                <div class="dc-toolbar__grow">
+                    <x-driver-check.search model="filters.search" :placeholder="__('telegram.system.alerts.search')" debounce="400ms" />
                 </div>
 
-                <div class="flex flex-col divide-y divide-gray-100 dark:divide-gray-800">
-                    <template x-for="alert in alerts.recent" :key="alert.id">
-                        <div class="py-2.5">
-                            <div class="flex items-start justify-between gap-3">
-                                <p class="dc-break text-[13px] font-medium text-gray-900 dark:text-white" x-text="alert.title"></p>
-                                <span
-                                    class="shrink-0 text-[11.5px] text-gray-500 dark:text-gray-400"
-                                    :title="date(alert.last_seen_at)"
-                                    x-text="relative(alert.last_seen_at)"
-                                ></span>
-                            </div>
-                            <p
-                                x-show="alert.details"
-                                class="dc-break mt-0.5 line-clamp-3 text-[12px] text-gray-600 dark:text-gray-300"
-                                x-text="alert.details"
-                            ></p>
-                            <p class="mt-0.5 text-[11.5px] text-gray-500 dark:text-gray-400">
-                                <span x-text="alert.kind"></span>
-                                <span x-show="alert.listener_key" x-text="' · ' + alert.listener_key"></span>
-                                <span x-show="alert.occurrences > 1" x-text="' · ×' + alert.occurrences"></span>
-                                <span x-show="alert.notified" x-text="' · ' + translations.alerts.sent"></span>
-                                <span x-show="!alert.notified" x-text="' · ' + translations.alerts.not_sent"></span>
-                            </p>
-                        </div>
+                <x-driver-check.select x-model="filters.kind" x-on:change="load()" class="!w-56" aria-label="{{ __('telegram.system.alerts.kind') }}">
+                    <option value="">{{ __('telegram.system.alerts.all_kinds') }}</option>
+                    <template x-for="kind in alerts.kinds" :key="kind">
+                        <option :value="kind" x-text="kind" :selected="kind === filters.kind"></option>
                     </template>
+                </x-driver-check.select>
 
-                    <p
-                        x-show="!loading && alerts.recent.length === 0"
-                        x-cloak
-                        class="py-4 text-center text-[13px] text-gray-500 dark:text-gray-400"
-                        x-text="translations.alerts.empty"
-                    ></p>
+                <div class="dc-toolbar__end">
+                    <x-driver-check.select x-model.number="filters.limit" x-on:change="load()" class="!w-auto" aria-label="{{ __('telegram.system.alerts.limit') }}" title="{{ __('telegram.system.alerts.limit') }}">
+                        @foreach ([20, 50, 100, 200] as $option)
+                            <option value="{{ $option }}">{{ $option }}</option>
+                        @endforeach
+                    </x-driver-check.select>
                 </div>
             </div>
-        </x-driver-check.surface>
+
+            <div x-show="loading && alerts.recent.length === 0" class="dc-block__wait" aria-hidden="true">
+                @foreach ([72, 54, 86, 40] as $width)
+                    <div class="dc-skeleton h-3 rounded bg-gray-100 dark:bg-white/[0.06]" style="width: {{ $width }}%"></div>
+                @endforeach
+            </div>
+
+            <p x-show="!loading && alerts.recent.length === 0" x-cloak class="dc-none" x-text="translations.alerts.empty"></p>
+
+            <ul class="divide-y divide-gray-100 dark:divide-gray-800">
+                <template x-for="alert in alerts.recent" :key="alert.id">
+                    <li class="px-4 py-2.5 hover:bg-gray-25 dark:hover:bg-white/[0.02]">
+                        <button type="button" class="block w-full text-left" x-on:click="toggle(alert)">
+                            <span class="flex items-start justify-between gap-3">
+                                <span class="dc-break text-[13px] font-medium text-gray-900 dark:text-white" x-text="alert.title"></span>
+                                <span class="shrink-0 text-[11.5px] text-gray-500 dark:text-gray-400" :title="date(alert.last_seen_at)" x-text="relative(alert.last_seen_at)"></span>
+                            </span>
+                            <span x-show="alert.details" class="dc-break mt-0.5 block whitespace-pre-line text-[12px] text-gray-600 dark:text-gray-300" :class="!opened[alert.id] && 'line-clamp-2'" x-text="alert.details"></span>
+                        </button>
+                        <p class="mt-1 flex flex-wrap items-center gap-1.5 text-[11.5px] text-gray-500 dark:text-gray-400">
+                            <span class="dc-tag" x-text="alert.kind"></span>
+                            <span x-show="alert.listener_key" x-text="alert.listener_key"></span>
+                            <span x-show="alert.occurrences > 1" class="dc-tag" data-tone="warn" x-text="'×' + alert.occurrences"></span>
+                            <span class="dc-tag" :data-tone="alert.notified ? 'ok' : 'warn'" x-text="alert.notified ? translations.alerts.sent : translations.alerts.not_sent"></span>
+                            <span x-show="alert.notify_error" class="dc-break text-error-600 dark:text-error-400" x-text="alert.notify_error"></span>
+                        </p>
+                    </li>
+                </template>
+            </ul>
+        </x-driver-check.block>
         @endif
 
     </x-driver-check.shell>

@@ -6,12 +6,17 @@
 | What runs now and the buttons that start and stop it; the base in numbers
 | (can be added, cannot, tried without an answer, never tried - how many of
 | them are processed); what our groups got and lost; today; how the
-| accounts stand; the last lines of the run log. Polls while a run goes on.
+| accounts stand; the last lines of the run log.
+|
+| Five stages, the light first: what runs now (and the log), the settings and
+| accounts, the groups and today, the base, the day. While a run goes on only
+| the first is asked every few seconds; the heavy ones every half a minute.
 |
 */
 
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify, runState } from './group-invites-shared';
+import { stages, everyVisible } from './stages';
 
 const FLAGS = ['can', 'cannot', 'tried', 'untried'];
 
@@ -21,16 +26,33 @@ export function groupInvitesPage(config) {
     return {
         ...inviteHelpers(t),
         ...runState(t),
+        ...stages({ now: 'loadNow', light: 'loadLight', groups: 'loadGroups', base: 'loadBase', day: 'loadDay' }),
 
         t,
         endpoints: config.endpoints,
         links: config.links,
+        /* A card on the control panel asks for fewer stages than the page. */
+        stageList: config.stageList ?? ['now', 'light', 'groups', 'base', 'day'],
 
         loading: false,
         busy: false,
         error: null,
-        data: null,
+        /* Filled stage by stage; empty until its stage is in, so that the page can be drawn at once. */
+        data: {
+            base: null,
+            progress: null,
+            today: { added: 0, calls: 0, lookups: 0, stops: 0 },
+            added: { total: 0, still: 0, left: 0, not_added: 0, failed: 0, already: 0, sent: 0 },
+            groups: [],
+            current: null,
+            accounts: { total: 0, taking_part: 0, resting: 0, held: 0 },
+            settings: null,
+            times: null,
+            last_left_check: null,
+            recent: [],
+        },
         poll: null,
+        slowPoll: null,
 
         init() {
             this.load();
@@ -38,39 +60,78 @@ export function groupInvitesPage(config) {
 
         destroy() {
             this.stopPoll();
+            this.stopStages();
         },
 
+        /* Every stage again, in order. `loading` is up until the first one is in. */
         async load() {
-            this.loading = this.data === null;
+            this.loading = !this.stages.now.loaded;
             this.error = null;
 
-            try {
-                const json = await requestJson(this.endpoints.show);
+            await this.loadStage('now');
 
-                this.running = !!json.running;
-                this.now = json.now ?? null;
-                this.fetchedAt = Date.now();
-                this.tick = this.fetchedAt;
-                this.data = json;
+            this.error = this.stages.now.error;
+            this.loading = false;
 
-                this.running ? this.startPoll() : this.stopPoll();
-            } catch (error) {
-                this.error = error?.message || t.load_failed;
-            } finally {
-                this.loading = false;
+            if (!this.stages.now.error) {
+                await this.loadStages(this.stageList.filter((name) => name !== 'now'));
             }
         },
 
+        async loadNow() {
+            const json = await requestJson(`${this.endpoints.show}?part=now`);
+            const ended = this.running && !json.running;
+
+            this.running = !!json.running;
+            this.now = json.now ?? null;
+            this.data.recent = json.recent ?? [];
+            this.fetchedAt = Date.now();
+            this.tick = this.fetchedAt;
+
+            this.running ? this.startPoll() : this.stopPoll();
+
+            /* The run just ended: what it did to the numbers is read once more. */
+            if (ended) {
+                this.loadStages(this.stageList.filter((name) => ['groups', 'base', 'day'].includes(name)));
+            }
+        },
+
+        async loadLight() {
+            Object.assign(this.data, await requestJson(`${this.endpoints.show}?part=light`));
+        },
+
+        async loadGroups() {
+            Object.assign(this.data, await requestJson(`${this.endpoints.show}?part=groups`));
+        },
+
+        async loadBase() {
+            Object.assign(this.data, await requestJson(`${this.endpoints.show}?part=base`));
+        },
+
+        async loadDay() {
+            Object.assign(this.data, await requestJson(`${this.endpoints.show}?part=day`));
+        },
+
         startPoll() {
-            this.poll ??= setInterval(() => this.load(), 4000);
+            /* The run itself every few seconds, what it did to the numbers every half a minute. */
+            this.poll ??= everyVisible(4000, () => {
+                if (!this.stages.now.loading) {
+                    this.loadStage('now');
+                }
+            });
+            this.slowPoll ??= everyVisible(30000, () => {
+                if (!this.anyStageLoading()) {
+                    this.loadStages(this.stageList.filter((name) => ['groups', 'day'].includes(name)));
+                }
+            });
             this.startTicker();
         },
 
         stopPoll() {
-            if (this.poll) {
-                clearInterval(this.poll);
-                this.poll = null;
-            }
+            this.poll?.();
+            this.poll = null;
+            this.slowPoll?.();
+            this.slowPoll = null;
 
             this.stopTicker();
         },
@@ -87,6 +148,7 @@ export function groupInvitesPage(config) {
                 notify(json.message);
                 this.running = true;
                 this.startPoll();
+                this.loadStage('now');
             } catch (error) {
                 notify(error?.message || t.load_failed, false);
             } finally {
@@ -134,7 +196,7 @@ export function groupInvitesPage(config) {
             try {
                 const json = await requestJson(this.endpoints.stop, 'POST', {});
                 notify(json.message);
-                await this.load();
+                await this.loadStage('now');
             } catch (error) {
                 notify(error?.message || t.load_failed, false);
             } finally {

@@ -33,7 +33,7 @@ final class DriverCheckQueueMonitor
     /**
      * @return array<string, mixed>
      */
-    public function summary(): array
+    public function summary(bool $withClasses = true): array
     {
         $now = time();
         $stuckBefore = $now - $this->retryAfter();
@@ -101,7 +101,8 @@ final class DriverCheckQueueMonitor
                 'last_failed' => $this->withIso($worker['last_failed']),
             ],
             'queues' => $queues,
-            'classes' => $this->classes($now),
+            /* What is waiting by job class reads the payload of every job: the page asks for it apart (classesNow). */
+            ...($withClasses ? ['classes' => $this->classes($now)] : []),
             'failed' => [
                 'total' => $this->failedJobs()->count(),
                 'last_day' => $this->failedJobs()
@@ -300,6 +301,14 @@ final class DriverCheckQueueMonitor
         ]);
 
         return $count;
+    }
+
+    /**
+     * @return list<array<string, mixed>>
+     */
+    public function classesNow(): array
+    {
+        return $this->classes(time());
     }
 
     /**

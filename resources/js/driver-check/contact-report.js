@@ -112,7 +112,11 @@ export function contactReportPage(config) {
         dash: EM_DASH,
 
         init() {
-            this.initList();
+            /* The runs list belongs to the runs page: the overview and the control card do not show it. */
+            if (config.part === 'runs') {
+                this.initList();
+            }
+
             this.loadReport();
         },
 
@@ -155,7 +159,7 @@ export function contactReportPage(config) {
 
         /** One look: the report, and the history unless the reader scrolled down it. */
         async tick() {
-            if (!this.appended && !this.loading) {
+            if (config.part === 'runs' && !this.appended && !this.loading) {
                 await this.load();
             }
 

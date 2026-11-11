@@ -2634,6 +2634,10 @@ return [
             'sent' => 'sent',
             'not_sent' => 'not sent',
             'empty' => 'No problems so far',
+            'search' => 'Words from the title or the text',
+            'all_kinds' => 'Any kind',
+            'kind' => 'Kind',
+            'limit' => 'How many to show',
         ],
     ],
 

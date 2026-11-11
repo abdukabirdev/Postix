@@ -33,9 +33,14 @@ export function groupInvitesPeoplePage(config) {
         error: null,
         rows: [],
         meta: null,
+        /* How many the filters match: counted apart from the list, it comes after it. */
+        total: null,
+        totalLoading: false,
         counts: null,
         group: null,
         groups: [],
+        metaGroupId: undefined,
+        perPage: 30,
 
         filters: Object.fromEntries(FILTERS.map((key) => [key, query.get(key) ?? ''])),
 
@@ -43,8 +48,12 @@ export function groupInvitesPeoplePage(config) {
             this.load();
         },
 
-        url(page = 1) {
-            const params = new URLSearchParams({ page: String(page), per_page: '30' });
+        url(page = 1, part = '') {
+            const params = new URLSearchParams({ page: String(page), per_page: String(this.perPage) });
+
+            if (part) {
+                params.set('part', part);
+            }
 
             FILTERS.forEach((key) => {
                 const value = String(this.filters[key] ?? '').trim();
@@ -74,6 +83,7 @@ export function groupInvitesPeoplePage(config) {
             window.history.replaceState(null, '', window.location.pathname + (search ? `?${search}` : ''));
         },
 
+        /* The list comes first; the numbers (where people stand, the groups, how many match) after it. */
         async load(more = false) {
             if (this.loading) {
                 return;
@@ -88,9 +98,6 @@ export function groupInvitesPeoplePage(config) {
 
                 this.rows = more ? [...this.rows, ...(json.data ?? [])] : (json.data ?? []);
                 this.meta = json.meta;
-                this.counts = json.counts ?? this.counts;
-                this.group = json.group;
-                this.groups = json.groups ?? [];
 
                 if (!more) {
                     this.remember();
@@ -100,10 +107,57 @@ export function groupInvitesPeoplePage(config) {
             } finally {
                 this.loading = false;
             }
+
+            if (!more && !this.error) {
+                this.loadTotal();
+
+                /* The numbers of the base and the groups do not change with a filter - but the chosen group's name does. */
+                if (this.counts === null || this.metaGroupId !== this.filters.group_id) {
+                    this.loadMeta();
+                }
+            }
+        },
+
+        async loadMeta() {
+            this.metaGroupId = this.filters.group_id;
+
+            try {
+                const json = await requestJson(this.url(1, 'meta'));
+
+                this.counts = json.counts ?? this.counts;
+                this.group = json.group;
+                this.groups = json.groups ?? [];
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            }
+        },
+
+        async loadTotal() {
+            const asked = this.url(1, 'total');
+
+            this.totalLoading = true;
+            this.total = null;
+
+            try {
+                const json = await requestJson(asked);
+
+                /* A newer filter was chosen while this was counted: its answer is not for this page. */
+                if (asked === this.url(1, 'total')) {
+                    this.total = json.total;
+                }
+            } catch (error) {
+                this.total = null;
+            } finally {
+                this.totalLoading = false;
+            }
+        },
+
+        changePerPage() {
+            this.load();
         },
 
         get hasMore() {
-            return this.meta !== null && this.meta.current_page < this.meta.last_page;
+            return this.meta !== null && !!this.meta.has_more;
         },
 
         flagChips() {
@@ -171,6 +225,7 @@ export function groupInvitesPeoplePage(config) {
             try {
                 const json = await requestJson(this.endpoints.reset, 'POST', {});
                 notify(json.message);
+                this.counts = null;
                 await this.load();
             } catch (error) {
                 notify(error?.message || t.load_failed, false);

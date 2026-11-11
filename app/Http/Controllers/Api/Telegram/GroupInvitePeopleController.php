@@ -29,6 +29,14 @@ final class GroupInvitePeopleController extends Controller
         private readonly GroupInviteBase $base,
     ) {}
 
+    /**
+     * The page asks in parts, so that the list is on the screen before the
+     * heavy numbers are counted:
+     *
+     *   (none)  the rows of one page; "has more" is known without counting
+     *   meta    where people stand in numbers (kept for half a minute) and the groups
+     *   total   how many people the filters match - a count over the whole base
+     */
     public function index(Request $request): JsonResponse
     {
         $data = $request->validate([
@@ -38,13 +46,71 @@ final class GroupInvitePeopleController extends Controller
             'status' => ['nullable', 'in:' . implode(',', self::GROUP_STATUSES) . ',added'],
             'search' => ['nullable', 'string', 'max:100'],
             'per_page' => ['nullable', 'integer', 'min:10', 'max:100'],
+            'part' => ['nullable', 'in:meta,total'],
         ]);
 
         $config = $this->settings->current();
         $groupId = filled($data['group_id'] ?? null) ? (int) $data['group_id'] : null;
+
+        if (($data['part'] ?? null) === 'meta') {
+            $group = $groupId !== null ? TelegramInviteGroup::query()->withTrashed()->find($groupId) : null;
+
+            return response()->json([
+                'counts' => $this->base->cachedCounts($config),
+                'group' => $group ? [
+                    'id' => $group->id,
+                    'title' => $group->title ?: $group->link,
+                    'archived' => $group->trashed(),
+                ] : null,
+                'groups' => TelegramInviteGroup::query()
+                    ->withTrashed()
+                    ->orderBy('id')
+                    ->get(['id', 'title', 'link', 'deleted_at'])
+                    ->map(fn (TelegramInviteGroup $g) => ['id' => $g->id, 'title' => $g->title ?: $g->link, 'archived' => $g->trashed()])
+                    ->values(),
+            ]);
+        }
+
+        $query = $this->filtered($data, $config);
+
+        if (($data['part'] ?? null) === 'total') {
+            return response()->json(['total' => $this->total($data, $query, $config)]);
+        }
+
+        $perPage = (int) ($data['per_page'] ?? 30);
+        $current = max(1, $request->integer('page', 1));
+
+        /* One more than the page: whether there is a next one, without counting the base. */
+        $rows = $query
+            ->with(['groupInvites' => fn ($q) => $q
+                ->with(['group:id,title,link,deleted_at', 'account:id,phone'])
+                ->orderByDesc('id')])
+            /* The newest first by id: a big base sorts by its key, never by a column it would have to scan. */
+            ->orderByDesc('id')
+            ->offset(($current - 1) * $perPage)
+            ->limit($perPage + 1)
+            ->get();
+
+        return response()->json([
+            'data' => $rows->take($perPage)->map(fn (TelegramScrapedUser $user) => self::row($user))->values(),
+            'meta' => [
+                'current_page' => $current,
+                'has_more' => $rows->count() > $perPage,
+                'per_page' => $perPage,
+            ],
+        ]);
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $config
+     */
+    private function filtered(array $data, array $config)
+    {
+        $groupId = filled($data['group_id'] ?? null) ? (int) $data['group_id'] : null;
         $status = $data['status'] ?? null;
 
-        $query = $this->base->people()
+        return $this->base->people()
             ->when(filled($data['flag'] ?? null), fn ($q) => $this->base->whereFlag($q, $data['flag']))
             ->when(filled($data['reach'] ?? null), fn ($q) => $this->base->whereReachable($q, (bool) $config['use_usernames'], $data['reach'] === 'reachable'))
             ->when($groupId !== null, fn ($q) => $q->whereHas('groupInvites', fn ($q) => $q
@@ -67,56 +133,33 @@ final class GroupInvitePeopleController extends Controller
                     }
                 });
             });
+    }
 
-        $counts = $this->base->cachedCounts($config);
-        $perPage = (int) ($data['per_page'] ?? 30);
-        $current = max(1, $request->integer('page', 1));
-
-        /* Only "where they stand" chosen: the number is already counted. Anything narrower is counted here. */
-        $narrowed = $groupId !== null || $status !== null || filled($data['search'] ?? null);
+    /**
+     * How many people the filters match. Only "where they stand" chosen:
+     * the number is already counted. Anything narrower is counted here.
+     *
+     * @param array<string, mixed> $data
+     * @param array<string, mixed> $config
+     */
+    private function total(array $data, $query, array $config): int
+    {
+        $narrowed = filled($data['group_id'] ?? null) || filled($data['status'] ?? null) || filled($data['search'] ?? null);
         $flag = $data['flag'] ?? null;
         $reach = $data['reach'] ?? null;
 
-        $total = match (true) {
-            $narrowed => (clone $query)->count(),
+        if ($narrowed || ($flag !== null && $flag !== '' && $reach !== null && $flag !== GroupInviteBase::UNTRIED)) {
+            return (clone $query)->count();
+        }
+
+        $counts = $this->base->cachedCounts($config);
+
+        return match (true) {
             $flag === GroupInviteBase::UNTRIED && $reach !== null => $counts[$reach === 'reachable' ? 'untried_reachable' : 'untried_unreachable'],
             filled($flag) && $reach === null => $counts[$flag],
             ! filled($flag) && $reach === null => $counts['total'],
             default => (clone $query)->count(),
         };
-
-        /* The newest first by id: a big base sorts by its key, never by a column it would have to scan. */
-        $rows = $query
-            ->with(['groupInvites' => fn ($q) => $q
-                ->with(['group:id,title,link,deleted_at', 'account:id,phone'])
-                ->orderByDesc('id')])
-            ->orderByDesc('id')
-            ->forPage($current, $perPage)
-            ->get();
-
-        $group = $groupId !== null ? TelegramInviteGroup::query()->withTrashed()->find($groupId) : null;
-
-        return response()->json([
-            'data' => $rows->map(fn (TelegramScrapedUser $user) => self::row($user))->values(),
-            'meta' => [
-                'current_page' => $current,
-                'last_page' => max(1, (int) ceil($total / $perPage)),
-                'per_page' => $perPage,
-                'total' => $total,
-            ],
-            'counts' => $counts,
-            'group' => $group ? [
-                'id' => $group->id,
-                'title' => $group->title ?: $group->link,
-                'archived' => $group->trashed(),
-            ] : null,
-            'groups' => TelegramInviteGroup::query()
-                ->withTrashed()
-                ->orderBy('id')
-                ->get(['id', 'title', 'link', 'deleted_at'])
-                ->map(fn (TelegramInviteGroup $g) => ['id' => $g->id, 'title' => $g->title ?: $g->link, 'archived' => $g->trashed()])
-                ->values(),
-        ]);
     }
 
     /**

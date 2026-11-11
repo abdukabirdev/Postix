@@ -10,6 +10,7 @@
 
 import { createListPage } from './list-page';
 import { EM_DASH } from './format';
+import { requestJson } from './monitoring';
 
 const STATUS_TONES = {
     added: 'bg-success-50 text-success-700 dark:bg-success-500/10 dark:text-success-400',
@@ -77,6 +78,20 @@ export function contactsPage(config) {
 
         init() {
             this.initList();
+            this.loadReadings();
+        },
+
+        /* The readings and the filters' choices come apart from the list, once: they do not change with a filter. */
+        async loadReadings() {
+            const asked = (part) => requestJson(`${config.endpoints.index}?part=${part}`);
+
+            asked('stats').then((json) => {
+                this.stats = json.stats ?? this.stats;
+            }).catch(() => {});
+
+            asked('options').then((json) => {
+                this.options = json.options ?? this.options;
+            }).catch(() => {});
         },
 
         /** People still without a saved contact: nobody claimed them, or the claim is on its way. */

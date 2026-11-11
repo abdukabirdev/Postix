@@ -191,7 +191,7 @@
                     {{ __('telegram.queue.classes.title') }}
                 </h2>
 
-                <p x-show="summary && classes().length === 0" x-cloak class="px-4 py-8 text-center text-[13px] text-gray-500 dark:text-gray-400" x-text="t.classes.empty"></p>
+                <p x-show="classesLoaded && classes().length === 0" x-cloak class="px-4 py-8 text-center text-[13px] text-gray-500 dark:text-gray-400" x-text="t.classes.empty"></p>
 
                 <table x-show="classes().length > 0" class="w-full text-left text-[13px]">
                     <thead class="dc-thead border-b border-gray-100 bg-gray-25 text-[10.5px] uppercase tracking-[0.08em] text-gray-500 dark:border-gray-800 dark:bg-white/[0.015] dark:text-gray-400">

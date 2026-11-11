@@ -37,7 +37,7 @@
             <div class="flex flex-col gap-3 border-b border-gray-100 px-4 py-3 dark:border-gray-800">
                 <div class="flex flex-wrap items-center justify-between gap-2">
                     <h2 class="text-sm font-semibold text-gray-900 dark:text-white">
-                        <span x-text="t.people.found.replace(':n', number(meta?.total ?? 0)).replace(':all', number(total))"></span>
+                        <span x-text="t.people.found.replace(':n', total === null ? '…' : number(total)).replace(':all', number(all))"></span>
                     </h2>
 
                     {{-- Opened from a group: its people only --}}

@@ -12,6 +12,7 @@
         },
         translations: @js(__('telegram.listeners.processes')),
         states: @js(__('telegram.listeners.state')),
+        part: @js($part),
     })"
 >
     <x-driver-check.shell>
@@ -166,7 +167,39 @@
         >
         <x-driver-check.error-alert :title="__('telegram.watchdog.errors.title')" />
 
-        <h2 class="mt-1 text-sm font-semibold text-gray-900 dark:text-white">{{ __('telegram.listeners.processes.driver_check_details') }}</h2>
+        {{-- The buttons the page had no room for: look again, start, restart the listener, stop everything --}}
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <h2 class="text-sm font-semibold text-gray-900 dark:text-white">{{ __('telegram.listeners.processes.driver_check_details') }}</h2>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <x-driver-check.button size="icon" x-on:click="load()" ::disabled="loading" :title="__('telegram.ui.refresh')" :aria-label="__('telegram.ui.refresh')">
+                    <x-driver-check.icon name="refresh" class="h-4 w-4" ::class="loading && 'animate-spin'" />
+                </x-driver-check.button>
+                <x-driver-check.button icon="refresh" x-on:click="askConfirm('restart')" ::disabled="!!busy || !status?.can_signal">
+                    {{ __('telegram.watchdog.actions.restart') }}
+                </x-driver-check.button>
+                <x-driver-check.button variant="danger" icon="stop" x-on:click="askConfirm('stop')" ::disabled="!!busy || !status?.can_signal">
+                    {{ __('telegram.watchdog.actions.stop') }}
+                </x-driver-check.button>
+                <x-driver-check.button variant="primary" icon="play" x-on:click="start()" ::disabled="!!busy">
+                    {{ __('telegram.watchdog.actions.start') }}
+                </x-driver-check.button>
+            </div>
+        </div>
+
+        <x-driver-check.modal open="confirmOpen" close="closeConfirm()" size="sm:max-w-md">
+            <x-slot:heading>
+                <span x-text="confirmAction === 'stop' ? t.confirm.stop_title : t.confirm.restart_title"></span>
+            </x-slot:heading>
+
+            <p class="text-[13px] leading-relaxed text-gray-600 dark:text-gray-300" x-text="confirmAction === 'stop' ? t.confirm.stop_text : t.confirm.restart_text"></p>
+            <p x-show="confirmError" x-cloak class="dc-break mt-3 rounded-lg bg-error-50 px-3 py-2.5 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400" x-text="confirmError"></p>
+
+            <x-slot:footer>
+                <x-driver-check.button x-on:click="closeConfirm()" ::disabled="!!busy">{{ __('telegram.ui.cancel') }}</x-driver-check.button>
+                <x-driver-check.button variant="danger" x-on:click="confirm()" ::disabled="!!busy">{{ __('telegram.watchdog.confirm.confirm') }}</x-driver-check.button>
+            </x-slot:footer>
+        </x-driver-check.modal>
 
         {{-- First load --}}
         <div x-show="!status && loading" class="flex flex-col gap-5">

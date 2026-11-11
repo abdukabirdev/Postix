@@ -59,7 +59,11 @@ export function groupInvitesBotPage(config) {
 
         init() {
             this.load();
-            this.loadGroups();
+
+            /* The groups are asked for live, one call to Telegram each: only for a page that shows them. */
+            if (config.withGroups) {
+                this.loadGroups();
+            }
 
             this.timer = setInterval(() => {
                 if (document.visibilityState === 'visible' && !this.busy) {
@@ -118,7 +122,10 @@ export function groupInvitesBotPage(config) {
 
         refresh() {
             this.load();
-            this.loadGroups();
+
+            if (config.withGroups) {
+                this.loadGroups();
+            }
         },
 
         get bot() {

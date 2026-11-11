@@ -115,7 +115,7 @@
             <div
                 x-data="dcContactReport({
                     endpoints: {
-                        report: @js(route('api.telegram.contact-sync.report') . '?days=14'),
+                        report: @js(route('api.telegram.contact-sync.report') . '?days=3'),
                         runs: @js(route('api.telegram.contact-sync.runs')),
                         run: @js(route('api.telegram.contact-sync.run')),
                         stop: @js(route('api.telegram.contact-sync.stop')),
@@ -205,6 +205,7 @@
                         people: @js(route('driver-check.group-invites.people')),
                     },
                     translations: @js(__('driver_check.invites')),
+                    stageList: ['now', 'light', 'groups'],
                 })"
             >
                 <x-driver-check.surface class="flex h-full flex-col overflow-hidden">
@@ -217,10 +218,10 @@
                     </div>
 
                     <div class="p-4">
-                        <div x-show="!data && loading" class="dc-skeleton h-16 rounded-xl bg-gray-100 dark:bg-white/[0.06]"></div>
+                        <div x-show="!stages.now.loaded && loading" class="dc-skeleton h-16 rounded-xl bg-gray-100 dark:bg-white/[0.06]"></div>
                         <p x-show="error" x-cloak class="dc-break rounded-lg bg-error-50 px-3 py-2 text-xs text-error-600 dark:bg-error-500/10 dark:text-error-400" x-text="error"></p>
 
-                        <template x-if="data">
+                        <template x-if="stages.now.loaded">
                             <div>
                                 <div class="flex items-center gap-2">
                                     <span class="dc-dot" :class="running ? 'animate-pulse text-success-500' : 'text-gray-300 dark:text-gray-600'"></span>
@@ -256,7 +257,7 @@
                     </div>
 
                     <div class="{{ $cardFoot }}">
-                        <template x-if="data && !running">
+                        <template x-if="stages.now.loaded && !running">
                             <div class="flex flex-wrap gap-2">
                                 <x-driver-check.button size="sm" icon="check-circle" x-on:click="check()" ::disabled="busy || data.added.sent === 0" :title="__('driver_check.invites.check_hint')">
                                     <span x-text="t.check + (data.added.sent > 0 ? ' · ' + number(data.added.sent) : '')"></span>
@@ -270,7 +271,7 @@
                             </div>
                         </template>
 
-                        <x-driver-check.button size="sm" variant="primary" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy || !data">
+                        <x-driver-check.button size="sm" variant="primary" icon="play" x-show="!running" x-on:click="run()" ::disabled="busy || !stages.now.loaded">
                             {{ __('driver_check.invites.run') }}
                         </x-driver-check.button>
                         <x-driver-check.button size="sm" variant="danger" icon="stop" x-show="running" x-cloak x-on:click="stop()" ::disabled="busy || now?.stop_asked">

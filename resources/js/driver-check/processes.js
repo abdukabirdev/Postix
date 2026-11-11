@@ -59,9 +59,18 @@ export function listenerProcessesBlock(config) {
         confirmError: null,
 
         init() {
+            /* The Driver Check page has a component of its own inside: it does not show the listeners' list. */
+            if (config.part === 'driver-check') {
+                return;
+            }
+
             this.load();
 
-            setInterval(() => this.load(true), 10000);
+            setInterval(() => {
+                if (document.visibilityState === 'visible') {
+                    this.load(true);
+                }
+            }, 10000);
         },
 
         async load(silent = false) {

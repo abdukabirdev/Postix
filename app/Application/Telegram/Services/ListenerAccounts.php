@@ -23,6 +23,41 @@ final class ListenerAccounts
      */
     public static function ids(): array
     {
+        /*
+         * Within one web request the answer is kept: a page that asks it for
+         * every account of a list would otherwise make a query for each. A
+         * process that lives long (a command, a worker) never keeps it.
+         */
+        $memo = ! app()->runningInConsole() && app()->bound('request');
+
+        if ($memo && ($kept = request()->attributes->get('listener_account_ids')) !== null) {
+            return $kept;
+        }
+
+        $ids = self::ids_();
+
+        if ($memo) {
+            request()->attributes->set('listener_account_ids', $ids);
+        }
+
+        return $ids;
+    }
+
+    /**
+     * What the request kept is thrown away: a listener was just changed.
+     */
+    public static function forgetMemo(): void
+    {
+        if (app()->bound('request')) {
+            request()->attributes->remove('listener_account_ids');
+        }
+    }
+
+    /**
+     * @return list<int>
+     */
+    private static function ids_(): array
+    {
         $ids = self::rowIds();
 
         $primary = config('services.telegram.driver_check_account_id');

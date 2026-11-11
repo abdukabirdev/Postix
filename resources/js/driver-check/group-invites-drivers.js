@@ -14,6 +14,7 @@
 
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify } from './group-invites-shared';
+import { everyVisible } from './stages';
 
 /* The parts of the bar, in a fixed order. */
 const PARTS = ['invited', 'already', 'not_added', 'failed', 'sent', 'pending', 'not_queued'];
@@ -81,12 +82,15 @@ export function groupInvitesDriversPage(config) {
             this.stopPoll();
         },
 
-        async load() {
+        /* `poll`: asked again while a run goes on - the list the person has paged through is left as it is. */
+        async load(poll = false) {
             this.loading = this.data === null;
             this.error = null;
 
             try {
                 const json = await requestJson(this.endpoints.show);
+
+                const ended = this.running && !json.running;
 
                 this.data = json;
                 this.running = !!json.running;
@@ -100,7 +104,7 @@ export function groupInvitesDriversPage(config) {
 
                 this.running ? this.startPoll() : this.stopPoll();
 
-                if (!this.compact) {
+                if (!this.compact && (!poll || ended || this.rows.length === 0)) {
                     this.loadRows();
                 }
             } catch (error) {
@@ -111,14 +115,16 @@ export function groupInvitesDriversPage(config) {
         },
 
         startPoll() {
-            this.poll ??= setInterval(() => this.load(), 4000);
+            this.poll ??= everyVisible(4000, () => {
+                if (!this.loading) {
+                    this.load(true);
+                }
+            });
         },
 
         stopPoll() {
-            if (this.poll) {
-                clearInterval(this.poll);
-                this.poll = null;
-            }
+            this.poll?.();
+            this.poll = null;
         },
 
         /*

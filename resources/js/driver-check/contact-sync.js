@@ -69,7 +69,7 @@ export function contactSyncPage(config) {
             } finally {
                 this.loading = false;
 
-                this.timer = setTimeout(() => this.load(), POLL_MS);
+                this.timer = setTimeout(() => this.tickLoad(), POLL_MS);
             }
         },
 
@@ -78,6 +78,15 @@ export function contactSyncPage(config) {
         | Groups and accounts
         |----------------------------------------------------------------
         */
+
+        /* The timer's turn: a tab nobody looks at does not ask. */
+        tickLoad() {
+            if (document.visibilityState === 'visible') {
+                this.load();
+            } else {
+                this.timer = setTimeout(() => this.tickLoad(), POLL_MS);
+            }
+        },
 
         async act(key, url, method = 'POST', body = null) {
             if (this.busy) {

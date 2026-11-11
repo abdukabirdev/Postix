@@ -89,20 +89,32 @@ export function groupJoinPage(config) {
             this.loading = true;
 
             try {
-                const [summary, logs] = await Promise.all([
-                    requestJson(this.endpoints.show),
-                    requestJson(`${this.endpoints.logs}?per_page=50`),
-                ]);
+                /* Each page asks for what it shows: the log page the log, the others the status and the keywords. */
+                if (config.part === 'log') {
+                    const logs = await requestJson(`${this.endpoints.logs}?per_page=50`);
 
-                this.status = summary.data;
-                this.logs = logs.data ?? [];
+                    this.status ??= {};
+                    this.logs = logs.data ?? [];
+                } else {
+                    this.status = (await requestJson(this.endpoints.show)).data;
+                }
+
                 this.error = null;
             } catch (error) {
                 this.error = error?.message || t.errors.load_failed;
             } finally {
                 this.loading = false;
 
-                this.timer = setTimeout(() => this.load(), POLL_MS);
+                this.timer = setTimeout(() => this.tickLoad(), POLL_MS);
+            }
+        },
+
+        /* The timer's turn: a tab nobody looks at does not ask. */
+        tickLoad() {
+            if (document.visibilityState === 'visible') {
+                this.load();
+            } else {
+                this.timer = setTimeout(() => this.tickLoad(), POLL_MS);
             }
         },
 

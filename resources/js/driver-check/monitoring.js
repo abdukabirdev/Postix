@@ -22,6 +22,8 @@ const WATCHDOG_POLL_MS = 5000;
 
 const QUEUE_POLL_MS = 10000;
 
+const CLASSES_POLL_MS = 30000;
+
 const TONES = {
     success: 'bg-success-50 text-success-700 ring-1 ring-inset ring-success-600/20 dark:bg-success-500/10 dark:text-success-400 dark:ring-success-500/20',
     progress: 'bg-blue-light-50 text-blue-light-700 ring-1 ring-inset ring-blue-light-600/20 dark:bg-blue-light-500/10 dark:text-blue-light-400 dark:ring-blue-light-500/20',
@@ -182,7 +184,16 @@ export function watchdogPage(config) {
                 this.error = error?.message || t.errors.load_failed;
             } finally {
                 this.loading = false;
-                this.timer = setTimeout(() => this.load(), WATCHDOG_POLL_MS);
+                this.timer = setTimeout(() => this.tickLoad(), WATCHDOG_POLL_MS);
+            }
+        },
+
+        /* The timer's turn: a tab nobody looks at does not ask. */
+        tickLoad() {
+            if (document.visibilityState === 'visible') {
+                this.load();
+            } else {
+                this.timer = setTimeout(() => this.tickLoad(), WATCHDOG_POLL_MS);
             }
         },
 
@@ -399,6 +410,12 @@ export function queuePage(config) {
 
         summaryTimer: null,
 
+        classesTimer: null,
+
+        classesData: [],
+
+        classesLoaded: false,
+
         busy: null,
 
         confirmOpen: false,
@@ -418,24 +435,59 @@ export function queuePage(config) {
         init() {
             this.initList();
             this.loadSummary();
+            this.loadClasses();
         },
 
         destroy() {
             clearTimeout(this.summaryTimer);
+            clearTimeout(this.classesTimer);
+        },
+
+        /* What is waiting by job class reads every job's payload: apart from the rest, and less often. */
+        async loadClasses() {
+            clearTimeout(this.classesTimer);
+
+            try {
+                const json = await requestJson(`${this.endpoints.summary}?part=classes`);
+
+                this.classesData = json.data?.classes ?? [];
+                this.classesLoaded = true;
+            } catch (error) {
+                this.classesLoaded = this.classesLoaded || false;
+            } finally {
+                this.classesTimer = setTimeout(() => this.tickClasses(), CLASSES_POLL_MS);
+            }
+        },
+
+        tickClasses() {
+            if (document.visibilityState === 'visible') {
+                this.loadClasses();
+            } else {
+                this.classesTimer = setTimeout(() => this.tickClasses(), CLASSES_POLL_MS);
+            }
         },
 
         async loadSummary() {
             clearTimeout(this.summaryTimer);
 
             try {
-                const json = await requestJson(this.endpoints.summary);
+                const json = await requestJson(`${this.endpoints.summary}?part=core`);
 
                 this.summary = json.data;
                 this.summaryError = null;
             } catch (error) {
                 this.summaryError = error?.message || t.errors.load_failed;
             } finally {
-                this.summaryTimer = setTimeout(() => this.loadSummary(), QUEUE_POLL_MS);
+                this.summaryTimer = setTimeout(() => this.tickSummary(), QUEUE_POLL_MS);
+            }
+        },
+
+        /* The timer's turn: a tab nobody looks at does not ask. */
+        tickSummary() {
+            if (document.visibilityState === 'visible') {
+                this.loadSummary();
+            } else {
+                this.summaryTimer = setTimeout(() => this.tickSummary(), QUEUE_POLL_MS);
             }
         },
 
@@ -498,7 +550,7 @@ export function queuePage(config) {
         },
 
         classes() {
-            return this.summary?.classes ?? [];
+            return this.classesData;
         },
 
         failedTotal() {

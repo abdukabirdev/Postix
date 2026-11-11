@@ -46,7 +46,7 @@ export function controlQueueCard(config) {
             clearTimeout(this.timer);
 
             try {
-                this.summary = (await requestJson(config.endpoints.summary)).data;
+                this.summary = (await requestJson(config.endpoints.summary + '?part=core')).data;
                 this.error = null;
             } catch (error) {
                 this.error = error?.message || this.t.errors?.load_failed || '';

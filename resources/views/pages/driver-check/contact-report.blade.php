@@ -7,7 +7,8 @@
 <div
     x-data="dcContactReport({
         endpoints: {
-            report: @js(route('api.telegram.contact-sync.report') . '?days=14'),
+            /* The overview shows today only; the day-by-day tab of the runs page the fortnight. */
+            report: @js(route('api.telegram.contact-sync.report') . '?days=' . ($part === 'runs' ? 14 : 3)),
             runs: @js(route('api.telegram.contact-sync.runs')),
             run: @js(route('api.telegram.contact-sync.run')),
             stop: @js(route('api.telegram.contact-sync.stop')),
@@ -16,6 +17,7 @@
         translations: @js(__('driver_check.report')),
         events: @js(__('telegram.contact_sync.events')),
         ui: @js(__('telegram.ui')),
+        part: @js($part),
     })"
 >
     <x-driver-check.shell>

@@ -20,6 +20,15 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class TelegramListener extends Model
 {
+    /** A change to a listener ends what the request kept of "who listens" (ListenerAccounts). */
+    protected static function booted(): void
+    {
+        $forget = static fn () => \App\Application\Telegram\Services\ListenerAccounts::forgetMemo();
+
+        static::saved($forget);
+        static::deleted($forget);
+    }
+
     /**
      * The scheduled messages (Driver check -> Scheduled messages) set to
      * be written from this listener's account.

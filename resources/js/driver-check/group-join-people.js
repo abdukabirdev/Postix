@@ -31,7 +31,10 @@ export function groupJoinPeoplePage(config) {
 
         group: null,
 
-        total: 0,
+        /* How many match, and how many people there are at all: counted apart, after the list. */
+        total: null,
+
+        all: 0,
 
         loading: false,
 
@@ -47,8 +50,12 @@ export function groupJoinPeoplePage(config) {
             this.load();
         },
 
-        url(page = 1) {
+        url(page = 1, part = '') {
             const params = new URLSearchParams({ page: String(page), per_page: '30' });
+
+            if (part) {
+                params.set('part', part);
+            }
 
             if (this.filters.search.trim() !== '') {
                 params.set('search', this.filters.search.trim());
@@ -79,11 +86,32 @@ export function groupJoinPeoplePage(config) {
                 this.rows = more ? [...this.rows, ...json.data] : json.data;
                 this.meta = json.meta;
                 this.group = json.group;
-                this.total = json.total;
             } catch (error) {
                 notify(error?.message || t.errors.load_failed, false);
             } finally {
                 this.loading = false;
+            }
+
+            if (!more) {
+                this.loadTotal();
+            }
+        },
+
+        async loadTotal() {
+            const asked = this.url(1, 'total');
+
+            this.total = null;
+
+            try {
+                const json = await requestJson(asked);
+
+                /* A newer search was typed while this was counted: its answer is not for this page. */
+                if (asked === this.url(1, 'total')) {
+                    this.total = json.total;
+                    this.all = json.all;
+                }
+            } catch (error) {
+                this.total = null;
             }
         },
 
@@ -96,7 +124,7 @@ export function groupJoinPeoplePage(config) {
         },
 
         get hasMore() {
-            return this.meta !== null && this.meta.current_page < this.meta.last_page;
+            return this.meta !== null && !!this.meta.has_more;
         },
 
         moreGroups(row) {

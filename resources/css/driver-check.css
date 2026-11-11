@@ -1007,6 +1007,543 @@ input.dc-search[type='search']::-webkit-search-decoration {
   }
 }
 
+/* ==========================================================================
+   The work kit: block, table, toolbar, readings
+   ==========================================================================
+
+   Every page of "Groups and people" and "System" is put together from these
+   and nothing else, so a table, a row of buttons or a number looks and sits
+   the same on all of them.                                                  */
+
+@layer components {
+  /* A block: a panel with a head (name, count, its buttons) and a body. */
+  .dc-block {
+    overflow: hidden;
+    border: 1px solid var(--dc-line);
+    border-radius: 10px;
+    background: var(--dc-surface);
+  }
+
+  .dc-block__head {
+    display: flex;
+    min-height: 46px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    border-bottom: 1px solid var(--dc-line);
+    padding: 7px 10px 7px 14px;
+  }
+
+  .dc-block__title {
+    overflow: hidden;
+    color: var(--color-gray-950);
+    font-size: 14px;
+    font-weight: 620;
+    letter-spacing: -0.005em;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  html.dark .dc-block__title {
+    color: #fff;
+  }
+
+  .dc-block__actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  .dc-block__body--pad {
+    padding: 14px;
+  }
+
+  .dc-block__wait {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 18px 14px;
+  }
+
+  .dc-block__error {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--color-error-25);
+    padding: 10px 14px;
+    color: var(--color-error-700);
+    font-size: 13px;
+  }
+
+  html.dark .dc-block__error {
+    background: color-mix(in srgb, var(--color-error-500) 8%, transparent);
+    color: var(--color-error-300);
+  }
+
+  .dc-block__foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-top: 1px solid var(--dc-line);
+    background: var(--color-gray-25);
+    padding: 8px 14px;
+    color: var(--color-gray-500);
+    font-size: 12px;
+  }
+
+  html.dark .dc-block__foot {
+    background: rgb(255 255 255 / 0.015);
+  }
+
+  /* The number next to a title. */
+  .dc-count {
+    display: inline-flex;
+    height: 20px;
+    min-width: 20px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 5px;
+    background: var(--color-gray-100);
+    padding-inline: 6px;
+    color: var(--color-gray-600);
+    font-size: 11px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  html.dark .dc-count {
+    background: rgb(255 255 255 / 0.07);
+    color: var(--color-gray-300);
+  }
+
+  /* "Being renewed": a small beating dot, never a spinner over the data. */
+  .dc-live {
+    display: inline-block;
+    height: 6px;
+    width: 6px;
+    flex-shrink: 0;
+    border-radius: 9999px;
+    background: var(--color-brand-500);
+    animation: dc-beat 1s ease-in-out infinite;
+  }
+
+  @keyframes dc-beat {
+    50% {
+      opacity: 0.25;
+    }
+  }
+
+  /* The table. */
+  .dc-table-wrap {
+    overflow-x: auto;
+  }
+
+  .dc-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+    font-size: 13px;
+    line-height: 1.35;
+  }
+
+  .dc-table th {
+    border-bottom: 1px solid var(--dc-line);
+    background: var(--color-gray-25);
+    padding: 8px 12px;
+    color: var(--color-gray-500);
+    font-size: 11.5px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  html.dark .dc-table th {
+    background: #1b1b19;
+    color: var(--color-gray-400);
+  }
+
+  .dc-table--sticky th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .dc-table td {
+    border-top: 1px solid var(--color-gray-100);
+    padding: 8px 12px;
+    vertical-align: middle;
+    color: var(--color-gray-700);
+  }
+
+  .dc-table th:first-child,
+  .dc-table td:first-child {
+    padding-left: 14px;
+  }
+
+  .dc-table th:last-child,
+  .dc-table td:last-child {
+    padding-right: 14px;
+  }
+
+  html.dark .dc-table td {
+    border-top-color: var(--color-gray-800);
+    color: var(--color-gray-300);
+  }
+
+  .dc-table tbody tr:first-child td {
+    border-top: 0;
+  }
+
+  .dc-table tbody tr {
+    background: var(--dc-surface);
+    transition: background-color 100ms;
+  }
+
+  .dc-table tbody tr:hover {
+    background: var(--color-gray-25);
+  }
+
+  html.dark .dc-table tbody tr:hover {
+    background: rgb(255 255 255 / 0.025);
+  }
+
+  .dc-table tr[data-on] {
+    background: var(--color-brand-25);
+  }
+
+  html.dark .dc-table tr[data-on] {
+    background: color-mix(in srgb, var(--color-brand-500) 10%, transparent);
+  }
+
+  .dc-table tr[data-off] td {
+    opacity: 0.55;
+  }
+
+  .dc-table tr[data-click] {
+    cursor: pointer;
+  }
+
+  /* A number: to the right, in tabular figures. */
+  .dc-table .dc-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* The main cell of a row: what the row is. */
+  .dc-table .dc-main {
+    color: var(--color-gray-950);
+    font-weight: 600;
+  }
+
+  html.dark .dc-table .dc-main {
+    color: #fff;
+  }
+
+  /* A second, quiet line inside a cell. */
+  .dc-sub2 {
+    display: block;
+    margin-top: 1px;
+    color: var(--color-gray-400);
+    font-size: 11.5px;
+    font-weight: 400;
+    white-space: nowrap;
+  }
+
+  /* The row's buttons: the last cell, to the right, never wrapped. */
+  .dc-table .dc-acts {
+    position: sticky;
+    right: 0;
+    width: 1%;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  /* The buttons stay in sight when a wide table scrolls sideways: the cell wears its row's colour. */
+  .dc-table td.dc-acts {
+    background: inherit;
+    padding-block: 5px;
+    box-shadow: -1px 0 0 var(--color-gray-100);
+  }
+
+  html.dark .dc-table td.dc-acts {
+    box-shadow: -1px 0 0 var(--color-gray-800);
+  }
+
+  .dc-acts > * + * {
+    margin-left: 4px;
+  }
+
+  /* A header that sorts its column. */
+  .dc-sort {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    color: inherit;
+  }
+
+  .dc-sort:hover,
+  .dc-sort[data-on] {
+    color: var(--color-gray-950);
+  }
+
+  html.dark .dc-sort:hover,
+  html.dark .dc-sort[data-on] {
+    color: #fff;
+  }
+
+  .dc-sort::after {
+    content: '↕';
+    opacity: 0.35;
+    font-size: 10px;
+  }
+
+  .dc-sort[data-on='asc']::after {
+    content: '↑';
+    opacity: 1;
+    color: var(--color-brand-600);
+  }
+
+  .dc-sort[data-on='desc']::after {
+    content: '↓';
+    opacity: 1;
+    color: var(--color-brand-600);
+  }
+
+  /* Nothing in a table or a block. */
+  .dc-none {
+    padding: 36px 16px;
+    text-align: center;
+    color: var(--color-gray-500);
+    font-size: 13px;
+  }
+
+  /* The row of filters above a table: search first, the selects after, the buttons at the right edge. */
+  .dc-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--dc-line);
+    padding: 8px 10px;
+  }
+
+  .dc-toolbar__grow {
+    min-width: 200px;
+    flex: 1 1 240px;
+    max-width: 420px;
+  }
+
+  .dc-toolbar__end {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  /* Readings: a strip of numbers in one panel, a hairline between them. */
+  .dc-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    overflow: hidden;
+    border: 1px solid var(--dc-line);
+    border-radius: 10px;
+    background: var(--dc-line);
+    gap: 1px;
+  }
+
+  .dc-stat {
+    min-width: 0;
+    background: var(--dc-surface);
+    padding: 11px 14px 12px;
+  }
+
+  button.dc-stat {
+    text-align: left;
+    transition: background-color 120ms;
+  }
+
+  button.dc-stat:hover {
+    background: var(--color-gray-25);
+  }
+
+  html.dark button.dc-stat:hover {
+    background: #1c1c1a;
+  }
+
+  button.dc-stat[aria-pressed='true'] {
+    box-shadow: inset 0 -2px 0 var(--color-brand-500);
+  }
+
+  .dc-stat__label {
+    overflow: hidden;
+    color: var(--color-gray-500);
+    font-size: 11.5px;
+    font-weight: 560;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dc-stat__value {
+    margin-top: 3px;
+    color: var(--color-gray-950);
+    font-size: 21px;
+    font-weight: 640;
+    letter-spacing: -0.02em;
+    line-height: 1.15;
+    font-variant-numeric: tabular-nums;
+  }
+
+  html.dark .dc-stat__value {
+    color: #fff;
+  }
+
+  .dc-stat__note {
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--color-gray-400);
+    font-size: 11.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The state of a process at the top of its page: what it does now, and its run buttons. */
+  .dc-state {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 16px;
+    border: 1px solid var(--dc-line);
+    border-left-width: 3px;
+    border-radius: 10px;
+    background: var(--dc-surface);
+    padding: 12px 14px;
+  }
+
+  .dc-state[data-tone='run'] {
+    border-left-color: var(--color-brand-500);
+  }
+
+  .dc-state[data-tone='ok'] {
+    border-left-color: var(--color-success-500);
+  }
+
+  .dc-state[data-tone='warn'] {
+    border-left-color: var(--color-warning-500);
+  }
+
+  .dc-state[data-tone='bad'] {
+    border-left-color: var(--color-error-500);
+  }
+
+  .dc-state[data-tone='off'] {
+    border-left-color: var(--color-gray-300);
+  }
+
+  .dc-state__text {
+    min-width: 0;
+    flex: 1 1 260px;
+  }
+
+  .dc-state__title {
+    color: var(--color-gray-950);
+    font-size: 15px;
+    font-weight: 640;
+    letter-spacing: -0.01em;
+  }
+
+  html.dark .dc-state__title {
+    color: #fff;
+  }
+
+  .dc-state__line {
+    margin-top: 1px;
+    color: var(--color-gray-500);
+    font-size: 12.5px;
+  }
+
+  .dc-state__acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+
+  /* A tag by its tone, where the caller has only the tone's name. */
+  .dc-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 5px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-weight: 620;
+    line-height: 18px;
+    white-space: nowrap;
+    background: var(--color-gray-100);
+    color: var(--color-gray-600);
+  }
+
+  html.dark .dc-tag {
+    background: rgb(255 255 255 / 0.07);
+    color: var(--color-gray-300);
+  }
+
+  .dc-tag[data-tone='ok'] {
+    background: var(--color-success-50);
+    color: var(--color-success-700);
+  }
+
+  .dc-tag[data-tone='warn'] {
+    background: var(--color-warning-50);
+    color: var(--color-warning-700);
+  }
+
+  .dc-tag[data-tone='bad'] {
+    background: var(--color-error-50);
+    color: var(--color-error-700);
+  }
+
+  .dc-tag[data-tone='run'] {
+    background: var(--color-brand-50);
+    color: var(--color-brand-700);
+  }
+
+  html.dark .dc-tag[data-tone='ok'] {
+    background: color-mix(in srgb, var(--color-success-500) 12%, transparent);
+    color: var(--color-success-400);
+  }
+
+  html.dark .dc-tag[data-tone='warn'] {
+    background: color-mix(in srgb, var(--color-warning-500) 12%, transparent);
+    color: var(--color-warning-400);
+  }
+
+  html.dark .dc-tag[data-tone='bad'] {
+    background: color-mix(in srgb, var(--color-error-500) 12%, transparent);
+    color: var(--color-error-400);
+  }
+
+  html.dark .dc-tag[data-tone='run'] {
+    background: color-mix(in srgb, var(--color-brand-500) 14%, transparent);
+    color: var(--color-brand-300);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dc-live {
+    animation: none;
+  }
+}
+
 /* Library overrides (flatpickr, nprogress) in the panel's key. */
 #nprogress {
   pointer-events: none;

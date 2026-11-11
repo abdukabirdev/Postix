@@ -16,6 +16,7 @@
             reportTest: @js(route('api.telegram.group-invites.bot.reports.test')),
         },
         translations: @js(__('driver_check.invites')),
+        withGroups: @js($part === 'connection'),
     })"
 >
     <x-driver-check.shell>

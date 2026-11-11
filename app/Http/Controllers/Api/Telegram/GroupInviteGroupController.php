@@ -28,10 +28,92 @@ final class GroupInviteGroupController extends Controller
         private readonly GroupInviteBase $base,
     ) {}
 
-    public function index(): JsonResponse
+    /**
+     * The page asks in stages (`part`), the light one first:
+     *
+     *   groups   the groups themselves, their member counts
+     *   numbers  what each got, by status, and when the last was added
+     *   checks   when "who left" was last looked at (a scan of the log)
+     *   queue    who is still left to try for each - the heaviest, cached
+     *
+     * Without `part` everything comes at once, as it used to.
+     */
+    public function index(Request $request): JsonResponse
     {
         $config = $this->settings->current();
 
+        return response()->json(match ($request->query('part')) {
+            'groups' => $this->groupsPart($config),
+            'numbers' => ['numbers' => (object) $this->numbersPart()],
+            'checks' => ['checks' => (object) $this->checksPart()],
+            'queue' => ['queues' => (object) $this->queuePart($config)],
+            default => $this->whole($config),
+        });
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     *
+     * @return array<string, mixed>
+     */
+    private function whole(array $config): array
+    {
+        $out = $this->groupsPart($config);
+        $numbers = $this->numbersPart();
+        $checks = $this->checksPart();
+        $queues = $this->queuePart($config);
+
+        $out['groups'] = collect($out['groups'])
+            ->map(fn (array $group): array => [
+                ...$group,
+                ...($numbers[$group['id']] ?? self::counts([])),
+                'left_checked_at' => $checks[$group['id']] ?? null,
+                'queue' => $queues[$group['id']] ?? null,
+            ])
+            ->all();
+
+        return $out;
+    }
+
+    /**
+     * @param array<string, mixed> $config
+     *
+     * @return array<string, mixed>
+     */
+    private function groupsPart(array $config): array
+    {
+        $groups = TelegramInviteGroup::query()
+            ->withTrashed()
+            ->orderBy('id')
+            ->get()
+            ->map(fn (TelegramInviteGroup $group): array => [
+                'id' => $group->id,
+                'title' => $group->title,
+                'link' => $group->link,
+                'is_active' => $group->is_active,
+                'archived_at' => $group->deleted_at,
+                'created_at' => $group->created_at,
+                'last_error' => $group->last_error,
+                /* The member count when the last run came to the group and when it was done with it. */
+                'members_before' => $group->members_before,
+                'members_after' => $group->members_after,
+                'members_checked_at' => $group->members_checked_at,
+            ]);
+
+        return [
+            'groups' => $groups->values()->all(),
+            'current_id' => TelegramInviteGroup::current()?->id,
+            'audience' => $config['audience'],
+        ];
+    }
+
+    /**
+     * What each group got, by its id, with when the last was added.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function numbersPart(): array
+    {
         $byStatus = TelegramGroupInvite::query()
             ->selectRaw('invite_group_id, status, COUNT(*) as total')
             ->groupBy('invite_group_id', 'status')
@@ -44,41 +126,52 @@ final class GroupInviteGroupController extends Controller
             ->groupBy('invite_group_id')
             ->pluck('at', 'invite_group_id');
 
-        $lastLeft = TelegramGroupInviteLog::query()
+        $out = [];
+
+        foreach ($byStatus->keys()->merge($lastAdded->keys())->unique() as $id) {
+            $out[(int) $id] = [
+                ...self::counts($byStatus->get($id, collect())->pluck('total', 'status')->all()),
+                'last_added_at' => $lastAdded[$id] ?? null,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * When "who left" was last looked at, by group id.
+     *
+     * @return array<int, mixed>
+     */
+    private function checksPart(): array
+    {
+        return TelegramGroupInviteLog::query()
             ->where('event', TelegramGroupInviteLog::EVENT_CHECK)
             ->where('context->mode', 'left')
             ->whereNotNull('invite_group_id')
             ->selectRaw('invite_group_id, MAX(created_at) as at')
             ->groupBy('invite_group_id')
-            ->pluck('at', 'invite_group_id');
+            ->pluck('at', 'invite_group_id')
+            ->all();
+    }
 
-        $groups = TelegramInviteGroup::query()
-            ->withTrashed()
-            ->orderBy('id')
-            ->get()
-            ->map(fn (TelegramInviteGroup $group) => [
-                'id' => $group->id,
-                'title' => $group->title,
-                'link' => $group->link,
-                'is_active' => $group->is_active,
-                'archived_at' => $group->deleted_at,
-                'created_at' => $group->created_at,
-                'last_error' => $group->last_error,
-                ...self::counts($byStatus->get($group->id, collect())->pluck('total', 'status')->all()),
-                /* The member count when the last run came to the group and when it was done with it. */
-                'members_before' => $group->members_before,
-                'members_after' => $group->members_after,
-                'members_checked_at' => $group->members_checked_at,
-                'last_added_at' => $lastAdded[$group->id] ?? null,
-                'left_checked_at' => $lastLeft[$group->id] ?? null,
-                'queue' => $group->trashed() ? null : $this->base->queue($group, $config),
-            ]);
+    /**
+     * Who is left to try, by group id: for the groups not archived. Each
+     * is counted over the whole base, so it is kept for half a minute.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return array<int, array{proven: int, other: int}>
+     */
+    private function queuePart(array $config): array
+    {
+        $out = [];
 
-        return response()->json([
-            'groups' => $groups->values(),
-            'current_id' => TelegramInviteGroup::current()?->id,
-            'audience' => $config['audience'],
-        ]);
+        TelegramInviteGroup::query()->orderBy('id')->get()->each(function (TelegramInviteGroup $group) use (&$out, $config): void {
+            $out[$group->id] = $this->base->cachedQueue($group, $config);
+        });
+
+        return $out;
     }
 
     public function store(Request $request): JsonResponse

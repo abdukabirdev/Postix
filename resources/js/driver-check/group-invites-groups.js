@@ -10,16 +10,34 @@
 | history; the archive folds away below, and the same link added again
 | brings a group back.
 |
+| Four stages, one after another: the groups themselves, what each got,
+| when "who left" was last looked at, who is left to try (the heaviest).
+|
 */
 
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify } from './group-invites-shared';
+import { stages } from './stages';
+
+const NO_NUMBERS = {
+    added: 0,
+    invited: 0,
+    left: 0,
+    not_added: 0,
+    already: 0,
+    sent: 0,
+    failed: 0,
+    pending: 0,
+    joined: 0,
+    last_added_at: null,
+};
 
 export function groupInvitesGroupsPage(config) {
     const t = config.translations;
 
     return {
         ...inviteHelpers(t),
+        ...stages({ groups: 'loadGroups', numbers: 'loadNumbers', checks: 'loadChecks', queue: 'loadQueue' }),
 
         t,
         endpoints: config.endpoints,
@@ -34,26 +52,73 @@ export function groupInvitesGroupsPage(config) {
         audience: 'all',
         link: '',
         showArchive: false,
+        /* The group whose details are open. */
+        opened: null,
 
         init() {
             this.load();
         },
 
+        /* All the stages again. `loaded` and `error` are the first stage's: the groups themselves. */
         async load() {
             this.loading = true;
             this.error = null;
 
-            try {
-                const json = await requestJson(this.endpoints.index);
-                this.groups = json.groups ?? [];
-                this.currentId = json.current_id ?? null;
-                this.audience = json.audience ?? 'all';
-                this.loaded = true;
-            } catch (error) {
-                this.error = error?.message || t.load_failed;
-            } finally {
-                this.loading = false;
+            await this.loadStage('groups');
+
+            this.error = this.stages.groups.error;
+            this.loaded = this.stages.groups.loaded;
+            this.loading = false;
+
+            if (this.loaded) {
+                await this.loadStages(['numbers', 'checks', 'queue']);
             }
+        },
+
+        async loadGroups() {
+            const json = await requestJson(`${this.endpoints.index}?part=groups`);
+            const before = new Map(this.groups.map((group) => [group.id, group]));
+
+            /* What the other stages brought stays on the screen until they bring new numbers. */
+            this.groups = (json.groups ?? []).map((group) => {
+                const old = before.get(group.id);
+
+                return {
+                    ...NO_NUMBERS,
+                    left_checked_at: null,
+                    queue: null,
+                    ...(old ? { ...NO_NUMBERS, ...Object.fromEntries(Object.keys(NO_NUMBERS).map((key) => [key, old[key]])), left_checked_at: old.left_checked_at, queue: old.queue } : {}),
+                    ...group,
+                };
+            });
+
+            this.currentId = json.current_id ?? null;
+            this.audience = json.audience ?? 'all';
+        },
+
+        async loadNumbers() {
+            const json = await requestJson(`${this.endpoints.index}?part=numbers`);
+            const numbers = json.numbers ?? {};
+
+            this.groups.forEach((group) => Object.assign(group, NO_NUMBERS, numbers[group.id] ?? {}));
+        },
+
+        async loadChecks() {
+            const json = await requestJson(`${this.endpoints.index}?part=checks`);
+            const checks = json.checks ?? {};
+
+            this.groups.forEach((group) => {
+                group.left_checked_at = checks[group.id] ?? null;
+            });
+        },
+
+        async loadQueue() {
+            const json = await requestJson(`${this.endpoints.index}?part=queue`);
+            const queues = json.queues ?? {};
+
+            this.groups.forEach((group) => {
+                group.queue = group.archived_at ? null : (queues[group.id] ?? null);
+            });
         },
 
         /* The current group first, the others after it. */
@@ -73,6 +138,10 @@ export function groupInvitesGroupsPage(config) {
 
         archived() {
             return this.groups.filter((group) => group.archived_at);
+        },
+
+        open(group) {
+            this.opened = this.opened === group.id ? null : group.id;
         },
 
         async add() {
@@ -129,14 +198,18 @@ export function groupInvitesGroupsPage(config) {
             await this.act(`${this.endpoints.index}/${group.id}/restore`, 'POST');
         },
 
-        async retry(group) {
-            if (!window.confirm(t.groups.retry_confirm.replace(':n', this.number(group.not_added + group.failed)))) {
+        /* Forget the failures of one kind (or both) so the next run tries those people here again. */
+        async retry(group, status = null) {
+            const n = status === 'failed' ? group.failed : (status === 'not_added' ? group.not_added : group.not_added + group.failed);
+
+            if (!window.confirm(t.groups.retry_confirm.replace(':n', this.number(n)))) {
                 return;
             }
 
-            await this.act(`${this.endpoints.index}/${group.id}/retry`, 'POST');
+            await this.act(`${this.endpoints.index}/${group.id}/retry`, 'POST', status ? { status } : {});
         },
 
+        /* After a button the groups are read again, and the numbers with them. */
         async act(url, method, body = {}) {
             if (this.busy) {
                 return;
@@ -213,6 +286,15 @@ export function groupInvitesGroupsPage(config) {
                 .replace(':n', this.number(proven + other))
                 .replace(':proven', this.number(proven))
                 .replace(':other', this.number(other));
+        },
+
+        /* Short, for the table: how many are left to try. */
+        queueTotal(group) {
+            if (!group.queue) {
+                return null;
+            }
+
+            return this.audience === 'proven' ? group.queue.proven : group.queue.proven + group.queue.other;
         },
     };
 }
