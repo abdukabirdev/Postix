@@ -40,6 +40,9 @@ use Throwable;
  * were sent (SpamCleaner): the bot, an admin of the group, gets every
  * message there, and deletes the due ones between its asks.
  *
+ * The service line "our account added somebody" is deleted at once too
+ * (AddedNotices), so the chat is not spoiled by a line per invited person.
+ *
  * An admin of the anti-spam forwards a spammer's message to the bot: its
  * author goes onto the spam list (ForwardedSpam). Somebody opens an invite
  * link the panel made: they are an admin of the anti-spam (SpamAdmins).
@@ -98,6 +101,7 @@ final class JoinRequestService
         private readonly SpamAdmins $admins,
         private readonly SpamBan $bans,
         private readonly MemberEvents $members,
+        private readonly AddedNotices $notices,
     ) {}
 
     /**
@@ -378,6 +382,9 @@ final class JoinRequestService
     {
         if (is_array($update['message'] ?? null)) {
             $this->spam->take($api, $update['message'], $say);
+
+            /* "Our account added somebody": that service line is deleted so the chat stays clean. */
+            $this->notices->take($api, $update['message'], $say);
 
             /* In the bot's own chat: an admin's invite link opened, or an admin's forward of a spammer's message. */
             if (! $this->admins->takeStart($api, $update['message'], $say)) {

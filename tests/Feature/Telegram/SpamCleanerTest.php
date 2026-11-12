@@ -99,6 +99,43 @@ final class SpamCleanerTest extends TestCase
         $this->assertContains('message', collect($this->sent)->firstWhere('method', 'getUpdates')['params']['allowed_updates']);
     }
 
+    public function test_the_line_our_account_added_somebody_is_deleted_at_once_and_other_lines_stay(): void
+    {
+        $joined = static fn (int $id) => ['new_chat_members' => [['id' => $id, 'is_bot' => false, 'first_name' => 'P' . $id]]];
+
+        $this->fakeTelegram(updates: [
+            /* Our account (9001) added somebody: gone. */
+            $this->message(100, 31, ['id' => 9001, 'first_name' => 'Ours'], $joined(701)),
+            /* A stranger added somebody; our account joined by itself; the line is in a private chat: stay. */
+            $this->message(101, 32, ['id' => 703, 'first_name' => 'Good'], $joined(701)),
+            $this->message(102, 33, ['id' => 9001, 'first_name' => 'Ours'], $joined(9001)),
+            $this->message(103, 34, ['id' => 9001, 'first_name' => 'Ours'], $joined(701), chat: ['id' => 9001, 'type' => 'private']),
+            /* A usual message of our account stays. */
+            $this->message(104, 35, ['id' => 9001, 'first_name' => 'Ours']),
+        ]);
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $deletes = collect($this->sent)->where('method', 'deleteMessage')->values();
+        $this->assertCount(1, $deletes);
+        $this->assertSame([self::CHAT, 31], [$deletes[0]['params']['chat_id'], $deletes[0]['params']['message_id']]);
+        /* Nothing about it goes to the owner and it is no spam row. */
+        $this->assertFalse(collect($this->sent)->contains('method', 'sendMessage'));
+        $this->assertSame(0, TelegramSpamMessage::query()->count());
+    }
+
+    public function test_a_line_that_cannot_be_deleted_does_not_stop_the_bot(): void
+    {
+        $this->fakeTelegram(
+            updates: [$this->message(110, 41, ['id' => 9001, 'first_name' => 'Ours'], ['new_chat_members' => [['id' => 701, 'is_bot' => false, 'first_name' => 'Ali']]])],
+            delete: fn () => ['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: not enough rights to delete a message'],
+        );
+
+        $this->app->make(JoinRequestService::class)->poll(2, fn () => null);
+
+        $this->assertCount(1, collect($this->sent)->where('method', 'deleteMessage'));
+    }
+
     public function test_a_message_waits_its_seconds_before_it_goes(): void
     {
         TelegramSpamSender::query()->create(['telegram_user_id' => 701]);
