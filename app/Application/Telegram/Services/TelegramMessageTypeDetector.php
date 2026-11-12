@@ -68,6 +68,11 @@ final class TelegramMessageTypeDetector
             return TelegramDriverMessageType::PENALTY;
         }
 
+        /* "❌ Запрос отменён (EGS21300)" */
+        if (RequestCancellationParser::matches($text)) {
+            return TelegramDriverMessageType::REQUEST_CANCELLED;
+        }
+
         return TelegramDriverMessageType::UNKNOWN;
     }
 }

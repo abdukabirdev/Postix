@@ -136,6 +136,7 @@ class PeoplePanelTest extends TestCase
             $table->unsignedTinyInteger('attempts')->default(0);
             $table->text('error')->nullable();
             $table->string('peer')->nullable();
+            $table->unsignedBigInteger('dm_message_id')->nullable();
             $table->timestamp('forwarded_at')->nullable();
             $table->timestamp('sent_at')->nullable();
             $table->text('reply_text')->nullable();

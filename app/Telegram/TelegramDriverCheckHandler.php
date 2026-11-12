@@ -9,6 +9,7 @@ use App\Application\Telegram\Actions\NudgeSilentClientChecks;
 use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
 use App\Application\Telegram\Actions\ProcessCreatedDriverMessage;
+use App\Application\Telegram\Actions\ProcessRequestCancellation;
 use App\Application\Telegram\Actions\ProcessTelegramDriverCheckResults;
 use App\Application\Telegram\Actions\ProcessUpdatedDriverMessage;
 use App\Application\Telegram\Actions\RouteTelegramFile;
@@ -16,6 +17,7 @@ use App\Application\Telegram\Actions\TelegramDriverCheckStarter;
 use App\Application\Telegram\Services\AutoReplyTelegramGifs;
 use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
+use App\Application\Telegram\Services\RequestCancellationAsker;
 use App\Application\Telegram\Services\ScheduledMessageSender;
 use App\Application\Telegram\Services\TelegramDriverCheckChats;
 use App\Application\Telegram\Services\TelegramDriverCheckRecorder;
@@ -197,7 +199,10 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
             }
 
             $text = trim(
-                (string) ($message->message ?? ''),
+                \App\Application\Telegram\Services\LinkedText::expand(
+                    (string) ($message->message ?? ''),
+                    $message->entities ?? [],
+                ),
             );
 
             if ($text === '') {
@@ -245,6 +250,18 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
                         'date' => $message->date ?? null,
                     ],
                 );
+
+                return;
+            }
+
+            /*
+             * "❌ Запрос отменён": the one who got its last penalty is asked
+             * why. Read by whoever reads the penalties.
+             */
+            if ($type === TelegramDriverMessageType::REQUEST_CANCELLED) {
+                if (app(DutyOwners::class)->ownedBy(TelegramListener::DUTY_PENALTY_INTAKE, null)) {
+                    app(ProcessRequestCancellation::class)->execute((int) $chatId, $messageId, $text);
+                }
 
                 return;
             }
@@ -449,6 +466,19 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
         } catch (Throwable $e) {
             Log::error(
                 'TelegramDriverCheckHandler: client check nudge failed',
+                [
+                    'error' => $e->getMessage(),
+                    'exception' => $e::class,
+                ],
+            );
+        }
+
+        /* The cancelled requests: "why?" under their last penalty. */
+        try {
+            app(RequestCancellationAsker::class)->flush($this);
+        } catch (Throwable $e) {
+            Log::error(
+                'TelegramDriverCheckHandler: cancellation question failed',
                 [
                     'error' => $e->getMessage(),
                     'exception' => $e::class,

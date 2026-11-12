@@ -7,10 +7,12 @@ namespace App\Telegram;
 use App\Application\Telegram\Actions\NudgeSilentClientChecks;
 use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
+use App\Application\Telegram\Actions\ProcessRequestCancellation;
 use App\Application\Telegram\Actions\RouteTelegramFile;
 use App\Application\Telegram\Services\AutoReplyTelegramGifs;
 use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
+use App\Application\Telegram\Services\RequestCancellationAsker;
 use App\Application\Telegram\Services\ScheduledMessageSender;
 use App\Application\Telegram\Services\TelegramDriverCheckChats;
 use App\Application\Telegram\Services\TelegramMessageTypeDetector;
@@ -247,9 +249,18 @@ final class TelegramListenerHandler extends SimpleEventHandler
             return false;
         }
 
-        $text = trim((string) ($message->message ?? ''));
+        $text = trim(\App\Application\Telegram\Services\LinkedText::expand((string) ($message->message ?? ''), $message->entities ?? []));
 
-        if ($text === '' || app(TelegramMessageTypeDetector::class)->detect($text) !== TelegramDriverMessageType::PENALTY) {
+        $type = $text === '' ? null : app(TelegramMessageTypeDetector::class)->detect($text);
+
+        /* "❌ Запрос отменён": the one who got its last penalty is asked why. */
+        if ($type === TelegramDriverMessageType::REQUEST_CANCELLED) {
+            app(ProcessRequestCancellation::class)->execute($chatId, (int) ($message->id ?? 0), $text);
+
+            return true;
+        }
+
+        if ($type !== TelegramDriverMessageType::PENALTY) {
             return false;
         }
 
@@ -314,6 +325,17 @@ final class TelegramListenerHandler extends SimpleEventHandler
             app(NudgeSilentClientChecks::class)->execute($this, self::$key);
         } catch (Throwable $e) {
             Log::error('TelegramListenerHandler: client check nudge failed', [
+                'key' => self::$key,
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+
+        /* The cancelled requests: "why?" under their last penalty. */
+        try {
+            app(RequestCancellationAsker::class)->flush($this, self::$key);
+        } catch (Throwable $e) {
+            Log::error('TelegramListenerHandler: cancellation question failed', [
                 'key' => self::$key,
                 'error' => $e->getMessage(),
                 'exception' => $e::class,

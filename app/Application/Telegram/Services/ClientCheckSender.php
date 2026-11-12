@@ -79,13 +79,14 @@ final class ClientCheckSender
                  */
                 $this->opening->before($telegram, $peer, $check, $person);
 
-                $this->write($telegram, $check, $peer);
+                $messageId = $this->write($telegram, $check, $peer);
 
                 $check->update([
                     'status' => TelegramClientCheckStatus::Forwarded,
                     'reason' => null,
                     'error' => null,
                     'peer' => (string) $peer,
+                    'dm_message_id' => $messageId,
                     'forwarded_at' => now(),
                 ]);
 
@@ -150,15 +151,20 @@ final class ClientCheckSender
      * our words (PenaltyMessageText) - not a forward, since 2026-11-05 the
      * person must not read "штраф". Being our message, it also goes from an
      * account that is not in the group the bot posted it in.
+     *
+     * Returns the message's id in the chat - a cancelled request is asked
+     * about in a reply to it (RequestCancellationAsker).
      */
-    private function write(SimpleEventHandler $telegram, TelegramClientCheck $check, int|string $peer): void
+    private function write(SimpleEventHandler $telegram, TelegramClientCheck $check, int|string $peer): ?int
     {
-        $telegram->messages->sendMessage([
+        $result = $telegram->messages->sendMessage([
             'peer' => $peer,
             'message' => $this->text->html((string) $check->message_text),
             'parse_mode' => 'html',
             'no_webpage' => true,
         ]);
+
+        return TelegramDriverCheckReporter::sentMessageId($result);
     }
 
     /**

@@ -18,5 +18,11 @@ enum TelegramDriverMessageType: string
      */
     case PENALTY = 'penalty';
 
+    /**
+     * "❌ Запрос отменён (EGS…)": the person who got the request's last
+     * penalty is asked why (ProcessRequestCancellation).
+     */
+    case REQUEST_CANCELLED = 'request_cancelled';
+
     case UNKNOWN = 'unknown';
 }

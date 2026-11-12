@@ -5,6 +5,10 @@ namespace Tests\Feature\Telegram;
 use App\Application\Telegram\Actions\NudgeSilentClientChecks;
 use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
+use App\Application\Telegram\Actions\ProcessRequestCancellation;
+use App\Application\Telegram\Services\RequestCancellationAsker;
+use App\Application\Telegram\Services\RequestCancellationParser;
+use App\Models\Telegram\TelegramRequestCancellation;
 use App\Application\Telegram\Services\AutoReplyMatcher;
 use App\Application\Telegram\Services\AutoReplyRules;
 use App\Application\Telegram\Services\AutoReplyStore;
@@ -88,6 +92,16 @@ final class FakeClientCheckMessages
         return ['dialogs' => [['top_message' => 10, 'read_outbox_max_id' => $this->read ? 10 : 9]]];
     }
 
+    /** @var list<array<string, mixed>> the private chat's messages, newest first */
+    public array $history = [];
+
+    public function getHistory(array $params): array
+    {
+        $this->calls[] = ['history', $params];
+
+        return ['messages' => $this->history];
+    }
+
     public function setTyping(array $params): bool
     {
         $this->calls[] = ['typing', $params];
@@ -105,7 +119,8 @@ final class FakeClientCheckMessages
 
             $this->calls[] = ['forward', $params];
 
-            return ['id' => count($this->calls)];
+            /* As Telegram answers in a private chat: the new message's id. */
+            return ['_' => 'updateShortSentMessage', 'id' => 900 + count($this->calls)];
         }
 
         if ($this->commentFails) {
@@ -303,6 +318,7 @@ class ClientCheckTest extends TestCase
     private function createTables(): void
     {
         Schema::dropIfExists('telegram_settings');
+        Schema::dropIfExists('telegram_request_cancellations');
         Schema::dropIfExists('telegram_client_checks');
         Schema::dropIfExists('operation_users');
         Schema::dropIfExists('telegram_alerts');
@@ -376,6 +392,7 @@ class ClientCheckTest extends TestCase
             $table->unsignedTinyInteger('attempts')->default(0);
             $table->text('error')->nullable();
             $table->string('peer')->nullable();
+            $table->unsignedBigInteger('dm_message_id')->nullable();
             $table->timestamp('forwarded_at')->nullable();
             $table->timestamp('opening_sent_at')->nullable();
             $table->timestamp('sent_at')->nullable();
@@ -390,6 +407,8 @@ class ClientCheckTest extends TestCase
             $table->timestamps();
             $table->unique(['telegram_chat_id', 'telegram_message_id']);
         });
+
+        (require base_path('database/migrations/2026_11_11_100100_create_telegram_request_cancellations_table.php'))->up();
     }
 
     private function person(string $name = "PULATOV AFZAL AHMADJON O'G'LI", array $attributes = []): OperationUser
@@ -2847,5 +2866,176 @@ class ClientCheckTest extends TestCase
 
         $this->assertSame(TelegramClientCheckStatus::Failed, $check->status);
         $this->assertSame([], $this->forwards());
+    }
+
+    /*
+     * ------------------------------------------------------------------
+     * A cancelled request: "why?" under its last penalty
+     * ------------------------------------------------------------------
+     */
+
+    private const CANCELLED = <<<'TXT'
+        ❌ Запрос отменён (TLS04834)
+        Маршрут: 🇨🇳 Changsha, Хунань, Китай  → 🇺🇿 Наманган, Узбекистан
+        Причина: Не прошла ставка
+        Клиент: ARXIDEYA MCHJ (ИНН: 304975524)
+        Sales: RAJABOVA MAKHBUBA ERMAMAT KIZI
+        Operation: SALOHIDDINOV FAZLIDDIN SALOHIDDIN OGLI
+        Отменил: RAJABOVA MAKHBUBA ERMAMAT KIZI
+        Дата создания: 09.11.2026 11:51
+        Дата отмены: 11.11.2026 14:28
+        Открыть запрос (https://crm.zanjeer.uz/queries/queries?filter[search]=TLS04834)
+        TXT;
+
+    private function cancelled(string $request = 'TLS04834'): ?TelegramRequestCancellation
+    {
+        config()->set('client_checks.cancellation.phrases', [
+            'uz' => ['Nega bekor qilindi #{request}?'],
+            'ru' => ['Почему отменили #{request}?'],
+        ]);
+
+        return app(ProcessRequestCancellation::class)->execute(
+            self::BOT_CHAT_ID,
+            ++$this->messageId,
+            str_replace('TLS04834', $request, self::CANCELLED),
+        );
+    }
+
+    private function ask(): void
+    {
+        app(RequestCancellationAsker::class)->flush($this->telegram);
+    }
+
+    public function test_a_cancellation_is_detected_and_read(): void
+    {
+        $this->assertSame(TelegramDriverMessageType::REQUEST_CANCELLED, app(TelegramMessageTypeDetector::class)->detect(self::CANCELLED));
+        $this->assertSame(TelegramDriverMessageType::PENALTY, app(TelegramMessageTypeDetector::class)->detect(self::OPERATION));
+
+        $parsed = app(RequestCancellationParser::class)->parse(self::CANCELLED);
+
+        $this->assertSame('TLS04834', $parsed['request_number']);
+        $this->assertSame('Не прошла ставка', $parsed['reason']);
+        $this->assertSame('RAJABOVA MAKHBUBA ERMAMAT KIZI', $parsed['cancelled_by']);
+        $this->assertSame('11.11.2026 14:28', $parsed['cancelled_at']);
+    }
+
+    public function test_the_last_penalty_gets_the_question_as_a_reply(): void
+    {
+        $this->person();
+
+        $this->penalty(2);
+        $last = $this->penalty(3);
+
+        $this->assertNotNull($last->refresh()->dm_message_id);
+
+        $row = $this->cancelled();
+
+        $this->assertSame($last->id, $row->telegram_client_check_id);
+        $this->assertSame(TelegramRequestCancellation::STATUS_PENDING, $row->status);
+
+        $this->ask();
+
+        $question = collect($this->messages->sent())->last();
+
+        $this->assertSame('@afzal', $question['peer']);
+        $this->assertSame('Nega bekor qilindi #TLS04834?', $question['message']);
+        $this->assertSame($last->dm_message_id, $question['reply_to']['reply_to_msg_id']);
+        $this->assertNotContains('history', $this->messages->kinds());
+
+        $row->refresh();
+        $this->assertSame(TelegramRequestCancellation::STATUS_SENT, $row->status);
+        $this->assertSame($last->dm_message_id, $row->reply_to_message_id);
+
+        /* Asked once. */
+        $count = count($this->messages->sent());
+        $this->ask();
+        $this->assertCount($count, $this->messages->sent());
+    }
+
+    public function test_a_penalty_sent_before_the_id_was_kept_is_found_in_the_chat(): void
+    {
+        $this->person();
+
+        $check = $this->penalty(3);
+        $check->update(['dm_message_id' => null]);
+
+        $this->messages->history = [
+            ['id' => 77, 'out' => false, 'message' => 'TLS04834 ok'],
+            ['id' => 76, 'out' => true, 'message' => 'Повторное напоминание №3 по запросу #TLS048345'],
+            ['id' => 75, 'out' => true, 'message' => '🆘 Повторное напоминание №3 по запросу #TLS04834'],
+        ];
+
+        $this->cancelled();
+        $this->ask();
+
+        $this->assertSame(75, collect($this->messages->sent())->last()['reply_to']['reply_to_msg_id']);
+    }
+
+    public function test_a_request_nobody_was_fined_for_is_not_asked_about(): void
+    {
+        $this->person();
+
+        $this->penalty(3, 'TLS00001');
+
+        $row = $this->cancelled();
+
+        $this->assertSame(TelegramRequestCancellation::STATUS_SKIPPED, $row->status);
+        $this->assertSame(TelegramRequestCancellation::REASON_NO_PENALTY, $row->reason);
+
+        $count = count($this->messages->sent());
+        $this->ask();
+        $this->assertCount($count, $this->messages->sent());
+    }
+
+    public function test_the_same_cancellation_is_recorded_once(): void
+    {
+        $this->person();
+        $this->penalty(3);
+
+        $this->cancelled();
+
+        $again = app(ProcessRequestCancellation::class)->execute(self::BOT_CHAT_ID, $this->messageId, self::CANCELLED);
+
+        $this->assertNull($again);
+        $this->assertSame(1, TelegramRequestCancellation::query()->count());
+    }
+
+    public function test_after_hours_the_question_waits_for_the_morning(): void
+    {
+        $this->person();
+        $this->penalty(3);
+
+        $this->at('18:30:00');
+        $this->cancelled();
+
+        $count = count($this->messages->sent());
+        $this->ask();
+        $this->assertCount($count, $this->messages->sent());
+
+        Carbon::setTestNow('2026-10-03 09:05:00');
+        $this->ask();
+
+        $this->assertCount($count + 1, $this->messages->sent());
+        $this->assertSame(TelegramRequestCancellation::STATUS_SENT, TelegramRequestCancellation::query()->value('status'));
+    }
+
+    public function test_a_failed_question_is_tried_again_then_given_up(): void
+    {
+        $this->person();
+        $this->penalty(3);
+        $this->cancelled();
+
+        $this->messages->commentFails = true;
+
+        $this->ask();
+        $this->assertSame(TelegramRequestCancellation::STATUS_PENDING, TelegramRequestCancellation::query()->value('status'));
+
+        $this->ask();
+        $this->ask();
+
+        $row = TelegramRequestCancellation::query()->first();
+        $this->assertSame(TelegramRequestCancellation::STATUS_FAILED, $row->status);
+        $this->assertSame(3, $row->attempts);
+        $this->assertStringContainsString('FLOOD_WAIT', (string) $row->error);
     }
 }

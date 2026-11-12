@@ -31,6 +31,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string|null               $reason
  * @property int                       $attempts
  * @property string|null               $peer
+ * @property int|null                  $dm_message_id
  * @property string|null               $reply_text
  * @property string|null               $reply_kind
  * @property string|null               $reply_answer
@@ -116,6 +117,7 @@ class TelegramClientCheck extends Model
         'attempts',
         'error',
         'peer',
+        'dm_message_id',
         'forwarded_at',
         'opening_sent_at',
         'sent_at',
@@ -145,6 +147,7 @@ class TelegramClientCheck extends Model
             'batch_count' => 'integer',
             'status' => TelegramClientCheckStatus::class,
             'attempts' => 'integer',
+            'dm_message_id' => 'integer',
             'forwarded_at' => 'datetime',
             'opening_sent_at' => 'datetime',
             'sent_at' => 'datetime',

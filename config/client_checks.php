@@ -117,6 +117,37 @@ return [
     ],
 
     /*
+     * "❌ Запрос отменён (EGS21300)" from the bot: the person who got the
+     * request's last penalty is asked why, in a reply to that penalty in
+     * their private chat (RequestCancellationAsker). Only within the
+     * working hours above; one that waited longer than `wait_hours` (came
+     * in the evening, the account was down) is given up. Not a part of the
+     * panel's rules - read from here.
+     *
+     * Phrases per language (the person's, as for the comments); one is
+     * picked at random. Placeholders as in `roles` below: {request},
+     * {address}, {name}. Uzbek is written in Latin and goes out in Cyrillic
+     * when auto_replies.uz_script says so.
+     */
+    'cancellation' => [
+        'enabled' => true,
+        'wait_hours' => 24,
+        'max_attempts' => 3,
+        'phrases' => [
+            'ru' => [
+                'Запрос #{request} отменили. Почему отменили?',
+                '{address}, почему отменили запрос #{request}?',
+                'Запрос #{request} отменён, по какой причине?',
+            ],
+            'uz' => [
+                "Zayavka #{request} bekor qilinibdi. Nima sababdan bekor qilindi?",
+                "{address}, #{request} zayavka nega bekor qilindi?",
+                "#{request} bekor bo'libdi, sababi nima edi?",
+            ],
+        ],
+    ],
+
+    /*
      * A ladder per role: operators and sales managers are told different
      * things. Each level starts at a repeat number (`from`) and says what
      * goes out at it (`mode`: 'all' - the forward and a comment,
