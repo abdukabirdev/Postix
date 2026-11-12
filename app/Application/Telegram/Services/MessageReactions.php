@@ -32,16 +32,10 @@ final class MessageReactions
      */
     public function incoming(array $update): ?array
     {
-        $peer = $update['peer'] ?? [];
-
-        if (($peer['_'] ?? null) !== 'peerUser') {
-            return null;
-        }
-
-        $sender = (int) ($peer['user_id'] ?? 0);
+        $sender = self::userId($update['peer'] ?? null);
         $message = (int) ($update['msg_id'] ?? 0);
 
-        if ($sender <= 0 || $message <= 0) {
+        if ($sender === null || $message <= 0) {
             return null;
         }
 
@@ -80,9 +74,9 @@ final class MessageReactions
                     continue;
                 }
 
-                $who = $recent['peer_id'] ?? [];
+                $who = self::userId($recent['peer_id'] ?? null);
 
-                if (($who['_'] ?? null) === 'peerUser' && (int) ($who['user_id'] ?? 0) !== $sender) {
+                if ($who !== null && $who !== $sender) {
                     continue;
                 }
 
@@ -126,6 +120,24 @@ final class MessageReactions
             default:
                 return null;
         }
+    }
+
+    /**
+     * The user a peer is, in any form MadelineProto gives it: the TL array
+     * (peerUser) or the bare id; a group or a channel is no one's private
+     * answer.
+     */
+    private static function userId(mixed $peer): ?int
+    {
+        if (is_array($peer)) {
+            if (isset($peer['_']) && $peer['_'] !== 'peerUser') {
+                return null;
+            }
+
+            $peer = $peer['user_id'] ?? null;
+        }
+
+        return is_int($peer) || (is_string($peer) && ctype_digit($peer)) ? ((int) $peer > 0 ? (int) $peer : null) : null;
     }
 
     public static function agrees(string $emoji): bool

@@ -111,11 +111,11 @@ return [
      *               level; the rest go as the bare forward
      */
     'send_chance' => [
-        'reply' => (int) env('AUTO_REPLIES_REPLY_CHANCE', 60),
+        'reply' => (int) env('AUTO_REPLIES_REPLY_CHANCE', 85),
         'greeting' => (int) env('AUTO_REPLIES_GREETING_CHANCE', 85),
         'opening' => (int) env('AUTO_REPLIES_OPENING_CHANCE', 50),
         'follow_up' => (int) env('AUTO_REPLIES_FOLLOW_UP_CHANCE', 50),
-        'reaction' => (int) env('AUTO_REPLIES_REACTION_CHANCE', 35),
+        'reaction' => (int) env('AUTO_REPLIES_REACTION_CHANCE', 80),
     ],
 
     /*
@@ -134,6 +134,24 @@ return [
             '👍', '👌', '✅', '🤝', '🙏', '❤', '💯', '🔥', '👏', '😊', '☺', '🫡', '🥰', '😍', '🤗', '🎉', '✍', '🤩', '⚡', '😎', '🤓', '🏆', '💪',
         ],
         'custom_agrees' => true,
+
+        /*
+         * Besides the kind's own answers, an "ok" reaction is answered with
+         * these - emoji alone and short words - per language; {address} as
+         * in the answers.
+         */
+        'answers' => [
+            'uz' => [
+                '🙏', '🤝', '👍', '🫡', '👌', '😊',
+                'Рахмат 🙏', 'Рахмат 🤝', 'Рахмат ❤️', 'Рахмат, {address} 🙏',
+                'Катта рахмат 🙏', 'Зур 👍', 'Хуп 👌', 'Яхши, рахмат 😊',
+            ],
+            'ru' => [
+                '🙏', '🤝', '👍', '🫡', '👌', '😊',
+                'Спасибо 🙏', 'Спасибо 🤝', 'Спасибо ❤️', 'Спасибо, {address} 🙏',
+                'Принято 🫡', 'Отлично 👍', 'Хорошо 👌', 'Благодарю 🙏', 'Супер, спасибо 😊',
+            ],
+        ],
     ],
 
     'path' => env('AUTO_REPLIES_PATH', storage_path('app/telegram/auto-replies.json')),

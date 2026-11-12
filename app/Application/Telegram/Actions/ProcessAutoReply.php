@@ -81,7 +81,7 @@ final class ProcessAutoReply
         $person = $this->person($telegram, $senderId);
 
         if ($person === null) {
-            return null;
+            return $this->skipped($reaction, 'not_a_known_person', $senderId);
         }
 
         /*
@@ -89,7 +89,7 @@ final class ProcessAutoReply
          * that delivers their role's penalties (DutyOwners), no other.
          */
         if (app(DutyOwners::class)->penaltyOwner($person->roleOrDefault()) !== $listenerKey) {
-            return null;
+            return $this->skipped($reaction, 'other_account_writes_to_them', $senderId);
         }
 
         $person->update(['last_private_message_at' => now()]);
@@ -162,7 +162,7 @@ final class ProcessAutoReply
          * nothing is written to them, an answer neither.
          */
         if (($kind === null && ! $greet) || ! $person->allows('auto_replies_enabled')) {
-            return null;
+            return $this->skipped($reaction, $kind === null && ! $greet ? 'not_an_ok_reaction' : 'muted_on_the_card', $senderId);
         }
 
         /*
@@ -171,11 +171,11 @@ final class ProcessAutoReply
          * sent.
          */
         if ($open && ! $this->agent->mayAnswer($check, $person)) {
-            return null;
+            return $this->skipped($reaction, 'penalty_level_does_not_thank', $senderId);
         }
 
         if (! $open && ($rules->onlyAfterPenalty || Cache::has($this->cooldownKey($person)))) {
-            return null;
+            return $this->skipped($reaction, $rules->onlyAfterPenalty ? 'only_after_penalty' : 'cooldown', $senderId);
         }
 
         $language = $person->messageLanguage();
@@ -192,7 +192,21 @@ final class ProcessAutoReply
             )
             : ['language' => $language, 'items' => []];
 
+        /*
+         * Under an "ok" reaction the answers also come in emoji and short
+         * words (auto_replies.reactions.answers): a 🤝 is answered with a
+         * 🙏 as readily as with a sentence. Not where the card allows only
+         * its own answers - then there are none of the shared ones to add to.
+         */
+        if ($reaction === true && $choices['items'] !== []) {
+            $choices['items'] = [...$choices['items'], ...$this->reactionAnswers($choices['language'] ?? $language)];
+        }
+
         $hello = $greet ? $this->hello($rules, (int) $greeting['index'], $language, $tone, $person) : null;
+
+        if ($choices['items'] === [] && $hello === null) {
+            return $this->skipped($reaction, 'no_answers_for_this_person', $senderId);
+        }
 
         /*
          * Not every "+" is thanked, not every greeting greeted back
@@ -210,7 +224,7 @@ final class ProcessAutoReply
         }
 
         if ($choices['items'] === [] && $hello === null) {
-            return null;
+            return $this->skipped($reaction, 'let_pass_by_chance', $senderId);
         }
 
         /*
@@ -218,7 +232,7 @@ final class ProcessAutoReply
          * the wait gets none of its own.
          */
         if (! Cache::add($this->pendingKey($person), true, now()->addMinute())) {
-            return null;
+            return $this->skipped($reaction, 'another_answer_on_its_way', $senderId);
         }
 
         /*
@@ -329,6 +343,32 @@ final class ProcessAutoReply
         $person?->update(['telegram_id' => $senderId]);
 
         return $person;
+    }
+
+    /**
+     * The emoji and short thanks an "ok" reaction is answered with besides
+     * the kind's own answers.
+     *
+     * @return list<array{type: 'text', text: string}>
+     */
+    private function reactionAnswers(string $language): array
+    {
+        $texts = (array) config("auto_replies.reactions.answers.{$language}", []);
+
+        return array_map(static fn (string $text): array => ['type' => 'text', 'text' => $text], array_values($texts));
+    }
+
+    /**
+     * A reaction that was not thanked says why in the log: with no word
+     * back, that is the only way to tell a quiet chance from a broken chain.
+     */
+    private function skipped(?bool $reaction, string $why, int $senderId): null
+    {
+        if ($reaction !== null) {
+            Log::info('Auto reply: reaction not answered', ['why' => $why, 'sender_id' => $senderId]);
+        }
+
+        return null;
     }
 
     private function cooldownKey(OperationUser $person): string

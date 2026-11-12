@@ -18,6 +18,7 @@ use App\Application\Telegram\Services\AutoReplyTelegramGifs;
 use App\Application\Telegram\Services\ChatReader;
 use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
+use App\Application\Telegram\Services\MessageReactions;
 use App\Application\Telegram\Services\RequestCancellationAsker;
 use App\Application\Telegram\Services\ScheduledMessageSender;
 use App\Application\Telegram\Services\TelegramDriverCheckChats;
@@ -125,13 +126,26 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
     public function onUpdateMessageReactions(array $update): void
     {
         try {
-            if (! app(DutyOwners::class)->ownsPenalties(null)) {
+            $owns = app(DutyOwners::class)->ownsPenalties(null);
+
+            Log::info('TelegramDriverCheckHandler: reaction update', [
+                'peer' => json_encode($update['peer'] ?? null),
+                'first_reaction' => mb_substr((string) json_encode($update['reactions']['recent_reactions'][0] ?? $update['reactions']['results'][0] ?? null), 0, 300),
+                'msg_id' => $update['msg_id'] ?? null,
+                'recent' => count($update['reactions']['recent_reactions'] ?? []),
+                'results' => count($update['reactions']['results'] ?? []),
+                'owns_penalties' => $owns,
+            ]);
+
+            if (! $owns) {
                 return;
             }
 
             $reaction = app(MessageReactions::class)->incoming($update);
 
             if ($reaction === null) {
+                Log::info('TelegramDriverCheckHandler: reaction not taken (not theirs, not new, or too old)');
+
                 return;
             }
 

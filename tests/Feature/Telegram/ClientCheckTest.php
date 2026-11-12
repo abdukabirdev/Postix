@@ -1678,11 +1678,15 @@ class ClientCheckTest extends TestCase
 
     public function test_an_ok_reaction_is_thanked_and_is_the_penalty_reply(): void
     {
-        config(['auto_replies.send_chance.reaction' => 100]);
+        config([
+            'auto_replies.send_chance.reaction' => 100,
+            'auto_replies.reactions.answers' => ['uz' => ['🙏'], 'ru' => ['🙏']],
+        ]);
         $this->person(attributes: ['address' => ['uz' => 'Afzal aka']]);
         $check = $this->penaltySent();
 
-        $this->assertSame('Rahmat, Afzal aka', $this->reacted('🤝', true));
+        /* The kind's answer or one of the reaction answers (emoji and short words). */
+        $this->assertContains($this->reacted('🤝', true), ['Rahmat, Afzal aka', '🙏']);
 
         /* Thanked on its own, not as a reply under the reaction's message. */
         $this->assertSame(['send'], $this->messages->kinds());
@@ -1767,6 +1771,28 @@ class ClientCheckTest extends TestCase
             ['sender' => 555, 'message' => 77, 'text' => '[эмодзи]', 'agrees' => true],
             $reactions->incoming($reacted(['_' => 'reactionCustomEmoji', 'document_id' => 1])),
         );
+    }
+
+    public function test_the_reaction_update_with_bare_ids_is_read_too(): void
+    {
+        $update = [
+            '_' => 'updateMessageReactions',
+            'peer' => 555,
+            'msg_id' => 78,
+            'reactions' => ['_' => 'messageReactions', 'recent_reactions' => [
+                ['_' => 'messagePeerReaction', 'peer_id' => 555, 'date' => time(), 'reaction' => ['_' => 'reactionEmoji', 'emoticon' => '🤝']],
+            ]],
+        ];
+
+        $reactions = app(MessageReactions::class);
+
+        $this->assertSame(
+            ['sender' => 555, 'message' => 78, 'text' => '🤝', 'agrees' => true],
+            $reactions->incoming($update),
+        );
+
+        /* A group is no one's private answer. */
+        $this->assertNull($reactions->incoming([...$update, 'peer' => -100123, 'msg_id' => 79]));
     }
 
     public function test_a_plus_is_let_pass_when_the_reply_chance_says_so(): void
