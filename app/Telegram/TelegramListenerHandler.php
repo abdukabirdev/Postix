@@ -193,6 +193,42 @@ final class TelegramListenerHandler extends SimpleEventHandler
      * penalty intake) and the private replies to penalties (for the roles it
      * delivers). Driver checks are never read here; that stays with Driver Check.
      */
+    /**
+     * A reaction under our message in a private chat (👍, 🤝): an answer of
+     * the person like a message - it spares the nudge "why are you silent",
+     * and an "ok" one is thanked now and then (ProcessAutoReply).
+     *
+     * @param array<string, mixed> $update
+     */
+    public function onUpdateMessageReactions(array $update): void
+    {
+        try {
+            if (! app(DutyOwners::class)->ownsPenalties(self::$key)) {
+                return;
+            }
+
+            $reaction = app(MessageReactions::class)->incoming($update);
+
+            if ($reaction === null) {
+                return;
+            }
+
+            app(ProcessAutoReply::class)->execute(
+                telegram: $this,
+                senderId: $reaction['sender'],
+                messageId: $reaction['message'],
+                text: $reaction['text'],
+                listenerKey: self::$key,
+                reaction: $reaction['agrees'],
+            );
+        } catch (Throwable $e) {
+            Log::error('TelegramListenerHandler: reaction failed', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+    }
+
     #[Handler]
     public function handleIncomingMessage(Incoming&TelegramIncomingMessage $message): void
     {

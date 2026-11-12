@@ -17,6 +17,7 @@ use App\Application\Telegram\Services\ClientCheckRules;
 use App\Application\Telegram\Services\ClientCheckRulesStore;
 use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\CrmApiClient;
+use App\Application\Telegram\Services\MessageReactions;
 use App\Application\Telegram\Services\PersonalAnswers;
 use App\Application\Telegram\Services\TelegramMessageTypeDetector;
 use App\Application\Telegram\Services\TelegramPenaltyMessageParser;
@@ -1208,6 +1209,18 @@ class ClientCheckTest extends TestCase
         );
     }
 
+    /** A reaction under our message: its emoji, and whether it means "ok". */
+    private function reacted(string $emoji, bool $agrees, int $from = 555): ?string
+    {
+        return app(ProcessAutoReply::class)->execute(
+            telegram: $this->telegram,
+            senderId: $from,
+            messageId: ++$this->messageId,
+            text: $emoji,
+            reaction: $agrees,
+        );
+    }
+
     /** A penalty forwarded and commented, the messages cleared. */
     private function penaltySent(int $repeat = 1): TelegramClientCheck
     {
@@ -1662,6 +1675,99 @@ class ClientCheckTest extends TestCase
      * Not every time: auto_replies.send_chance
      * ------------------------------------------------------------------
      */
+
+    public function test_an_ok_reaction_is_thanked_and_is_the_penalty_reply(): void
+    {
+        config(['auto_replies.send_chance.reaction' => 100]);
+        $this->person(attributes: ['address' => ['uz' => 'Afzal aka']]);
+        $check = $this->penaltySent();
+
+        $this->assertSame('Rahmat, Afzal aka', $this->reacted('🤝', true));
+
+        /* Thanked on its own, not as a reply under the reaction's message. */
+        $this->assertSame(['send'], $this->messages->kinds());
+        $this->assertArrayNotHasKey('reply_to', $this->messages->sent()[0]);
+        $check->refresh();
+        $this->assertSame('🤝', $check->reply_text);
+        $this->assertNotNull($check->reply_answered_at);
+    }
+
+    public function test_an_ok_reaction_is_thanked_only_now_and_then(): void
+    {
+        config(['auto_replies.send_chance.reaction' => 0]);
+        $this->person();
+        $check = $this->penaltySent();
+
+        $this->assertNull($this->reacted('👍', true));
+        $this->assertSame([], $this->messages->kinds());
+        $this->assertSame('👍', $check->refresh()->reply_text);
+        $this->assertNotNull(OperationUser::query()->first()->last_private_message_at);
+    }
+
+    public function test_another_reaction_is_a_reply_but_is_not_thanked(): void
+    {
+        config(['auto_replies.send_chance.reaction' => 100]);
+        $this->person();
+        $check = $this->penaltySent();
+
+        $this->assertNull($this->reacted('👎', false));
+        $this->assertSame([], $this->messages->kinds());
+        $this->assertSame('👎', $check->refresh()->reply_text);
+    }
+
+    public function test_a_reaction_spares_the_nudge(): void
+    {
+        config(['auto_replies.send_chance.reaction' => 0]);
+        $this->person();
+        $this->ignoredPenalties(2);
+        $third = $this->penaltySent(repeat: 3);
+
+        $this->reacted('🤝', true);
+        Carbon::setTestNow(now()->addMinutes(3));
+        $this->nudge();
+
+        $this->assertSame([], $this->messages->kinds());
+        $this->assertNull($third->refresh()->nudged_at);
+    }
+
+    public function test_a_reaction_of_a_stranger_is_not_taken(): void
+    {
+        config(['auto_replies.send_chance.reaction' => 100]);
+        $this->person();
+
+        $this->assertNull($this->reacted('👍', true, from: 999));
+        $this->assertSame([], $this->messages->kinds());
+    }
+
+    public function test_the_reaction_update_is_read_once(): void
+    {
+        $reacted = fn (array $reaction): array => [
+            '_' => 'updateMessageReactions',
+            'peer' => ['_' => 'peerUser', 'user_id' => 555],
+            'msg_id' => 77,
+            'reactions' => ['_' => 'messageReactions', 'recent_reactions' => [
+                ['_' => 'messagePeerReaction', 'peer_id' => ['_' => 'peerUser', 'user_id' => 555], 'date' => time(), 'reaction' => $reaction],
+                ['_' => 'messagePeerReaction', 'my' => true, 'peer_id' => ['_' => 'peerUser', 'user_id' => 1], 'date' => time(), 'reaction' => ['_' => 'reactionEmoji', 'emoticon' => '❤']],
+            ]],
+        ];
+
+        $reactions = app(MessageReactions::class);
+        $heart = ['_' => 'reactionEmoji', 'emoticon' => "❤\u{FE0F}"];
+
+        $this->assertSame(
+            ['sender' => 555, 'message' => 77, 'text' => "❤\u{FE0F}", 'agrees' => true],
+            $reactions->incoming($reacted($heart)),
+        );
+        $this->assertNull($reactions->incoming($reacted($heart)));
+        $this->assertSame(
+            ['sender' => 555, 'message' => 77, 'text' => '👎', 'agrees' => false],
+            $reactions->incoming($reacted(['_' => 'reactionEmoji', 'emoticon' => '👎'])),
+        );
+        $this->assertSame(
+            ['sender' => 555, 'message' => 77, 'text' => '[эмодзи]', 'agrees' => true],
+            $reactions->incoming($reacted(['_' => 'reactionCustomEmoji', 'document_id' => 1])),
+        );
+    }
 
     public function test_a_plus_is_let_pass_when_the_reply_chance_says_so(): void
     {

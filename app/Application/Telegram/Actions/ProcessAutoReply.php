@@ -34,6 +34,9 @@ use function Amp\delay;
  * Any message of theirs is noted on the card (last_private_message_at):
  * the nudge counts the penalties nobody answered since.
  *
+ * A reaction on our message counts as a message of theirs (MessageReactions
+ * reads it): it is a reply, so no nudge "why are you silent" follows it.
+ *
  * A message soon after a penalty is that penalty's reply: kept on it for
  * the journal, matched or not, and answered once. Any other message is
  * answered too, unless the file says "only after a penalty", at most once
@@ -61,6 +64,7 @@ final class ProcessAutoReply
         int $messageId,
         string $text,
         ?string $listenerKey = null,
+        ?bool $reaction = null,
     ): ?string {
         $text = trim($text);
 
@@ -108,11 +112,20 @@ final class ProcessAutoReply
          * "Доброе утро. Готово": the greeting is answered on its own, the
          * rest is read as any message. Once a day per person.
          */
-        $greeting = $rules->greetings['enabled']
+        $greeting = $reaction === null && $rules->greetings['enabled']
             ? $this->matcher->greeting($rules->greetings['list'], $rules->greetings['fillers'], $text)
             : null;
 
-        $kind = $this->matcher->match($rules, $greeting['rest'] ?? $text);
+        /*
+         * A reaction instead of a message ($text is its emoji): an "ok"
+         * one (👍, 🤝, a custom emoji) is thanked as a "+" is - by the kind
+         * that has 👍 among its keywords - any other is an answer too, with
+         * nothing written back.
+         */
+        $kind = $reaction === false
+            ? null
+            : ($this->matcher->match($rules, $greeting['rest'] ?? $text)
+                ?? ($reaction === true ? $this->matcher->match($rules, '👍') : null));
 
         $greet = $greeting !== null
             && ($kind !== null || $greeting['alone'])
@@ -192,7 +205,7 @@ final class ProcessAutoReply
             Cache::put($this->greetedKey($person), true, now()->endOfDay());
         }
 
-        if ($choices['items'] !== [] && ! AutoReplyRules::speaks('reply')) {
+        if ($choices['items'] !== [] && ! AutoReplyRules::speaks($reaction === null ? 'reply' : 'reaction')) {
             $choices['items'] = [];
         }
 
@@ -248,7 +261,7 @@ final class ProcessAutoReply
                     [...$choices, 'items' => [$item]],
                     $check ?? new TelegramClientCheck(),
                     $person,
-                    replyTo: $hello === null ? $messageId : null,
+                    replyTo: $hello === null && $reaction === null ? $messageId : null,
                 );
             }
 

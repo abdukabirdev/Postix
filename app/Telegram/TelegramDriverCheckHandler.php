@@ -115,6 +115,41 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
         }
     }
 
+    /**
+     * A reaction under our message in a private chat (👍, 🤝): an answer of
+     * the person like a message - it spares the nudge "why are you silent",
+     * and an "ok" one is thanked now and then (ProcessAutoReply).
+     *
+     * @param array<string, mixed> $update
+     */
+    public function onUpdateMessageReactions(array $update): void
+    {
+        try {
+            if (! app(DutyOwners::class)->ownsPenalties(null)) {
+                return;
+            }
+
+            $reaction = app(MessageReactions::class)->incoming($update);
+
+            if ($reaction === null) {
+                return;
+            }
+
+            app(ProcessAutoReply::class)->execute(
+                telegram: $this,
+                senderId: $reaction['sender'],
+                messageId: $reaction['message'],
+                text: $reaction['text'],
+                reaction: $reaction['agrees'],
+            );
+        } catch (Throwable $e) {
+            Log::error('TelegramDriverCheckHandler: reaction failed', [
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+    }
+
     #[Handler]
     public function handleIncomingMessage(
         Incoming&TelegramIncomingMessage $message,

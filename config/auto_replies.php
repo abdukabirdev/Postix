@@ -115,6 +115,25 @@ return [
         'greeting' => (int) env('AUTO_REPLIES_GREETING_CHANCE', 85),
         'opening' => (int) env('AUTO_REPLIES_OPENING_CHANCE', 50),
         'follow_up' => (int) env('AUTO_REPLIES_FOLLOW_UP_CHANCE', 50),
+        'reaction' => (int) env('AUTO_REPLIES_REACTION_CHANCE', 35),
+    ],
+
+    /*
+     * A reaction on our message (👍, 🤝) is read as a reply: it spares the
+     * nudge "why are you silent", and an "ok" one is thanked now and then
+     * (send_chance.reaction above, the same cooldown as a "+").
+     *
+     *   agree         - the emoji that mean "ok, seen, thanks"; any other
+     *                   (👎, 😡, 😢 ...) is a reply too, but nothing is
+     *                   written back
+     *   custom_agrees - Premium custom emoji cannot be told apart: true
+     *                   takes them for "ok"
+     */
+    'reactions' => [
+        'agree' => [
+            '👍', '👌', '✅', '🤝', '🙏', '❤', '💯', '🔥', '👏', '😊', '☺', '🫡', '🥰', '😍', '🤗', '🎉', '✍', '🤩', '⚡', '😎', '🤓', '🏆', '💪',
+        ],
+        'custom_agrees' => true,
     ],
 
     'path' => env('AUTO_REPLIES_PATH', storage_path('app/telegram/auto-replies.json')),
