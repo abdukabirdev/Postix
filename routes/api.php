@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\Auth\AuthController;
 use App\Http\Controllers\Api\Telegram\AccountsReportController;
+use App\Http\Controllers\Api\Telegram\ChatReaderController;
 use App\Http\Controllers\Api\Telegram\ContactSyncDevReportController;
 use App\Http\Controllers\Api\Telegram\GroupInviteReportController;
 use App\Http\Controllers\Api\Telegram\TelegramAccountController;
@@ -33,6 +34,15 @@ Route::get('/telegram/report/accounts', AccountsReportController::class)
 Route::get('/telegram/report/contact-sync', ContactSyncDevReportController::class)
     ->middleware('throttle:30,1')
     ->name('telegram.report.contact-sync');
+
+// The developer's read-only window into Telegram (chats, messages, people), TELEGRAM_READER_TOKEN: see ChatReaderController.
+Route::prefix('telegram/reader')->middleware('throttle:60,1')->group(function () {
+    Route::get('/accounts', [ChatReaderController::class, 'accounts'])->name('telegram.reader.accounts');
+    Route::get('/people', [ChatReaderController::class, 'people'])->name('telegram.reader.people');
+    Route::get('/people/{id}/history', [ChatReaderController::class, 'personHistory'])->whereNumber('id')->name('telegram.reader.person');
+    Route::get('/requests/{id}', [ChatReaderController::class, 'show'])->whereNumber('id')->name('telegram.reader.request');
+    Route::get('/{op}', [ChatReaderController::class, 'read'])->where('op', 'dialogs|history|search|chat|members|user')->name('telegram.reader.read');
+});
 
 Route::middleware('auth:sanctum')->group(function () {
 

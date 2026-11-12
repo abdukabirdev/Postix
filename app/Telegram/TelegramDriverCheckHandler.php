@@ -15,6 +15,7 @@ use App\Application\Telegram\Actions\ProcessUpdatedDriverMessage;
 use App\Application\Telegram\Actions\RouteTelegramFile;
 use App\Application\Telegram\Actions\TelegramDriverCheckStarter;
 use App\Application\Telegram\Services\AutoReplyTelegramGifs;
+use App\Application\Telegram\Services\ChatReader;
 use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
 use App\Application\Telegram\Services\RequestCancellationAsker;
@@ -566,6 +567,32 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
         } catch (Throwable $e) {
             Log::error(
                 'TelegramDriverCheckHandler: GIF search failed',
+                [
+                    'error' => $e->getMessage(),
+                    'exception' => $e::class,
+                ],
+            );
+        }
+    }
+
+    /**
+     * The developer's chat reader (GET /api/telegram/reader): this process
+     * holds Driver Check's session, so the reads asked of it are answered here.
+     */
+    #[Cron(period: 1.0)]
+    public function serveChatReads(): void
+    {
+        $accountId = (int) config('services.telegram.driver_check_account_id');
+
+        if ($this->restartRequested || $accountId <= 0) {
+            return;
+        }
+
+        try {
+            app(ChatReader::class)->serve($this, $accountId);
+        } catch (Throwable $e) {
+            Log::error(
+                'TelegramDriverCheckHandler: chat reads failed',
                 [
                     'error' => $e->getMessage(),
                     'exception' => $e::class,

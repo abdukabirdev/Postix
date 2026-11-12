@@ -107,6 +107,14 @@ return [
         'report_token' => env('TELEGRAM_REPORT_TOKEN'),
 
         /*
+         * The bearer token of the developer's chat reader
+         * (GET /api/telegram/reader/...): it opens the content of chats, so
+         * it is not the report token. Empty or shorter than 32 characters -
+         * the address answers 404.
+         */
+        'reader_token' => env('TELEGRAM_READER_TOKEN'),
+
+        /*
          * Where problems are told to the developer (DeveloperAlerts): a bot
          * and the chat it writes to. Empty - they are only recorded on the
          * "How it works" page and in the log. The same problem is told once

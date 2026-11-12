@@ -10,6 +10,7 @@ use App\Application\Telegram\Actions\ProcessClientCheckMessage;
 use App\Application\Telegram\Actions\ProcessRequestCancellation;
 use App\Application\Telegram\Actions\RouteTelegramFile;
 use App\Application\Telegram\Services\AutoReplyTelegramGifs;
+use App\Application\Telegram\Services\ChatReader;
 use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
 use App\Application\Telegram\Services\RequestCancellationAsker;
@@ -70,6 +71,11 @@ final class TelegramListenerHandler extends SimpleEventHandler
     private ?array $watched = null;
 
     private float $watchedAt = 0.0;
+
+    /** The account this listener holds, re-read every WATCH_REFRESH seconds (the chat reader asks every second). */
+    private ?int $readerAccountId = null;
+
+    private float $readerAccountAt = 0.0;
 
     private int $unhealthyStrikes = 0;
 
@@ -357,6 +363,37 @@ final class TelegramListenerHandler extends SimpleEventHandler
             app(AutoReplyTelegramGifs::class)->serve($this);
         } catch (Throwable $e) {
             Log::error('TelegramListenerHandler: GIF search failed', [
+                'key' => self::$key,
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+    }
+
+    /**
+     * The developer's chat reader (GET /api/telegram/reader): this process
+     * holds the account's session, so the reads asked of it are answered here.
+     */
+    #[Cron(period: 1.0)]
+    public function serveChatReads(): void
+    {
+        if ($this->restartRequested) {
+            return;
+        }
+
+        try {
+            if ($this->readerAccountId === null || microtime(true) - $this->readerAccountAt > self::WATCH_REFRESH) {
+                $this->readerAccountId = $this->listener()?->telegram_account_id;
+                $this->readerAccountAt = microtime(true);
+            }
+
+            if ($this->readerAccountId === null) {
+                return;
+            }
+
+            app(ChatReader::class)->serve($this, (int) $this->readerAccountId);
+        } catch (Throwable $e) {
+            Log::error('TelegramListenerHandler: chat reads failed', [
                 'key' => self::$key,
                 'error' => $e->getMessage(),
                 'exception' => $e::class,
