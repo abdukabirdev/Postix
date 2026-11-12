@@ -2887,7 +2887,8 @@ class ClientCheckTest extends TestCase
         Открыть запрос (https://crm.zanjeer.uz/queries/queries?filter[search]=TLS04834)
         TXT;
 
-    private function cancelled(string $request = 'TLS04834'): ?TelegramRequestCancellation
+    /** $operation is the "Operation:" line: by default the person every test penalty is for. */
+    private function cancelled(string $request = 'TLS04834', string $operation = "PULATOV AFZAL AHMADJON O'G'LI"): ?TelegramRequestCancellation
     {
         config()->set('client_checks.cancellation.phrases', [
             'uz' => ['Nega bekor qilindi #{request}?'],
@@ -2897,7 +2898,7 @@ class ClientCheckTest extends TestCase
         return app(ProcessRequestCancellation::class)->execute(
             self::BOT_CHAT_ID,
             ++$this->messageId,
-            str_replace('TLS04834', $request, self::CANCELLED),
+            str_replace(['TLS04834', 'SALOHIDDINOV FAZLIDDIN SALOHIDDIN OGLI'], [$request, $operation], self::CANCELLED),
         );
     }
 
@@ -2971,16 +2972,74 @@ class ClientCheckTest extends TestCase
         $this->assertSame(75, collect($this->messages->sent())->last()['reply_to']['reply_to_msg_id']);
     }
 
-    public function test_a_request_nobody_was_fined_for_is_not_asked_about(): void
+    public function test_the_operator_is_asked_even_with_no_penalty_and_even_if_sales_cancelled(): void
     {
         $this->person();
 
+        /* A penalty for another request: nothing to reply to here; and "Отменил:" is sales. */
         $this->penalty(3, 'TLS00001');
 
         $row = $this->cancelled();
 
+        $this->assertNull($row->telegram_client_check_id);
+        $this->assertSame(TelegramRequestCancellation::STATUS_PENDING, $row->status);
+        $this->assertSame('RAJABOVA MAKHBUBA ERMAMAT KIZI', $row->parsed['cancelled_by']);
+
+        $this->ask();
+
+        $question = collect($this->messages->sent())->last();
+
+        $this->assertSame('@afzal', $question['peer']);
+        $this->assertSame('Nega bekor qilindi #TLS04834?', $question['message']);
+        $this->assertArrayNotHasKey('reply_to', $question);
+
+        $row->refresh();
+        $this->assertSame(TelegramRequestCancellation::STATUS_SENT, $row->status);
+        $this->assertNull($row->reply_to_message_id);
+
+        /* Asked once. */
+        $count = count($this->messages->sent());
+        $this->ask();
+        $this->assertCount($count, $this->messages->sent());
+    }
+
+    public function test_only_the_operator_is_asked_not_the_one_who_got_the_penalty(): void
+    {
+        $this->person();
+        $this->person('SALOHIDDINOV FAZLIDDIN SALOHIDDIN OGLI', ['telegram_username' => 'fazliddin', 'telegram_id' => 777]);
+
+        /* The penalty reached PULATOV; the request's operator is SALOHIDDINOV. */
+        $this->penalty(3);
+
+        $row = $this->cancelled('TLS04834', 'SALOHIDDINOV FAZLIDDIN SALOHIDDIN OGLI');
+
+        $this->assertNull($row->telegram_client_check_id);
+
+        $before = count($this->messages->sent());
+
+        $this->ask();
+
+        $this->assertCount($before + 1, $this->messages->sent());
+        $this->assertSame('@fazliddin', collect($this->messages->sent())->last()['peer']);
+    }
+
+    public function test_an_operator_nobody_can_write_to_is_skipped(): void
+    {
+        $this->person();
+
+        /* Not on file at all. */
+        $row = $this->cancelled('TLS00002', 'NOBODY KNOWN');
+
         $this->assertSame(TelegramRequestCancellation::STATUS_SKIPPED, $row->status);
-        $this->assertSame(TelegramRequestCancellation::REASON_NO_PENALTY, $row->reason);
+        $this->assertSame(TelegramRequestCancellation::REASON_NO_OPERATOR, $row->reason);
+
+        /* On file, but with no Telegram to write to. */
+        $this->person('SALOHIDDINOV FAZLIDDIN SALOHIDDIN OGLI', ['telegram_username' => null, 'telegram_id' => null]);
+
+        $this->assertSame(
+            TelegramRequestCancellation::STATUS_SKIPPED,
+            $this->cancelled('TLS00003', 'SALOHIDDINOV FAZLIDDIN SALOHIDDIN OGLI')->status,
+        );
 
         $count = count($this->messages->sent());
         $this->ask();

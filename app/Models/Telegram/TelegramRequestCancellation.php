@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models\Telegram;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -41,8 +42,8 @@ class TelegramRequestCancellation extends Model
 
     public const STATUS_FAILED = 'failed';
 
-    /** No penalty for this request ever reached anybody: nobody to ask. */
-    public const REASON_NO_PENALTY = 'no_penalty';
+    /** The "Operation:" line names nobody we know or can write to: nobody to ask. */
+    public const REASON_NO_OPERATOR = 'no_operator';
 
     /** Penalties are switched off in the panel. */
     public const REASON_DISABLED = 'disabled';
@@ -93,5 +94,29 @@ class TelegramRequestCancellation extends Model
     public function operationUser(): BelongsTo
     {
         return $this->belongsTo(OperationUser::class, 'operation_user_id');
+    }
+
+    /**
+     * The questions to people of these roles - the ones the asking account
+     * delivers penalties to. Goes by the person, not by the penalty: a
+     * question with no penalty behind it has only the person.
+     *
+     * @param list<string> $roles
+     */
+    public function scopeForRoles(Builder $query, array $roles): Builder
+    {
+        if (array_diff(OperationUser::ROLES, $roles) === []) {
+            return $query;
+        }
+
+        return $query->whereHas('operationUser', function (Builder $person) use ($roles): void {
+            $person->where(function (Builder $role) use ($roles): void {
+                $role->whereIn('role', $roles);
+
+                if (in_array(OperationUser::ROLE_OPERATION, $roles, true)) {
+                    $role->orWhereNull('role');
+                }
+            });
+        });
     }
 }

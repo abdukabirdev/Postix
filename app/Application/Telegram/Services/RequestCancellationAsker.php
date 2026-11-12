@@ -11,12 +11,15 @@ use App\Models\Telegram\TelegramSetting;
 use danog\MadelineProto\SimpleEventHandler;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
+use RuntimeException;
 use Throwable;
 
 /**
  * Asks why a request was cancelled: a reply to the request's last penalty
  * in the person's private chat - "Почему отменили?" under
- * "🆘 Повторное напоминание №5 по запросу #EGS21301".
+ * "🆘 Повторное напоминание №5 по запросу #EGS21301". Always the operator (the
+ * "Operation:" line), whoever cancelled; with no penalty of theirs for the
+ * request, the same question goes as a plain message.
  *
  * Runs on the tick of the account that delivers the person's penalties
  * (DutyOwners): the penalty is in that account's chat with them. The texts
@@ -45,7 +48,7 @@ final class RequestCancellationAsker
 
         $pending = fn (): Builder => TelegramRequestCancellation::query()
             ->where('status', TelegramRequestCancellation::STATUS_PENDING)
-            ->whereHas('clientCheck', fn (Builder $check) => $check->forRoles($roles));
+            ->forRoles($roles);
 
         if (! TelegramSetting::clientChecksEnabled()) {
             $pending()->update([
@@ -68,7 +71,7 @@ final class RequestCancellationAsker
         }
 
         $rows = $pending()
-            ->with('clientCheck.operationUser')
+            ->with(['clientCheck', 'operationUser'])
             ->orderBy('id')
             ->limit(10)
             ->get();
@@ -80,13 +83,14 @@ final class RequestCancellationAsker
 
     private function ask(SimpleEventHandler $telegram, TelegramRequestCancellation $row): void
     {
+        /* The operator's own last penalty for the request; null - none, the question is a plain message. */
         $check = $row->clientCheck;
-        $person = $check?->operationUser;
+        $person = $row->operationUser;
 
-        if (! $check instanceof TelegramClientCheck || ! $person instanceof OperationUser) {
+        if (! $person instanceof OperationUser) {
             $row->update([
                 'status' => TelegramRequestCancellation::STATUS_SKIPPED,
-                'reason' => TelegramRequestCancellation::REASON_NO_PENALTY,
+                'reason' => TelegramRequestCancellation::REASON_NO_OPERATOR,
             ]);
 
             return;
@@ -123,25 +127,63 @@ final class RequestCancellationAsker
             'attempts' => $row->attempts + 1,
         ])->syncOriginal();
 
-        $peer = $this->peer((string) $check->peer);
+        /*
+         * With a penalty: the chat it went to, and a reply to it. Without:
+         * the person's own peers, the way a penalty would be sent, and a
+         * plain message.
+         */
+        $peers = $check instanceof TelegramClientCheck && (string) $check->peer !== ''
+            ? [$this->peer((string) $check->peer)]
+            : $person->telegramPeerCandidates();
+
+        $peer = $peers[0] ?? '';
 
         try {
-            $replyTo = $check->dm_message_id ?: $this->findPenalty($telegram, $peer, (string) $check->request_number);
+            if ($peers === []) {
+                throw new RuntimeException('no reachable Telegram peer');
+            }
+
+            $replyTo = $check instanceof TelegramClientCheck
+                ? ($check->dm_message_id ?: $this->findPenalty($telegram, $peer, (string) $check->request_number))
+                : null;
 
             $language = $person->messageLanguage();
 
-            $question = $this->escalation->render($this->phrase($language), $check, $person, $language);
+            $question = $this->escalation->render(
+                $this->phrase($language),
+                $check ?? (new TelegramClientCheck())->forceFill(['request_number' => $row->request_number]),
+                $person,
+                $language,
+            );
 
-            $telegram->messages->sendMessage([
-                'peer' => $peer,
-                'message' => $question,
-                'parse_mode' => 'html',
-                'no_webpage' => true,
-                ...($replyTo !== null ? ['reply_to' => [
-                    '_' => 'inputReplyToMessage',
-                    'reply_to_msg_id' => $replyTo,
-                ]] : []),
-            ]);
+            $errors = [];
+            $sent = false;
+
+            foreach ($peers as $candidate) {
+                try {
+                    $telegram->messages->sendMessage([
+                        'peer' => $candidate,
+                        'message' => $question,
+                        'parse_mode' => 'html',
+                        'no_webpage' => true,
+                        ...($replyTo !== null ? ['reply_to' => [
+                            '_' => 'inputReplyToMessage',
+                            'reply_to_msg_id' => $replyTo,
+                        ]] : []),
+                    ]);
+
+                    $peer = $candidate;
+                    $sent = true;
+
+                    break;
+                } catch (Throwable $e) {
+                    $errors[] = "{$candidate}: " . $e->getMessage();
+                }
+            }
+
+            if (! $sent) {
+                throw new RuntimeException(implode(' | ', $errors));
+            }
 
             $row->update([
                 'status' => TelegramRequestCancellation::STATUS_SENT,
