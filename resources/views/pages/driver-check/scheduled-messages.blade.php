@@ -60,6 +60,7 @@
                                 <p class="dc-break text-sm font-semibold text-gray-900 dark:text-white" x-text="row.name"></p>
                                 <p class="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400">
                                     <span class="font-semibold tabular-nums text-gray-700 dark:text-gray-200" x-text="row.send_at"></span>
+                                    <span x-show="row.jitter_minutes > 0" x-cloak class="tabular-nums" x-text="'±' + row.jitter_minutes"></span>
                                     <span> · </span>
                                     <span x-text="daysLabel(row.days)"></span>
                                     <span> · </span>
@@ -83,10 +84,25 @@
                         </div>
 
                         <p
-                            x-show="row.has_text"
+                            x-show="row.text"
                             class="dc-break whitespace-pre-line rounded-xl bg-gray-25 px-3 py-2.5 text-[13px] text-gray-800 dark:bg-white/[0.03] dark:text-gray-200"
                             x-text="row.text"
                         ></p>
+
+                        {{-- Other wordings: each group gets one of them, picked at random. --}}
+                        <div x-show="row.variants.length > 0" x-cloak class="flex flex-col gap-1.5">
+                            <p class="text-[11.5px] font-semibold text-gray-500 dark:text-gray-400">
+                                <span x-text="translations.table.variants"></span>
+                                <span class="tabular-nums" x-text="'· ' + row.variants.length"></span>
+                            </p>
+
+                            <template x-for="(variant, index) in row.variants" :key="index">
+                                <p
+                                    class="dc-break whitespace-pre-line rounded-xl bg-gray-25 px-3 py-2 text-[12.5px] text-gray-700 dark:bg-white/[0.03] dark:text-gray-300"
+                                    x-text="variant"
+                                ></p>
+                            </template>
+                        </div>
 
                         {{-- A slot set up in advance: the text is pasted in with "Edit". --}}
                         <button
@@ -228,6 +244,44 @@
                 </x-slot:error>
             </x-driver-check.field>
 
+            {{-- Variants: other wordings of the same message. --}}
+            <div>
+                <p class="text-[12px] font-semibold text-gray-600 dark:text-gray-400">{{ __('telegram.scheduled.form.variants') }}</p>
+                <p class="mt-0.5 mb-2 text-[11.5px] leading-snug text-gray-400 dark:text-gray-500">{{ __('telegram.scheduled.form.variants_hint') }}</p>
+
+                <div class="flex flex-col gap-2">
+                    <template x-for="(variant, index) in form.variants" :key="index">
+                        <div class="flex items-start gap-2">
+                            <textarea
+                                data-variant
+                                x-model="form.variants[index]"
+                                rows="2"
+                                maxlength="4000"
+                                :placeholder="translations.form.variant_placeholder"
+                                class="w-full resize-y rounded-lg border border-gray-300 bg-white px-3 py-2 text-[14px] leading-relaxed
+                                       text-gray-900 outline-none transition focus:border-brand-500 focus:ring-4 focus:ring-brand-500/10
+                                       dark:border-gray-700 dark:bg-gray-900 dark:text-white"
+                            ></textarea>
+
+                            <button
+                                type="button"
+                                x-on:click="removeVariant(index)"
+                                :aria-label="translations.form.remove_variant"
+                                :title="translations.form.remove_variant"
+                                class="dc-tap flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-lg leading-none text-gray-400
+                                       transition hover:bg-gray-100 hover:text-error-600 dark:hover:bg-white/[0.06] dark:hover:text-error-400"
+                            >&times;</button>
+                        </div>
+                    </template>
+                </div>
+
+                <x-driver-check.button type="button" class="mt-2" icon="plus" x-on:click="addVariant()">
+                    {{ __('telegram.scheduled.form.add_variant') }}
+                </x-driver-check.button>
+
+                <p x-show="fieldError('variants')" x-cloak class="mt-1 text-[11px] font-medium text-error-600 dark:text-error-400" x-text="fieldError('variants')"></p>
+            </div>
+
             <x-driver-check.field
                 x-show="listeners.length > 1"
                 x-cloak
@@ -247,15 +301,53 @@
                 </select>
             </x-driver-check.field>
 
-            <x-driver-check.field :label="__('telegram.scheduled.form.time')" for="scheduled-time" class="sm:w-40">
-                <x-driver-check.input
-                    id="scheduled-time"
-                    type="time"
-                    x-model="form.send_at"
-                    required
-                    ::data-invalid="!!fieldError('send_at')"
-                />
-            </x-driver-check.field>
+            <div class="flex flex-wrap items-start gap-4">
+                <x-driver-check.field :label="__('telegram.scheduled.form.time')" for="scheduled-time" class="sm:w-40">
+                    <x-driver-check.input
+                        id="scheduled-time"
+                        type="time"
+                        x-model="form.send_at"
+                        required
+                        ::data-invalid="!!fieldError('send_at')"
+                    />
+                </x-driver-check.field>
+
+                <x-driver-check.field
+                    :label="__('telegram.scheduled.form.jitter')"
+                    :hint="__('telegram.scheduled.form.jitter_hint')"
+                    for="scheduled-jitter"
+                    class="min-w-0 flex-1 sm:max-w-sm"
+                >
+                    <x-driver-check.input
+                        id="scheduled-jitter"
+                        type="number"
+                        min="0"
+                        max="30"
+                        inputmode="numeric"
+                        x-model.number="form.jitter_minutes"
+                        ::data-invalid="!!fieldError('jitter_minutes')"
+                    />
+                </x-driver-check.field>
+            </div>
+
+            <label
+                class="dc-tap flex cursor-pointer items-start gap-3 rounded-2xl border p-3.5 transition"
+                :class="form.skip_if_file_today
+                    ? 'border-brand-500 bg-brand-25 dark:border-brand-500/50 dark:bg-brand-500/[0.07]'
+                    : 'border-gray-200 bg-white hover:bg-gray-50 dark:border-gray-800 dark:bg-transparent dark:hover:bg-white/[0.03]'"
+            >
+                <input
+                    type="checkbox"
+                    x-model="form.skip_if_file_today"
+                    class="mt-0.5 h-5 w-5 shrink-0 rounded-md border-gray-300 text-brand-500
+                           focus:ring-brand-500/30 dark:border-gray-600 dark:bg-gray-900"
+                >
+
+                <span class="min-w-0">
+                    <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ __('telegram.scheduled.form.skip_file') }}</span>
+                    <span class="mt-0.5 block text-[11px] leading-snug text-gray-500 dark:text-gray-400">{{ __('telegram.scheduled.form.skip_file_hint') }}</span>
+                </span>
+            </label>
 
             <div>
                 <p class="mb-1.5 text-[12px] font-semibold text-gray-600 dark:text-gray-400">{{ __('telegram.scheduled.form.days') }}</p>

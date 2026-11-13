@@ -27,6 +27,9 @@ final class FakeScheduledMessages
     /** @var list<int> */
     public array $failFor = [];
 
+    /** @var array<int, list<array<string, mixed>>> what each group's history holds */
+    public array $history = [];
+
     public function sendMessage(array $params): array
     {
         if (in_array($params['peer'], $this->failFor, true)) {
@@ -36,6 +39,11 @@ final class FakeScheduledMessages
         $this->sent[] = $params;
 
         return [];
+    }
+
+    public function getHistory(array $params): array
+    {
+        return ['messages' => $this->history[$params['peer']] ?? []];
     }
 
     /**
@@ -78,6 +86,8 @@ class ScheduledMessageTest extends TestCase
         (require base_path('database/migrations/2026_10_12_110000_create_telegram_file_routes_tables.php'))->up();
 
         (require base_path('database/migrations/2026_10_17_120000_create_telegram_scheduled_messages_table.php'))->up();
+        (require base_path('database/migrations/2026_11_13_100000_add_variants_to_telegram_scheduled_messages_table.php'))->up();
+        (require base_path('database/migrations/2026_11_13_110000_add_jitter_and_file_skip_to_telegram_scheduled_messages_table.php'))->up();
 
         $this->messages = new FakeScheduledMessages();
 
@@ -335,6 +345,248 @@ class ScheduledMessageTest extends TestCase
         $this->flush();
 
         $this->assertSame([self::FIRST, self::FIRST, self::SECOND], $this->messages->peers());
+    }
+
+    public function test_each_group_gets_one_of_the_texts(): void
+    {
+        $message = $this->make([
+            'text' => 'Отчётлар эсдан чиқмасин',
+            'variants' => ['Ҳисоботларни унутманг', 'Отчётлар қани?'],
+        ]);
+
+        $this->assertSame(
+            ['Отчётлар эсдан чиқмасин', 'Ҳисоботларни унутманг', 'Отчётлар қани?'],
+            $message->texts(),
+        );
+
+        $this->travelTo(now()->setTime(17, 0));
+        $this->flush();
+
+        $this->assertCount(2, $this->messages->sent);
+
+        foreach ($this->messages->sent as $call) {
+            $this->assertContains($call['message'], $message->texts());
+        }
+
+        /* Over many picks every text comes up, and only these. */
+        $seen = [];
+
+        for ($i = 0; $i < 300; $i++) {
+            $seen[$message->pickText()] = true;
+        }
+
+        $this->assertEqualsCanonicalizing($message->texts(), array_keys($seen));
+    }
+
+    public function test_variants_alone_are_a_text_and_blank_ones_do_not_count(): void
+    {
+        $this->assertFalse($this->make(['text' => '', 'variants' => ['', '  ']])->hasText());
+
+        $message = $this->make(['text' => '', 'variants' => ['', 'Нима бўлди отчётлар?']]);
+
+        $this->assertTrue($message->hasText());
+        $this->assertSame(['Нима бўлди отчётлар?'], $message->texts());
+
+        $this->travelTo(now()->setTime(17, 0));
+        $this->flush();
+
+        $this->assertSame(['Нима бўлди отчётлар?', 'Нима бўлди отчётлар?'], array_column($this->messages->sent, 'message'));
+    }
+
+    public function test_the_panel_saves_variants_trimmed_without_blanks_and_keeps_them_when_left_out(): void
+    {
+        $this->signIn();
+
+        $payload = [
+            'name' => 'Report',
+            'text' => 'Отчётлар эсдан чиқмасин',
+            'variants' => ['  Ҳисоботларни унутманг  ', '', 'Ҳисоботларни унутманг', 'Отчётлар қани?'],
+            'send_at' => '17:00',
+            'days' => [1, 2, 3, 4, 5],
+            'chat_ids' => [self::FIRST],
+            'is_active' => true,
+        ];
+
+        $this->postJson('/api/telegram/scheduled-messages', $payload)
+            ->assertCreated()
+            ->assertJsonPath('data.variants', ['Ҳисоботларни унутманг', 'Отчётлар қани?']);
+
+        $id = TelegramScheduledMessage::query()->value('id');
+
+        /* The switch on the page sends the row back with its variants; a client that does not send them changes nothing. */
+        unset($payload['variants']);
+
+        $this->putJson("/api/telegram/scheduled-messages/{$id}", ['is_active' => false] + $payload)
+            ->assertOk()
+            ->assertJsonPath('data.variants', ['Ҳисоботларни унутманг', 'Отчётлар қани?']);
+
+        $this->putJson("/api/telegram/scheduled-messages/{$id}", ['variants' => []] + $payload)
+            ->assertOk()
+            ->assertJsonPath('data.variants', []);
+
+        $this->postJson('/api/telegram/scheduled-messages', ['variants' => 'x'] + $payload)->assertUnprocessable();
+    }
+
+    public function test_the_jitter_moves_the_time_a_little_differently_each_day_but_the_same_all_day(): void
+    {
+        $message = $this->make(['jitter_minutes' => 5]);
+
+        $day = now()->startOfDay();
+        $shifts = [];
+
+        for ($i = 0; $i < 40; $i++) {
+            $at = $message->runAt($day->copy()->addDays($i));
+
+            $shift = (int) $day->copy()->addDays($i)->setTime(17, 0)->diffInMinutes($at, false);
+
+            $this->assertGreaterThanOrEqual(-5, $shift);
+            $this->assertLessThanOrEqual(5, $shift);
+            $this->assertTrue($at->equalTo($message->runAt($day->copy()->addDays($i)->setTime(23, 0))));
+
+            $shifts[$shift] = true;
+        }
+
+        $this->assertGreaterThan(3, count($shifts));
+
+        /* No jitter: on the minute. */
+        $this->assertSame('17:00', (new TelegramScheduledMessage(['send_at' => '17:00']))->runAt(now())->format('H:i'));
+
+        /* It is due from its own shifted minute, not before. */
+        $at = $message->runAt(now());
+
+        $this->travelTo($at->copy()->subMinute());
+        $this->flush();
+        $this->assertSame([], $this->messages->sent);
+
+        $this->travelTo($at);
+        $this->flush();
+        $this->assertCount(2, $this->messages->sent);
+    }
+
+    public function test_the_file_skip_leaves_out_a_group_with_a_report_but_writes_the_others(): void
+    {
+        $this->travelTo(now()->setTime(17, 0));
+
+        $message = $this->make(['skip_if_file_today' => true]);
+
+        $report = ['_' => 'message', 'id' => 5, 'date' => now()->subHour()->getTimestamp(), 'out' => false, 'media' => ['_' => 'messageMediaDocument', 'document' => ['attributes' => [['_' => 'documentAttributeFilename', 'file_name' => 'otchet.xlsx']]]]];
+
+        /* A voice message and an old file do not count; neither does our own. */
+        $voice = ['_' => 'message', 'id' => 6, 'date' => now()->subHour()->getTimestamp(), 'out' => false, 'media' => ['_' => 'messageMediaDocument', 'document' => ['attributes' => [['_' => 'documentAttributeAudio', 'voice' => true]]]]];
+        $old = ['date' => now()->subDay()->getTimestamp()] + $report;
+        $mine = ['out' => true] + $report;
+        /* A CMR posted by someone (its caption carries the request's hashtag) is no report either. */
+        $cmr = ['message' => "#EGS26092200045\n\nМашину выгрузили. Спасибо за сотрудничество!"] + $report;
+
+        $this->messages->history = [self::FIRST => [$voice, $old, $mine, $report], self::SECOND => [$voice, $old, $mine, $cmr]];
+
+        $this->flush();
+
+        $this->assertSame([self::SECOND], $this->messages->peers());
+        $this->assertSame(TelegramScheduledMessage::STATUS_SENT, $message->refresh()->last_status);
+
+        /* Everywhere a report: nothing goes out, it is no failure, and today is over for it. */
+        $this->travelTo(now()->addDay()->setTime(17, 0));
+        $this->messages->sent = [];
+        $report['date'] = now()->subHour()->getTimestamp();
+        $this->messages->history = [self::FIRST => [$report], self::SECOND => [$report]];
+
+        $this->flush();
+
+        $message->refresh();
+        $this->assertSame([], $this->messages->sent);
+        $this->assertSame(TelegramScheduledMessage::STATUS_SKIPPED, $message->last_status);
+        $this->assertNull($message->last_error);
+        $this->assertSame(now()->toDateString(), $message->last_sent_on->toDateString());
+
+        /* "Send now" is somebody asking: it writes. */
+        $message->update(['send_requested_at' => now()]);
+        $this->flush();
+
+        $this->assertSame([self::FIRST, self::SECOND], $this->messages->peers());
+    }
+
+    public function test_an_unreadable_group_does_not_hold_the_reminder_back(): void
+    {
+        $this->travelTo(now()->setTime(17, 0));
+
+        $this->make(['skip_if_file_today' => true]);
+
+        $this->flush();
+
+        $this->assertSame([self::FIRST, self::SECOND], $this->messages->peers());
+    }
+
+    public function test_the_panel_saves_the_jitter_and_the_file_skip_and_keeps_them_when_left_out(): void
+    {
+        $this->signIn();
+
+        $payload = [
+            'name' => 'Report',
+            'text' => 'x',
+            'send_at' => '16:59',
+            'jitter_minutes' => 5,
+            'skip_if_file_today' => true,
+            'days' => [1, 2, 3, 4, 5],
+            'chat_ids' => [self::FIRST],
+            'is_active' => true,
+        ];
+
+        $this->postJson('/api/telegram/scheduled-messages', $payload)
+            ->assertCreated()
+            ->assertJsonPath('data.jitter_minutes', 5)
+            ->assertJsonPath('data.skip_if_file_today', true);
+
+        $id = TelegramScheduledMessage::query()->value('id');
+
+        unset($payload['jitter_minutes'], $payload['skip_if_file_today']);
+
+        $this->putJson("/api/telegram/scheduled-messages/{$id}", $payload)
+            ->assertOk()
+            ->assertJsonPath('data.jitter_minutes', 5)
+            ->assertJsonPath('data.skip_if_file_today', true);
+
+        $this->putJson("/api/telegram/scheduled-messages/{$id}", ['jitter_minutes' => 0, 'skip_if_file_today' => false] + $payload)
+            ->assertOk()
+            ->assertJsonPath('data.jitter_minutes', 0)
+            ->assertJsonPath('data.skip_if_file_today', false);
+
+        $this->putJson("/api/telegram/scheduled-messages/{$id}", ['jitter_minutes' => 31] + $payload)->assertUnprocessable();
+    }
+
+    public function test_the_migration_gives_the_three_report_reminders_variants_once(): void
+    {
+        $morning = $this->make(['name' => 'A', 'text' => 'Отчетлар эсдан чикмасин, соат 5 да сорайман', 'send_at' => '09:59']);
+        $noon = $this->make(['name' => 'B', 'text' => 'Эслатиб койабман', 'send_at' => '14:24']);
+        $evening = $this->make(['name' => 'C', 'text' => 'Нима болди отчетлар?', 'send_at' => '16:59']);
+        $other = $this->make(['name' => 'D', 'text' => 'Юк келди']);
+        $own = $this->make(['name' => 'E', 'text' => 'Нима болди очетлар?', 'variants' => ['Мой вариант']]);
+
+        $migration = require base_path('database/migrations/2026_11_13_120000_seed_report_reminder_variants.php');
+
+        $migration->up();
+
+        foreach ([$morning, $noon, $evening] as $message) {
+            $message->refresh();
+
+            $this->assertGreaterThanOrEqual(6, count($message->variants));
+            $this->assertSame(5, $message->jitter_minutes);
+        }
+
+        $this->assertContains('Нима бўлди отчётлар?', $evening->variants);
+        /* Off: a work group gets other files all day; switched on per message in the panel. */
+        $this->assertFalse($evening->skip_if_file_today);
+        $this->assertFalse($morning->skip_if_file_today);
+        $this->assertFalse($noon->skip_if_file_today);
+
+        /* Something else, and what somebody wrote in the panel, stay as they are. */
+        $this->assertSame(0, $other->refresh()->jitter_minutes);
+        $this->assertSame([], (array) $other->variants);
+        $this->assertSame(['Мой вариант'], $own->refresh()->variants);
+
+        $evening->update(['variants' => ['Только мой']]);
+        $migration->up();
+        $this->assertSame(['Только мой'], $evening->refresh()->variants);
     }
 
     public function test_the_migration_sets_up_two_empty_weekday_slots_from_the_files_account(): void

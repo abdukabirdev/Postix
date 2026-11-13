@@ -74,6 +74,9 @@ final class ScheduledMessageController extends Controller
             'name' => ['required', 'string', 'max:255'],
             /* Empty is a slot waiting for its text: it is kept, and not sent. */
             'text' => ['nullable', 'string', 'max:4000'],
+            /* Other wordings: each group gets one of them, picked at random. */
+            'variants' => ['nullable', 'array', 'max:30'],
+            'variants.*' => ['nullable', 'string', 'max:4000'],
             'send_at' => ['required', 'regex:/^([01]\d|2[0-3]):[0-5]\d$/'],
             'days' => ['present', 'array'],
             'days.*' => ['integer', 'between:1,7'],
@@ -81,9 +84,13 @@ final class ScheduledMessageController extends Controller
             'chat_ids.*' => ['regex:/^-?\d{5,20}$/'],
             'listener_key' => ['nullable', 'string', Rule::exists('telegram_listeners', 'key')],
             'is_active' => ['required', 'boolean'],
+            /* Minutes it may go out earlier or later, a different shift each day. */
+            'jitter_minutes' => ['nullable', 'integer', 'between:0,30'],
+            /* Not written into a group where a file was posted today. */
+            'skip_if_file_today' => ['nullable', 'boolean'],
         ]);
 
-        $wasEmpty = $message->exists && trim((string) $message->getOriginal('text')) === '';
+        $wasEmpty = $message->exists && ! $message->hasText();
 
         $message->fill([
             'name' => trim($data['name']),
@@ -95,6 +102,23 @@ final class ScheduledMessageController extends Controller
             'is_active' => (bool) $data['is_active'],
         ]);
 
+        /* Likewise left out: the jitter and the file skip stay as they were. */
+        if (array_key_exists('jitter_minutes', $data) && $data['jitter_minutes'] !== null) {
+            $message->jitter_minutes = (int) $data['jitter_minutes'];
+        }
+
+        if (array_key_exists('skip_if_file_today', $data) && $data['skip_if_file_today'] !== null) {
+            $message->skip_if_file_today = (bool) $data['skip_if_file_today'];
+        }
+
+        /* Left out of the request, the variants stay as they were. Blank and repeated ones are dropped. */
+        if (array_key_exists('variants', $data)) {
+            $message->variants = array_values(array_unique(array_filter(
+                array_map(static fn (mixed $v): string => trim((string) $v), (array) $data['variants']),
+                static fn (string $v): bool => $v !== '',
+            )));
+        }
+
         /*
          * Saved after its time today: today is over for it. Without this a
          * message made at 18:00 for 17:00 would go out within seconds. A
@@ -103,8 +127,23 @@ final class ScheduledMessageController extends Controller
          */
         $filled = $wasEmpty && $message->hasText();
 
-        if (! $message->exists || $filled || $message->isDirty(['send_at', 'is_active', 'days'])) {
-            $message->last_sent_on = $message->send_at <= now()->format('H:i') ? now()->toDateString() : null;
+        /*
+         * The jitter is told by the id: a new message gets one first. Saved
+         * as done for today when its earliest possible minute has passed, so
+         * the listener never sees it due in between; set exactly below.
+         */
+        if (! $message->exists) {
+            $earliest = now()->setTimeFromTimeString($message->send_at)->subMinutes(max(0, (int) $message->jitter_minutes));
+
+            $message->last_sent_on = $earliest->lessThanOrEqualTo(now()) ? now()->toDateString() : null;
+
+            $message->save();
+
+            $fresh = true;
+        }
+
+        if (($fresh ?? false) || $filled || $message->isDirty(['send_at', 'jitter_minutes', 'is_active', 'days'])) {
+            $message->last_sent_on = $message->runAt(now())->lessThanOrEqualTo(now()) ? now()->toDateString() : null;
         }
 
         $message->save();
@@ -119,8 +158,11 @@ final class ScheduledMessageController extends Controller
             'id' => $m->id,
             'name' => $m->name,
             'text' => (string) $m->text,
+            'variants' => array_values((array) ($m->variants ?? [])),
             'has_text' => $m->hasText(),
             'send_at' => $m->send_at,
+            'jitter_minutes' => (int) $m->jitter_minutes,
+            'skip_if_file_today' => (bool) $m->skip_if_file_today,
             'days' => $m->weekdays(),
             'chat_ids' => $m->targets(),
             'listener_key' => $m->listener_key,

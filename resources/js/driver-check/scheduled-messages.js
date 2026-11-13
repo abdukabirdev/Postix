@@ -18,11 +18,14 @@ const emptyForm = () => ({
     id: null,
     name: '',
     text: '',
+    variants: [],
     send_at: '17:00',
+    jitter_minutes: 0,
     days: [...ALL_DAYS],
     chat_ids: [],
     listener_key: '',
     is_active: true,
+    skip_if_file_today: false,
 });
 
 export function scheduledMessagesPage(config) {
@@ -205,11 +208,14 @@ export function scheduledMessagesPage(config) {
                 id: row.id,
                 name: row.name || '',
                 text: row.text || '',
+                variants: [...(row.variants || [])],
                 send_at: row.send_at || '17:00',
+                jitter_minutes: Number(row.jitter_minutes || 0),
                 days: [...(row.days || ALL_DAYS)],
                 chat_ids: [...(row.chat_ids || [])],
                 listener_key: row.listener_key || '',
                 is_active: !!row.is_active,
+                skip_if_file_today: !!row.skip_if_file_today,
             };
 
             this.openForm();
@@ -280,6 +286,21 @@ export function scheduledMessagesPage(config) {
             this.formErrors = {};
         },
 
+        addVariant() {
+            this.form.variants = [...this.form.variants, ''];
+
+            /* The new box takes the cursor. */
+            this.$nextTick(() => {
+                const boxes = this.$root.querySelectorAll('[data-variant]');
+
+                boxes[boxes.length - 1]?.focus({ preventScroll: false });
+            });
+        },
+
+        removeVariant(index) {
+            this.form.variants = this.form.variants.filter((_, i) => i !== index);
+        },
+
         hasDay(day) {
             return this.form.days.includes(day);
         },
@@ -320,11 +341,14 @@ export function scheduledMessagesPage(config) {
                         body: JSON.stringify({
                             name: this.form.name,
                             text: this.form.text,
+                            variants: this.form.variants,
                             send_at: this.form.send_at,
+                            jitter_minutes: Math.max(0, Math.min(30, Number(this.form.jitter_minutes) || 0)),
                             days: this.form.days,
                             chat_ids: this.form.chat_ids,
                             listener_key: this.form.listener_key || null,
                             is_active: this.form.is_active,
+                            skip_if_file_today: !!this.form.skip_if_file_today,
                         }),
                     },
                 );
@@ -355,11 +379,14 @@ export function scheduledMessagesPage(config) {
                     body: JSON.stringify({
                         name: row.name,
                         text: row.text,
+                        variants: row.variants || [],
                         send_at: row.send_at,
+                        jitter_minutes: row.jitter_minutes || 0,
                         days: row.days,
                         chat_ids: row.chat_ids,
                         listener_key: row.listener_key || null,
                         is_active: !row.is_active,
+                        skip_if_file_today: !!row.skip_if_file_today,
                     }),
                 });
 

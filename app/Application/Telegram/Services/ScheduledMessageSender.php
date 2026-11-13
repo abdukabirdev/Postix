@@ -70,9 +70,22 @@ final class ScheduledMessageSender
 
         $targets = $message->targets();
         $errors = [];
+        $skipped = 0;
 
         foreach ($targets as $chatId) {
-            $error = $this->deliver($telegram, $chatId, $message->text);
+            /*
+             * The evening "where are the reports": not in a group where one
+             * was already posted today. Only on its own time - "Send now" is
+             * somebody asking for it.
+             */
+            if ($scheduled && $message->skip_if_file_today && $this->fileToday($telegram, $chatId)) {
+                $skipped++;
+
+                continue;
+            }
+
+            /* Each group gets its own pick among the main text and the variants. */
+            $error = $this->deliver($telegram, $chatId, $message->pickText());
 
             if ($error !== null) {
                 $errors[] = $chatId . ': ' . $error;
@@ -85,10 +98,13 @@ final class ScheduledMessageSender
             }
         }
 
+        $attempted = count($targets) - $skipped;
+
         $status = match (true) {
             $targets === [] => TelegramScheduledMessage::STATUS_FAILED,
+            $attempted === 0 => TelegramScheduledMessage::STATUS_SKIPPED,
             $errors === [] => TelegramScheduledMessage::STATUS_SENT,
-            count($errors) < count($targets) => TelegramScheduledMessage::STATUS_PARTIAL,
+            count($errors) < $attempted => TelegramScheduledMessage::STATUS_PARTIAL,
             default => TelegramScheduledMessage::STATUS_FAILED,
         };
 
@@ -107,7 +123,7 @@ final class ScheduledMessageSender
 
         $message->update($values);
 
-        if ($status !== TelegramScheduledMessage::STATUS_SENT) {
+        if (! in_array($status, [TelegramScheduledMessage::STATUS_SENT, TelegramScheduledMessage::STATUS_SKIPPED], true)) {
             app(DeveloperAlerts::class)->report(
                 kind: 'scheduled_message_failed',
                 title: 'Сообщение по расписанию не отправлено (#' . $message->id . ')',
@@ -119,6 +135,65 @@ final class ScheduledMessageSender
         }
 
         return $status;
+    }
+
+    /**
+     * Whether somebody (not us) posted a file into the group since midnight:
+     * a document that is no voice message, music, video, sticker or GIF, and
+     * whose caption carries no request's hashtag (a CMR). A group that cannot
+     * be read counts as "no", so the reminder still goes.
+     */
+    public function fileToday(SimpleEventHandler $telegram, int|string $peer): bool
+    {
+        try {
+            $page = (array) $telegram->messages->getHistory([
+                'peer' => $peer,
+                'offset_id' => 0,
+                'offset_date' => 0,
+                'add_offset' => 0,
+                'limit' => 60,
+                'max_id' => 0,
+                'min_id' => 0,
+                'hash' => 0,
+            ]);
+        } catch (Throwable $e) {
+            Log::warning('Scheduled message: the group was not read for a file', ['chat_id' => $peer, 'error' => $e->getMessage()]);
+
+            return false;
+        }
+
+        $midnight = now()->startOfDay()->getTimestamp();
+
+        foreach ((array) ($page['messages'] ?? []) as $message) {
+            if (! is_array($message) || ! empty($message['out']) || (int) ($message['date'] ?? 0) < $midnight) {
+                continue;
+            }
+
+            $media = $message['media'] ?? null;
+
+            if (! is_array($media) || ($media['_'] ?? '') !== 'messageMediaDocument') {
+                continue;
+            }
+
+            /* A CMR or a request's document ("#EGS26092200045 ... выгрузили") is no report. */
+            if (str_contains((string) ($message['message'] ?? ''), '#')) {
+                continue;
+            }
+
+            $plain = true;
+
+            foreach ((array) ($media['document']['attributes'] ?? []) as $attribute) {
+                if (in_array($attribute['_'] ?? '', ['documentAttributeAudio', 'documentAttributeVideo', 'documentAttributeAnimated', 'documentAttributeSticker'], true)) {
+                    $plain = false;
+                }
+            }
+
+            if ($plain) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
