@@ -52,6 +52,28 @@ final class AutoReplyMatcher
     }
 
     /**
+     * Whether any of $keywords is in the message, read as match() reads a
+     * kind's keywords ("*" at the end takes any ending).
+     *
+     * @param list<string> $keywords
+     */
+    public function mentions(array $keywords, string $text): bool
+    {
+        $words = self::words($text);
+
+        foreach ($keywords as $keyword) {
+            $prefix = str_ends_with(trim((string) $keyword), '*');
+            $needle = self::words(rtrim(trim((string) $keyword), '*'));
+
+            if ($needle !== [] && self::contains($words, $needle, $prefix)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * A greeting in the message - "Доброе утро. Готово" - read apart from
      * the rest (config auto_replies.greetings): the first greeting found,
      * the words left once every greeting is taken out, for match(), and

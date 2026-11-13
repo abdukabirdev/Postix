@@ -154,6 +154,30 @@ return [
         ],
     ],
 
+    /*
+     * Words that make a message one for the person in charge, whatever "ok"
+     * word is in it: a complaint ("нарх берилган, нега штраф келяпти"), a
+     * "but" ("бердим, лекин..."), a request to hand the request over
+     * ("мошина чикмади, уткизиб бер"). A question mark does the same. Not in
+     * the panel: it holds over every kind, as silent_over_words. Matched
+     * as the keywords are ("*" takes any ending). From the real chats,
+     * 2026-11-13.
+     */
+    'needs_a_person' => [
+        /* why, a penalty */
+        'нега', 'nega', 'нимага', 'nimaga', 'нима учун', 'nima uchun', 'почему', 'зачем', 'отчего',
+        'штраф*', 'jarima*', 'жарима*',
+        /* but */
+        'лекин', 'lekin', 'аммо', 'ammo', 'но', 'однако', 'хотя',
+        /* hand it over */
+        'утказ*', 'уткиз*', 'откиз*', 'утказиб', 'utkaz*', 'otkaz*', 'бошкага', 'boshqaga', 'бошка хамкасб*',
+        'передай*', 'передать', 'передам', 'передайте', 'другому',
+        /* laughter, not a yes */
+        'ха ха', 'ха ха ха', 'xa xa',
+        /* not done, cannot */
+        'не могу', 'не сделал*', 'не готово', 'кила олмадим', 'кила олмаяпман', 'qila olmadim', 'qila olmayapman',
+    ],
+
     'path' => env('AUTO_REPLIES_PATH', storage_path('app/telegram/auto-replies.json')),
 
     /*
@@ -293,6 +317,73 @@ return [
                     'киляпман',
                     'jarayonda',
                     'жараёнда',
+                    /*
+                     * Taken from the real chats (2026-11-13): what operators
+                     * answer to "нарх керак" and "обновите статус" and the
+                     * automatic answer used to pass by.
+                     */
+                    /* a price was given */
+                    'нарх бердим',
+                    'нарх берилган',
+                    'нарх берилди',
+                    'нарх бериб куйдим',
+                    'бердим нарх',
+                    'берилди нарх',
+                    'бунга нарх берилган',
+                    'бердим',
+                    'берилди',
+                    'берилган',
+                    'narx berdim',
+                    'narx berildi',
+                    'narx berilgan',
+                    'narx berib qoydim',
+                    'berdim',
+                    'berildi',
+                    'berilgan',
+                    'дал ставку',
+                    'уже дал',
+                    /* done, closed, fixed */
+                    'сделано',
+                    'закрыла',
+                    'исправил',
+                    'исправила',
+                    'тамом',
+                    'tamom',
+                    'принято',
+                    'клдим',
+                    'киритдим',
+                    'киритиб куйдим',
+                    'kiritdim',
+                    'kiritib qoydim',
+                    'олиб ташладим',
+                    'olib tashladim',
+                    /* looking for a truck, working on it */
+                    'караяпмиз',
+                    'караяпман',
+                    'каравомиз',
+                    'каравоман',
+                    'караб турибман',
+                    'караб турибмиз',
+                    'кидиряпман',
+                    'кидиряпмиз',
+                    'кидираябман',
+                    'излаябман',
+                    'излаяпман',
+                    'шугуланаябман',
+                    'шугулланяпман',
+                    'qarayapman',
+                    'qarayapmiz',
+                    'qidiryapman',
+                    'qidiryapmiz',
+                    'qidirayapman',
+                    'ищу',
+                    'ищем',
+                    'смотрю',
+                    'смотрим',
+                    /* an emoji alone */
+                    '🫡',
+                    '🤝',
+                    '🙏',
                 ],
                 'answers' => [
                     'uz' => [
@@ -339,6 +430,87 @@ return [
                             'Хорошо, спасибо',
                             'Принято, спасибо',
                         ],
+                    ],
+                ],
+                'media' => ['gifs' => [], 'voices' => ['uz' => [], 'ru' => []]],
+            ],
+
+            /*
+             * "Да", "ха", "da" alone: a yes to "ответ будет?". Only a message
+             * of one or two words, so a "да, но клиент не отвечает" is not
+             * taken for it.
+             */
+            [
+                'name' => 'Короткое «да»',
+                'max_words' => 2,
+                'keywords' => ['да', 'ха', 'da', 'xa', 'ага', 'угу', 'aha'],
+                'answers' => [
+                    'uz' => [
+                        'plain' => ['Рахмат', 'Хуп', 'Ок', '👍'],
+                        'respectful' => ['Рахмат', 'Хуп, рахмат', 'Рахмат сизга'],
+                    ],
+                    'ru' => [
+                        'plain' => ['Ок', 'Понял', 'Спасибо', '👍'],
+                        'respectful' => ['Спасибо', 'Хорошо, спасибо', 'Принято'],
+                    ],
+                ],
+                'media' => ['gifs' => [], 'voices' => ['uz' => [], 'ru' => []]],
+            ],
+
+            /*
+             * An explanation instead of a "+": the client is silent, there is
+             * no cargo, no truck yet (2026-11-13, from the real chats). It
+             * takes a short "понял", not a thank-you: nothing was done yet.
+             */
+            [
+                'name' => 'Объяснение',
+                'max_words' => 12,
+                'keywords' => [
+                    'клиент закрыл',
+                    'закрыл клиент',
+                    'груз закрыл',
+                    'клиент сам закрыл',
+                    'груз закрыт',
+                    'груза нет',
+                    'нет груза',
+                    'груз не готов',
+                    'машин нет',
+                    'нет машин',
+                    'актуальных нет',
+                    'нет актуальных',
+                    'нету актуальных',
+                    'клиент не отвечает',
+                    'клиент не берет трубку',
+                    'клиент трубку не берет',
+                    'не берет трубку',
+                    'клиент пока не ответил',
+                    'юк йук',
+                    'юк тайер эмас',
+                    'юк ёпилган',
+                    'мошина йук',
+                    'мошина чикмаяпти',
+                    'мошина чикмади',
+                    'мошина чикмай турибди',
+                    'клиент жавоб бермаяпти',
+                    'клиент жавоб бермади',
+                    'трубка олмаяпти',
+                    'клиент ёпиб куйди',
+                    'yuk yoq',
+                    'yuk tayyor emas',
+                    'mashina yoq',
+                    'mashina chiqmadi',
+                    'mashina chiqmayapti',
+                    'mijoz javob bermayapti',
+                    'mijoz javob bermadi',
+                ],
+                'answers' => [
+                    'uz' => [
+                        'plain' => ['Тушунарли', 'Тушундим', 'Хуп', 'Яхши, хабар килиб туринг'],
+                        'respectful' => ['Тушунарли', 'Тушунарли, хабар бериб туринг', 'Яхши, хабар килиб туринг, илтимос'],
+                    ],
+                    'ru' => [
+                        'plain' => ['Понял', 'Ясно', 'Принято', 'Понял, держи в курсе'],
+                        'respectful' => ['Понятно', 'Принято, держите в курсе, пожалуйста', 'Понял вас, спасибо, что написали'],
                     ],
                 ],
                 'media' => ['gifs' => [], 'voices' => ['uz' => [], 'ru' => []]],

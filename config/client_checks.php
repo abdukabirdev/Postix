@@ -148,6 +148,26 @@ return [
     ],
 
     /*
+     * Who counts as someone who never answers (SilentPeople, telegram:silent-people,
+     * the report /api/telegram/report/silent-people): this many penalties
+     * forwarded in this many days, and not a word or a reaction back.
+     */
+    'silent_people' => [
+        'days' => 14,
+        'min_penalties' => 30,
+    ],
+
+    /*
+     * Penalty comments that were shipped once and are no more: telegram:merge-defaults
+     * takes them out of the copy saved in the panel. 2026-11-13: sent 45 and
+     * 36 times at the last level, answered never (the level's mean is 11%).
+     */
+    'retired' => [
+        'Нима килай, бошкага олайми?',
+        'Булмаса айт, бошкага утказаман',
+    ],
+
+    /*
      * A ladder per role: operators and sales managers are told different
      * things. Each level starts at a repeat number (`from`) and says what
      * goes out at it (`mode`: 'all' - the forward and a comment,
@@ -466,13 +486,11 @@ return [
                     'phrases' => [
                         'uz' => [
                             'plain' => [
-                                'Нима килай, бошкага олайми?',
                                 'Бошкага берайми?',
                                 'Ёпасанми ёки бошкага берайми?',
                                 'Уддалай олмаяпсанми? Бошкага берайми?',
                                 'Кила олмасанг айт, бошкага бераман',
                                 'Бошкага бераман, майли?',
-                                'Булмаса айт, бошкага утказаман',
                                 'Бошка хамкасбга берайми?',
                                 'Ёполмасанг бошкага бераман',
                                 'Нима киламиз, {address}? Бошкага берайми?',
@@ -486,9 +504,12 @@ return [
                                 '{address}, ёпасанми ёки бошкага?',
                                 'Бошкага берсам буладими?',
                                 'Булди, бошкага берайми?',
+                                'Хеч булмаса «+» ёзиб куй, {address}',
+                                'Жавоб ёз, хеч булмаса +',
                             ],
                             'respectful' => [
                                 'Нима киласиз, ёпа оласизми ёки бошкага берамизми?',
+                                'Хеч булмаса «+» ёзиб куйинг, илтимос',
                                 'Бошкага берайликми?',
                                 'Ёпасизми ёки бошка хамкасбга берайликми?',
                                 'Уддалай олмасангиз, бошкага берайликми?',
@@ -532,9 +553,12 @@ return [
                                 '{address}, закроешь или другому?',
                                 'Можно отдам другому?',
                                 'Всё, отдаю другому?',
+                                'Хотя бы «+» напиши',
+                                'Напиши хотя бы +, {address}',
                             ],
                             'respectful' => [
                                 'Как поступим, передать запрос другому?',
+                                'Напишите хотя бы «+», пожалуйста',
                                 'Передадим другому?',
                                 'Закроете или передадим коллеге?',
                                 'Если не получается, давайте передадим другому?',

@@ -1942,6 +1942,32 @@ class ClientCheckTest extends TestCase
         $this->assertSame('Agreed', $check->refresh()->reply_kind);
     }
 
+    public function test_a_question_a_complaint_or_a_but_is_left_to_a_person(): void
+    {
+        config()->set('auto_replies.needs_a_person', (require config_path('auto_replies.php'))['needs_a_person']);
+
+        $this->person();
+        $check = $this->penaltySent();
+
+        foreach (['ok?', '+ нега штраф', 'ok, лекин', 'ok, уткизиб беринг', 'Хорошо. Но это не верная ставка'] as $text) {
+            $this->assertNull($this->reply($text), $text);
+        }
+
+        $this->assertSame([], $this->messages->kinds());
+
+        /* Kept on the penalty as its reply (the latest one), with no kind and no answer. */
+        $check->refresh();
+        $this->assertSame('Хорошо. Но это не верная ставка', $check->reply_text);
+        $this->assertNull($check->reply_kind);
+        $this->assertNull($check->reply_answered_at);
+
+        /* A plain "ok" after them is still thanked. */
+        $this->assertSame('Rahmat', $this->reply('ok'));
+
+        /* A greeting alone is still greeted back, a greeting with a question is not answered. */
+        $this->assertNull($this->reply('Salom, nega?'));
+    }
+
     public function test_switched_off_or_muted_nothing_is_answered(): void
     {
         $person = $this->person();
@@ -2057,7 +2083,9 @@ class ClientCheckTest extends TestCase
             'буни системада бошка нарх беришди' => null,
             '66 берганди' => null,
             '66 млн перечисления хисобини олинг' => null,
-            'Да' => null,
+            /* A bare «да» is a yes (2026-11-13), a «да» inside a sentence is not. */
+            'Да' => 'Короткое «да»',
+            'да но он думает' => null,
         ];
 
         foreach ($cases as $text => $kind) {
@@ -2115,6 +2143,63 @@ class ClientCheckTest extends TestCase
 
         /* Run again: nothing twice. */
         $this->artisan('telegram:merge-defaults')->expectsOutput('Added: 0')->assertSuccessful();
+    }
+
+    public function test_a_kind_missing_from_the_saved_copy_is_added_and_retired_penalty_texts_are_taken_out(): void
+    {
+        config()->set('auto_replies.defaults', (require config_path('auto_replies.php'))['defaults']);
+        config()->set('client_checks', require config_path('client_checks.php'));
+
+        $store = app(AutoReplyStore::class);
+        $saved = $store->defaults()->toArray();
+        $saved['replies'] = [$saved['replies'][0]];
+        $store->save(AutoReplyRules::fromArray($saved));
+
+        $penalties = app(ClientCheckRulesStore::class);
+        $rules = $penalties->defaults()->toArray();
+        $rules['roles']['operation']['levels'][3]['phrases']['uz']['plain'] = ['Моя фраза', 'Нима килай, бошкага олайми?'];
+        $penalties->save(ClientCheckRules::fromArray($rules));
+
+        $this->assertCount(1, $store->current()->replies);
+
+        $this->artisan('telegram:merge-defaults')->assertSuccessful();
+
+        $this->assertSame(
+            ['Благодарность', 'Короткое «да»', 'Объяснение'],
+            array_column($store->current()->replies, 'name'),
+        );
+
+        $level = $penalties->current()->ladders['operation'][3]['phrases']['uz']['plain'];
+        $this->assertContains('Моя фраза', $level);
+        $this->assertNotContains('Нима килай, бошкага олайми?', $level);
+        $this->assertNotContains('Булмаса айт, бошкага утказаман', $level);
+        $this->assertContains('Жавоб ёз, хеч булмаса +', $level);
+
+        /* Run again: nothing twice. */
+        $this->artisan('telegram:merge-defaults')->expectsOutput('Added: 0')->assertSuccessful();
+        $this->assertCount(3, $store->current()->replies);
+    }
+
+    public function test_the_answers_real_operators_give_are_read(): void
+    {
+        $rules = AutoReplyRules::fromArray((require config_path('auto_replies.php'))['defaults']);
+        $matcher = new AutoReplyMatcher();
+        $name = fn (string $text): ?string => ($i = $matcher->match($rules, $text)) === null ? null : $rules->replies[$i]['name'];
+
+        foreach (['Нарх бердим', 'бунга нарх берилган', 'Караяпмиз ака', 'Кидираябман', 'тамом', 'Сделано', 'принято', 'Narx berildi', '🫡', '🤝'] as $text) {
+            $this->assertSame('Благодарность', $name($text), $text);
+        }
+
+        foreach (['да', 'Ха', 'DA'] as $text) {
+            $this->assertSame('Короткое «да»', $name($text), $text);
+        }
+
+        /* Only alone: a "да" inside an explanation is no "yes". */
+        $this->assertNull($name('да но клиент ещё думает над ценой'));
+
+        foreach (['Груза нет', 'Анна не берет трубку', 'Мошина йук', 'клиент не берет трубку'] as $text) {
+            $this->assertSame('Объяснение', $name($text), $text);
+        }
     }
 
     public function test_a_star_takes_any_ending_and_a_kind_may_allow_longer_messages(): void
@@ -2660,7 +2745,8 @@ class ClientCheckTest extends TestCase
         $this->assertNotContains('Нарх бериб юбор, {status_limit} вакт утди', $levels[0]['phrases']['uz']['plain']);
         $this->assertContains('Нарх ташла, {status_limit} булди', $levels[0]['phrases']['uz']['plain']);
         $this->assertSame(1, count(array_keys($levels[1]['phrases']['uz']['plain'], 'Нима килай, бошкага олайми?', true)));
-        $this->assertContains('Бошкага берайми?', $levels[1]['phrases']['uz']['plain']);
+        /* The first phrase of a set is the old default the migration skips: the next one is the first new. */
+        $this->assertContains('Ёпасанми ёки бошкага берайми?', $levels[1]['phrases']['uz']['plain']);
     }
 
     public function test_media_names_from_a_hand_edit_are_not_trusted(): void

@@ -20,8 +20,12 @@ use Illuminate\Console\Command;
  * and the follow-up are one each. A text removed in the panel and still
  * shipped comes back - there is no history to tell it from a new one.
  *
+ * A kind of auto reply that is shipped and missing from the saved copy (by
+ * name) is added whole, after the saved ones.
+ *
  * The one thing taken out: auto reply texts no longer shipped
- * (auto_replies.retired), from every answer list of the saved copy.
+ * (auto_replies.retired) and penalty comments no longer shipped
+ * (client_checks.retired), from every list of the saved copy.
  */
 final class MergeDefaultPhrasesCommand extends Command
 {
@@ -38,11 +42,17 @@ final class MergeDefaultPhrasesCommand extends Command
      */
     private array $retired = [];
 
+    /**
+     * @var list<string>
+     */
+    private array $retiredPenalties = [];
+
     public function handle(AutoReplyStore $autoReplies, ClientCheckRulesStore $penalties): int
     {
         $this->added = 0;
         $this->removed = 0;
         $this->retired = array_values(array_map('strval', (array) config('auto_replies.retired', [])));
+        $this->retiredPenalties = array_values(array_map('strval', (array) config('client_checks.retired', [])));
 
         $this->autoReplies($autoReplies);
         $this->penalties($penalties);
@@ -75,6 +85,19 @@ final class MergeDefaultPhrasesCommand extends Command
             }
         }
         unset($reply);
+
+        /* A shipped kind the saved copy does not have yet (2026-11-13: «да», Объяснение). */
+        $names = array_column($rules['replies'], 'name');
+
+        foreach ($defaults['replies'] as $default) {
+            if (in_array($default['name'], $names, true) || count($rules['replies']) >= AutoReplyRules::MAX_REPLIES) {
+                continue;
+            }
+
+            $rules['replies'][] = $default;
+            $names[] = $default['name'];
+            $this->added++;
+        }
 
         foreach ($rules['greetings']['list'] as &$greeting) {
             $greeting['answers'] = $this->retire($greeting['answers']);
@@ -112,6 +135,8 @@ final class MergeDefaultPhrasesCommand extends Command
             foreach ($ladder['levels'] as &$level) {
                 $default = collect($defaults['roles'][$role]['levels'] ?? [])->firstWhere('from', $level['from']);
 
+                $level['phrases'] = $this->retirePenalties($level['phrases']);
+
                 if ($default !== null) {
                     $level['phrases'] = $this->sets($level['phrases'], $default['phrases'], ClientCheckRules::MAX_PHRASES);
                 }
@@ -121,6 +146,27 @@ final class MergeDefaultPhrasesCommand extends Command
         unset($ladder);
 
         $store->save(ClientCheckRules::fromArray($rules));
+    }
+
+    /**
+     * The saved penalty comments without the retired ones.
+     *
+     * @param array<string, array<string, list<string>>> $sets
+     * @return array<string, array<string, list<string>>>
+     */
+    private function retirePenalties(array $sets): array
+    {
+        foreach ($sets as $language => $tones) {
+            foreach ($tones as $tone => $texts) {
+                $kept = array_values(array_diff($texts, $this->retiredPenalties));
+
+                $this->removed += count($texts) - count($kept);
+
+                $sets[$language][$tone] = $kept;
+            }
+        }
+
+        return $sets;
     }
 
     /**

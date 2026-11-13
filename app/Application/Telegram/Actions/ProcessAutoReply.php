@@ -127,6 +127,19 @@ final class ProcessAutoReply
             : ($this->matcher->match($rules, $greeting['rest'] ?? $text)
                 ?? ($reaction === true ? $this->matcher->match($rules, '👍') : null));
 
+        /*
+         * A question, a complaint, a "but" or a request to hand the request
+         * over is for the person in charge, whatever "ok" word is in it:
+         * "нарх берилган, нега штраф келяпти" is not thanked, "мошина
+         * чикмади, уткизиб бер" is not answered "понял" (2026-11-13, from the
+         * real chats). Only a greeting alone is still greeted back.
+         */
+        $needsPerson = $kind !== null && $reaction === null && $this->needsPerson($text);
+
+        if ($needsPerson) {
+            $kind = null;
+        }
+
         $greet = $greeting !== null
             && ($kind !== null || $greeting['alone'])
             && ! Cache::has($this->greetedKey($person));
@@ -161,6 +174,10 @@ final class ProcessAutoReply
          * Muted on the card - the private chat or the auto replies alone:
          * nothing is written to them, an answer neither.
          */
+        if ($needsPerson && ! $greet) {
+            return $this->skipped($reaction, 'needs_a_person', $senderId);
+        }
+
         if (($kind === null && ! $greet) || ! $person->allows('auto_replies_enabled')) {
             return $this->skipped($reaction, $kind === null && ! $greet ? 'not_an_ok_reaction' : 'muted_on_the_card', $senderId);
         }
@@ -356,6 +373,22 @@ final class ProcessAutoReply
         $texts = (array) config("auto_replies.reactions.answers.{$language}", []);
 
         return array_map(static fn (string $text): array => ['type' => 'text', 'text' => $text], array_values($texts));
+    }
+
+    /**
+     * A question mark, or a word of auto_replies.needs_a_person ("нега",
+     * "штраф", "лекин", "утказиб бер") in the message.
+     */
+    private function needsPerson(string $text): bool
+    {
+        if (str_contains($text, '?') || str_contains($text, '؟')) {
+            return true;
+        }
+
+        return $this->matcher->mentions(
+            array_values(array_map('strval', (array) config('auto_replies.needs_a_person', []))),
+            $text,
+        );
     }
 
     /**
