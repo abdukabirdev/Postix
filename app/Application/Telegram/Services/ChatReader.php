@@ -608,6 +608,12 @@ final class ChatReader
             $row['media'] = $media;
         }
 
+        $reactions = $this->reactions($message['reactions'] ?? null);
+
+        if ($reactions !== []) {
+            $row['reactions'] = $reactions;
+        }
+
         if (! empty($message['edit_date'])) {
             $row['edited'] = $this->date($message['edit_date']);
         }
@@ -637,6 +643,45 @@ final class ChatReader
         }
 
         return $this->describe($fromId, $entities)['title'];
+    }
+
+    /**
+     * What people put under a message: [{emoji, count, mine}]. In a private
+     * chat the other side's reaction is the person's answer, so it is read
+     * like a word.
+     *
+     * @return list<array{emoji: string, count: int, mine: bool}>
+     */
+    private function reactions(mixed $reactions): array
+    {
+        $rows = [];
+
+        foreach ((array) (is_array($reactions) ? ($reactions['results'] ?? []) : []) as $result) {
+            if (! is_array($result)) {
+                continue;
+            }
+
+            $reaction = (array) ($result['reaction'] ?? []);
+
+            $emoji = match ($reaction['_'] ?? '') {
+                'reactionEmoji' => (string) ($reaction['emoticon'] ?? ''),
+                'reactionCustomEmoji' => '[custom]',
+                'reactionPaid' => '[star]',
+                default => '',
+            };
+
+            if ($emoji === '') {
+                continue;
+            }
+
+            $rows[] = [
+                'emoji' => $emoji,
+                'count' => (int) ($result['count'] ?? 1),
+                'mine' => isset($result['chosen_order']),
+            ];
+        }
+
+        return $rows;
     }
 
     /**
@@ -734,7 +779,7 @@ final class ChatReader
 
         foreach ((array) ($page['chats'] ?? []) as $chat) {
             if (is_array($chat) && isset($chat['id'])) {
-                $entities['chats'][(int) $chat['id']] = $chat;
+                $entities['chats'][$this->rawChatId((int) $chat['id'])] = $chat;
             }
         }
 
@@ -761,7 +806,7 @@ final class ChatReader
         }
 
         $channel = $id <= -self::CHANNEL_OFFSET;
-        $raw = $channel ? -$id - self::CHANNEL_OFFSET : -$id;
+        $raw = $this->rawChatId($id);
         $chat = $entities['chats'][$raw] ?? [];
 
         return [
@@ -812,6 +857,11 @@ final class ChatReader
      */
     private function peerId(mixed $peer): ?int
     {
+        /* Some answers carry the Bot API id itself instead of a Peer ("bare peer ids"). */
+        if (is_int($peer) || (is_string($peer) && preg_match('/^-?\d{1,20}$/', $peer) === 1)) {
+            return (int) $peer === 0 ? null : (int) $peer;
+        }
+
         if (! is_array($peer)) {
             return null;
         }
@@ -822,6 +872,19 @@ final class ChatReader
             'peerChannel' => -self::CHANNEL_OFFSET - (int) $peer['channel_id'],
             default => null,
         };
+    }
+
+    /**
+     * The id Telegram's chat objects carry: positive, without the -100 of a
+     * channel. The objects come with it, or already as the Bot API id.
+     */
+    private function rawChatId(int $id): int
+    {
+        if ($id <= -self::CHANNEL_OFFSET) {
+            return -$id - self::CHANNEL_OFFSET;
+        }
+
+        return abs($id);
     }
 
     /**

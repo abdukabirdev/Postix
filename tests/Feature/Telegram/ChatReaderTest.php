@@ -148,6 +148,8 @@ class ChatReaderTest extends TestCase
         Schema::create('telegram_client_checks', function (Blueprint $table): void {
             $table->id();
             $table->unsignedBigInteger('operation_user_id')->nullable();
+            $table->timestamp('forwarded_at')->nullable();
+            $table->timestamp('replied_at')->nullable();
             $table->timestamps();
         });
 
@@ -467,6 +469,55 @@ class ChatReaderTest extends TestCase
         /* Older than what was read: from its id. */
         app(ChatReader::class)->perform($this->api, 'history', ['chat' => '@afzal', 'limit' => 3, 'before_id' => 10]);
         $this->assertSame(['@afzal', 10], [$this->api->messages->calls[2][1]['peer'], $this->api->messages->calls[2][1]['offset_id']]);
+    }
+
+    public function test_bare_peer_ids_and_bot_api_chat_ids_are_read_like_peers_and_reactions_are_told(): void
+    {
+        /* As prod answers: peers are the Bot API ids themselves, and so are the chat objects' ids. */
+        $this->api->messages->answers['getDialogs'] = [
+            '_' => 'messages.dialogsSlice',
+            'dialogs' => [
+                ['peer' => 555, 'top_message' => 10, 'unread_count' => 0],
+                ['peer' => -1000000000777, 'top_message' => 20, 'unread_count' => 1],
+            ],
+            'messages' => [
+                ['_' => 'message', 'id' => 10, 'peer_id' => 555, 'from_id' => 555, 'date' => 1793000000, 'message' => 'Salom', 'out' => false],
+                ['_' => 'message', 'id' => 20, 'peer_id' => -1000000000777, 'from_id' => 555, 'date' => 1793000100, 'message' => 'Reklama', 'out' => false],
+            ],
+            'chats' => [['id' => -1000000000777, 'title' => 'Drivers', 'megagroup' => true]],
+            'users' => [$this->afzal()],
+        ];
+
+        $dialogs = app(ChatReader::class)->perform($this->api, 'dialogs', []);
+
+        $this->assertSame([555, -1000000000777], array_column($dialogs['dialogs'], 'id'));
+        $this->assertSame(['Afzal Pulatov', 'Drivers'], array_column($dialogs['dialogs'], 'title'));
+        $this->assertSame('Afzal Pulatov', $dialogs['dialogs'][0]['last']['from']);
+
+        $this->api->messages->answers['getHistory'] = [
+            'messages' => [
+                [
+                    '_' => 'message', 'id' => 11, 'peer_id' => 555, 'date' => 1793000200, 'message' => 'Обновите статус', 'out' => true,
+                    'reactions' => ['results' => [
+                        ['reaction' => ['_' => 'reactionEmoji', 'emoticon' => '👍'], 'count' => 1],
+                        ['reaction' => ['_' => 'reactionCustomEmoji', 'document_id' => 5], 'count' => 2, 'chosen_order' => 0],
+                    ]],
+                ],
+                ['_' => 'message', 'id' => 10, 'peer_id' => 555, 'from_id' => 555, 'date' => 1793000100, 'message' => 'ok', 'out' => false],
+            ],
+            'users' => [$this->afzal()],
+            'chats' => [],
+        ];
+
+        $history = app(ChatReader::class)->perform($this->api, 'history', ['chat' => '555', 'limit' => 2]);
+
+        $this->assertSame(555, $history['chat']['id']);
+        $this->assertSame('Afzal Pulatov', $history['messages'][0]['from']);
+        $this->assertArrayNotHasKey('reactions', $history['messages'][0]);
+        $this->assertSame(
+            [['emoji' => '👍', 'count' => 1, 'mine' => false], ['emoji' => '[custom]', 'count' => 2, 'mine' => true]],
+            $history['messages'][1]['reactions'],
+        );
     }
 
     public function test_a_history_stops_at_the_date_asked_for_and_at_the_chats_start(): void
