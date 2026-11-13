@@ -405,6 +405,8 @@ class ClientCheckTest extends TestCase
             $table->timestamp('nudged_at')->nullable();
             $table->timestamp('seen_at')->nullable();
             $table->text('nudge_text')->nullable();
+            $table->timestamp('pinged_at')->nullable();
+            $table->string('ping_text', 255)->nullable();
             $table->timestamps();
             $table->unique(['telegram_chat_id', 'telegram_message_id']);
         });
@@ -1374,6 +1376,9 @@ class ClientCheckTest extends TestCase
 
     private function openingOn(): void
     {
+        /* The tests' day (2026-10-02) is a Friday: these read the usual opening; the Friday one has its own test. */
+        config()->set('auto_replies.friday_opening', []);
+
         $this->saveAutoReplies(['opening' => [
             'enabled' => true,
             'answers' => [
@@ -1426,6 +1431,34 @@ class ClientCheckTest extends TestCase
         $this->assertSame(['forward'], $this->messages->kinds(), 'the penalties already sent today say it is not the first');
     }
 
+    /**
+     * 2026-11-13: a day that started without the greeting (by chance) got
+     * "Здравствуйте" at 12:10 or 13:05, once a deploy emptied the cache.
+     */
+    public function test_an_emptied_cache_does_not_greet_in_the_middle_of_a_quiet_day(): void
+    {
+        $this->openingOn();
+        $this->person(attributes: ['address' => ['uz' => 'Afzal aka']]);
+
+        config()->set('auto_replies.send_chance.opening', 0);
+        $this->penalty(repeat: 1);
+        $this->assertSame(['forward'], $this->messages->kinds());
+
+        Cache::flush();
+        config()->set('auto_replies.send_chance.opening', 100);
+
+        $this->messages->calls = [];
+        Carbon::setTestNow(now()->addHours(3));
+        $this->penalty(repeat: 1, request: 'TLS00009');
+        $this->assertSame(['forward'], $this->messages->kinds(), 'a penalty already went today: not the first one');
+
+        /* The next day, greeted again. */
+        $this->messages->calls = [];
+        Carbon::setTestNow(now()->addDay());
+        $this->penalty(repeat: 1, request: 'TLS00010');
+        $this->assertSame(['send', 'forward'], $this->messages->kinds());
+    }
+
     public function test_their_answer_to_our_greeting_is_not_greeted_back(): void
     {
         $this->openingOn();
@@ -1471,10 +1504,18 @@ class ClientCheckTest extends TestCase
         $this->assertSame(['forward'], $this->messages->kinds());
         $this->assertSame(TelegramClientCheckStatus::Forwarded, $check->refresh()->status);
 
-        /* Not marked as greeted: the next penalty tries again. */
+        /*
+         * The next penalty does not greet after it: "Здравствуйте" after a
+         * penalty already sent reads oddly (2026-11-13). The next day does.
+         */
         $this->messages->commentFails = false;
         $this->messages->calls = [];
         $this->penalty(repeat: 1, request: 'TLS00001');
+        $this->assertSame(['forward'], $this->messages->kinds());
+
+        $this->messages->calls = [];
+        Carbon::setTestNow(now()->addDay());
+        $this->penalty(repeat: 1, request: 'TLS00002');
         $this->assertSame(['send', 'forward'], $this->messages->kinds());
     }
 
@@ -2145,6 +2186,84 @@ class ClientCheckTest extends TestCase
         $this->artisan('telegram:merge-defaults')->expectsOutput('Added: 0')->assertSuccessful();
     }
 
+    /**
+     * "Juma ayyomi muborak bo'lsin" (2026-11-13: one operator wrote it three
+     * Fridays in a row and got nothing back but a penalty).
+     */
+    public function test_a_friday_greeting_is_read_and_wins_over_the_assalom_in_it(): void
+    {
+        $rules = AutoReplyRules::fromArray((require config_path('auto_replies.php'))['defaults']);
+        $matcher = new AutoReplyMatcher();
+        $list = $rules->greetings['list'];
+
+        foreach (['Juma ayyom muborak', 'Assalomu alaykum yaxshimisiz aka, Juma ayyomi muborak boʻlsin.', 'Ассалому алайкум, жума муборак!', 'Хайрли жума', 'Assalomu alekum yaxshimisiz aka, Ayyom muborak bulsin.'] as $text) {
+            $found = $matcher->greeting($list, $rules->greetings['fillers'], $text);
+
+            $this->assertNotNull($found, $text);
+            $this->assertSame('Жума муборак', $list[$found['index']]['name'], $text);
+            $this->assertTrue($found['alone'], $text);
+        }
+
+        /* "Assalomu alaykum yaxshimisiz aka" is a greeting alone now, greeted back as the owner does. */
+        $found = $matcher->greeting($list, $rules->greetings['fillers'], 'Assalomu alaykum yaxshimisiz aka');
+        $this->assertSame('Ассалому алайкум', $list[$found['index']]['name']);
+        $this->assertTrue($found['alone']);
+
+        /* The shipped greetings keep the ids they had by place: personal answers point at them. */
+        $this->assertSame(['gfriday', 'g0', 'g1', 'g2', 'g3', 'g4'], array_column($list, 'id'));
+        $this->assertSame(['Жума муборак', 'Утро', 'День', 'Вечер', 'Ассалому алайкум', 'Салом'], array_column($list, 'name'));
+    }
+
+    public function test_the_opening_is_a_friday_one_on_fridays_only(): void
+    {
+        config()->set('auto_replies.friday_opening', (require config_path('auto_replies.php'))['friday_opening']);
+
+        $usual = ['language' => 'uz', 'items' => [['type' => 'text', 'text' => 'Assalomu alaykum']]];
+
+        /* 2026-10-08 is a Thursday. */
+        Carbon::setTestNow('2026-10-08 10:00:00');
+        $this->assertSame($usual, \App\Application\Telegram\Services\PenaltyOpening::friday($usual, 'uz', 'plain'));
+
+        Carbon::setTestNow('2026-10-09 10:00:00');
+        $friday = \App\Application\Telegram\Services\PenaltyOpening::friday($usual, 'uz', 'respectful');
+        $this->assertSame('uz', $friday['language']);
+        $this->assertContains('Жумангиз муборак булсин!', array_column($friday['items'], 'text'));
+
+        $ru = \App\Application\Telegram\Services\PenaltyOpening::friday($usual, 'ru', 'plain');
+        $this->assertSame('ru', $ru['language']);
+        $this->assertContains('Здравствуйте! Жума муборак!', array_column($ru['items'], 'text'));
+
+        /* None written: the usual opening. */
+        config()->set('auto_replies.friday_opening', []);
+        $this->assertSame($usual, \App\Application\Telegram\Services\PenaltyOpening::friday($usual, 'uz', 'plain'));
+    }
+
+    public function test_a_missing_shipped_greeting_goes_in_at_its_place_and_takes_no_ones_id(): void
+    {
+        config()->set('auto_replies.defaults', (require config_path('auto_replies.php'))['defaults']);
+        config()->set('client_checks', require config_path('client_checks.php'));
+
+        /* A copy saved before the Friday greeting: "Утро" is g0 there, and a personal answer points at it. */
+        $store = app(AutoReplyStore::class);
+        $saved = $store->defaults()->toArray();
+        $saved['greetings']['list'] = array_values(array_filter($saved['greetings']['list'], fn (array $g): bool => $g['name'] !== 'Жума муборак'));
+        $saved['greetings']['list'][0]['id'] = 'g0';
+        $store->save(AutoReplyRules::fromArray($saved));
+
+        $this->assertSame('Утро', $store->current()->greetings['list'][0]['name']);
+
+        $this->artisan('telegram:merge-defaults')->assertSuccessful();
+
+        $list = $store->current()->greetings['list'];
+        $this->assertSame(['Жума муборак', 'Утро'], array_slice(array_column($list, 'name'), 0, 2));
+        $this->assertSame('gfriday', $list[0]['id']);
+        $this->assertSame('g0', $list[1]['id']);
+
+        /* Not twice. */
+        $this->artisan('telegram:merge-defaults')->assertSuccessful();
+        $this->assertSame(1, count(array_keys(array_column($store->current()->greetings['list'], 'name'), 'Жума муборак', true)));
+    }
+
     public function test_a_kind_missing_from_the_saved_copy_is_added_and_retired_penalty_texts_are_taken_out(): void
     {
         config()->set('auto_replies.defaults', (require config_path('auto_replies.php'))['defaults']);
@@ -2157,8 +2276,14 @@ class ClientCheckTest extends TestCase
 
         $penalties = app(ClientCheckRulesStore::class);
         $rules = $penalties->defaults()->toArray();
-        $rules['roles']['operation']['levels'][3]['phrases']['uz']['plain'] = ['Моя фраза', 'Нима килай, бошкага олайми?'];
+        $rules['roles']['operation']['levels'][3]['phrases']['uz']['plain'] = ['Моя фраза', 'Нима килай, бошкага олайми?', 'Хеч булмаса «+» ёзиб куй, {address}'];
         $penalties->save(ClientCheckRules::fromArray($rules));
+
+        /* The "at least write +" nudges of an older copy, however they were copied (2026-11-13). */
+        $saved = $store->current()->toArray();
+        $saved['silence']['answers']['ru']['plain'][] = 'Хотя бы «+» напишите';
+        $saved['silence']['answers']['uz']['plain'][] = 'Хеч булмаса + ёзиб куйинг';
+        $store->save(AutoReplyRules::fromArray($saved));
 
         $this->assertCount(1, $store->current()->replies);
 
@@ -2173,7 +2298,27 @@ class ClientCheckTest extends TestCase
         $this->assertContains('Моя фраза', $level);
         $this->assertNotContains('Нима килай, бошкага олайми?', $level);
         $this->assertNotContains('Булмаса айт, бошкага утказаман', $level);
-        $this->assertContains('Жавоб ёз, хеч булмаса +', $level);
+        $this->assertContains('Бошкага берайми?', $level);
+
+        /* No "+" asked for anywhere: penalties, nudges. */
+        foreach ($penalties->current()->ladders as $levels) {
+            foreach ($levels as $step) {
+                foreach ($step['phrases'] as $tones) {
+                    foreach ($tones as $texts) {
+                        foreach ($texts as $text) {
+                            $this->assertStringNotContainsString('+', $text);
+                        }
+                    }
+                }
+            }
+        }
+        foreach ($store->current()->silence['answers'] as $tones) {
+            foreach ($tones as $texts) {
+                foreach ($texts as $text) {
+                    $this->assertStringNotContainsString('+', $text);
+                }
+            }
+        }
 
         /* Run again: nothing twice. */
         $this->artisan('telegram:merge-defaults')->expectsOutput('Added: 0')->assertSuccessful();
@@ -2248,6 +2393,143 @@ class ClientCheckTest extends TestCase
         }
 
         return $check;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | The call by name: "Зуба" when a penalty stays unanswered
+    |--------------------------------------------------------------------------
+    */
+
+    private function ping(): void
+    {
+        app(\App\Application\Telegram\Actions\PingSilentByName::class)->execute($this->telegram);
+    }
+
+    public function test_an_unanswered_penalty_gets_the_name_alone_once(): void
+    {
+        /* No greeting first (a 50% chance): the comment goes at once. */
+        config()->set('auto_replies.send_chance.opening', 0);
+
+        $this->person(attributes: ['address' => ['uz' => 'Afzal aka']]);
+        $check = $this->penaltySent();
+
+        /* Not yet: under 20 minutes. */
+        Carbon::setTestNow(now()->addMinutes(19));
+        $this->ping();
+        $this->assertSame([], $this->messages->kinds());
+
+        Carbon::setTestNow(now()->addMinutes(2));
+        $this->ping();
+        $this->ping();
+
+        $this->assertSame(['send'], $this->messages->kinds());
+        $this->assertContains($this->messages->sent()[0]['message'], ['Afzal aka', 'Afzal aka?']);
+
+        $check->refresh();
+        $this->assertNotNull($check->pinged_at);
+        $this->assertContains($check->ping_text, ['Afzal aka', 'Afzal aka?']);
+    }
+
+    public function test_the_own_call_of_the_card_comes_before_the_address(): void
+    {
+        /* No greeting first (a 50% chance): the comment goes at once. */
+        config()->set('auto_replies.send_chance.opening', 0);
+
+        $this->person(attributes: [
+            'address' => ['uz' => 'Afzal aka'],
+            'personal_answers' => ['ping' => ['only' => false, 'items' => [['type' => 'text', 'text' => 'Пулатов']]]],
+        ]);
+        $this->penaltySent();
+
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+
+        $this->assertSame('Пулатов', $this->messages->sent()[0]['message']);
+    }
+
+    public function test_no_call_without_a_name_after_an_answer_or_when_switched_off(): void
+    {
+        /* No greeting first (a 50% chance): the comment goes at once. */
+        config()->set('auto_replies.send_chance.opening', 0);
+
+        /* No address and no call of their own: never the CRM's full name. */
+        $person = $this->person();
+        $check = $this->penaltySent();
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+        $this->assertSame([], $this->messages->kinds());
+        $this->assertNotNull($check->refresh()->pinged_at);
+        $this->assertNull($check->ping_text);
+
+        /* Answered ("+"): nothing to wake. */
+        $person->update(['address' => ['uz' => 'Afzal aka']]);
+        Carbon::setTestNow(now()->addHours(3));
+        $this->penaltySent();
+        $this->reply('+');
+        $this->messages->calls = [];
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+        $this->assertSame([], $this->messages->kinds());
+
+        /* Nudges switched off on the card. */
+        $person->update(['nudge_enabled' => false]);
+        Carbon::setTestNow(now()->addHours(3));
+        $this->penaltySent();
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+        $this->assertSame([], $this->messages->kinds());
+    }
+
+    public function test_at_most_twice_a_day_and_two_hours_apart(): void
+    {
+        /* No greeting first (a 50% chance): the comment goes at once. */
+        config()->set('auto_replies.send_chance.opening', 0);
+
+        $this->at('09:00:00');
+        $this->person(attributes: ['address' => ['uz' => 'Afzal aka']]);
+
+        /* Counted on the penalties: sending a penalty clears the fake's list of messages. */
+        $calls = fn (): int => TelegramClientCheck::query()->whereNotNull('ping_text')->count();
+
+        $this->penaltySent();
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+        $this->assertSame(1, $calls());
+
+        /* An hour later another unanswered penalty: too soon after the first call. */
+        Carbon::setTestNow(now()->addHour());
+        $this->penaltySent(repeat: 2);
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+        $this->assertSame(1, $calls());
+
+        /* Past the gap, still in its window: the second call. */
+        Carbon::setTestNow(now()->addMinutes(60));
+        $this->ping();
+        $this->assertSame(2, $calls());
+
+        /* The day's two are used up. */
+        Carbon::setTestNow(now()->addHours(2));
+        $this->penaltySent(repeat: 3);
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+        $this->assertSame(2, $calls());
+    }
+
+    public function test_the_call_by_name_can_be_switched_off(): void
+    {
+        /* No greeting first (a 50% chance): the comment goes at once. */
+        config()->set('auto_replies.send_chance.opening', 0);
+
+        config()->set('client_checks.name_ping.enabled', false);
+
+        $this->person(attributes: ['address' => ['uz' => 'Afzal aka']]);
+        $this->penaltySent();
+        Carbon::setTestNow(now()->addMinutes(21));
+        $this->ping();
+
+        $this->assertSame([], $this->messages->kinds());
     }
 
     public function test_the_third_ignored_penalty_is_nudged(): void

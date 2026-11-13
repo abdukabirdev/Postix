@@ -82,6 +82,19 @@ final class PenaltyOpening
         }
 
         /*
+         * The quiet day (no greeting, by chance) lives only in the cache too:
+         * on 2026-11-13 the deploys emptied it and people got "Здравствуйте"
+         * at 12:10 or 13:05, after four penalties of that morning. Only
+         * before the day's first penalty, then: one already sent today
+         * means the day started without it.
+         */
+        if ($this->penaltySentToday($check, $person)) {
+            Cache::put($this->quietKey($person), true, now()->endOfDay());
+
+            return;
+        }
+
+        /*
          * The bot posts a person's penalties in bursts: one greets, the
          * others wait for it rather than overtake it.
          */
@@ -103,12 +116,10 @@ final class PenaltyOpening
                 return;
             }
 
+            $tone = $person->respectful ? ClientCheckRules::TONE_RESPECTFUL : ClientCheckRules::TONE_PLAIN;
+
             $choices = $this->personal->merge(
-                $rules->choices(
-                    'opening',
-                    $person->messageLanguage(),
-                    $person->respectful ? ClientCheckRules::TONE_RESPECTFUL : ClientCheckRules::TONE_PLAIN,
-                ),
+                self::friday($rules->choices('opening', $person->messageLanguage(), $tone), $person->messageLanguage(), $tone),
                 $person,
                 PersonalAnswers::OPENING,
             );
@@ -160,6 +171,41 @@ final class PenaltyOpening
     }
 
     /**
+     * On Fridays the opening is a Friday one ("Жума муборак"):
+     * auto_replies.friday_opening in the person's language and tone (the
+     * other tone, then the other language, when one is missing); the usual
+     * opening any other day or when none is written.
+     *
+     * @param array{language: string, items: list<array<string, mixed>>} $choices
+     * @return array{language: string, items: list<array<string, mixed>>}
+     */
+    public static function friday(array $choices, string $language, string $tone): array
+    {
+        if (! now()->isFriday()) {
+            return $choices;
+        }
+
+        $sets = (array) config('auto_replies.friday_opening', []);
+
+        foreach ([$language, ...array_diff(['uz', 'ru'], [$language])] as $lang) {
+            $tones = (array) ($sets[$lang] ?? []);
+            $texts = array_values(array_filter(
+                array_map('strval', (array) ($tones[$tone] ?? $tones[ClientCheckRules::TONE_PLAIN] ?? [])),
+                static fn (string $text): bool => trim($text) !== '',
+            ));
+
+            if ($texts !== []) {
+                return [
+                    'language' => $lang,
+                    'items' => array_map(static fn (string $text): array => ['type' => 'text', 'text' => $text], $texts),
+                ];
+            }
+        }
+
+        return $choices;
+    }
+
+    /**
      * A greeting of ours already went to this person today (the penalty
      * that carried it is marked), whatever the cache says.
      */
@@ -169,6 +215,18 @@ final class PenaltyOpening
             ->where('operation_user_id', $person->id)
             ->where('id', '!=', $check->id)
             ->where('opening_sent_at', '>=', now()->startOfDay())
+            ->exists();
+    }
+
+    /**
+     * Another penalty already went to this person today.
+     */
+    private function penaltySentToday(TelegramClientCheck $check, OperationUser $person): bool
+    {
+        return TelegramClientCheck::query()
+            ->where('operation_user_id', $person->id)
+            ->where('id', '!=', $check->id)
+            ->where('forwarded_at', '>=', now()->startOfDay())
             ->exists();
     }
 

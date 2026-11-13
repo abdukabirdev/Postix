@@ -583,6 +583,7 @@ return [
             'reply' => 'Avto-javob',
             'silence' => 'Eslatma',
             'opening' => 'Jarimadan oldin salom',
+            'ping' => 'Ism bilan chaqirish',
         ],
         'situations' => [
             'penalty' => ':name (:from-chidan)',
@@ -591,6 +592,7 @@ return [
             'reply' => 'Tur :n',
             'silence' => 'Jarimalarga javob bermaganda',
             'opening' => 'Kunning birinchi jarimasidan oldin',
+            'ping' => 'Jarimadan keyin jim: faqat ismi («Зуба», «Рушана апа»)',
             'gone' => 'Bu vaziyat endi yo\'q',
             'gone_hint' => 'Tur, salomlashish yoki daraja sozlamalarda o\'chirilgan: bu javoblar yuborilmaydi. Olib tashlang yoki qaytguncha qoldiring.',
         ],

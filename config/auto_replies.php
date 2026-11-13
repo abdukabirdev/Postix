@@ -155,6 +155,37 @@ return [
     ],
 
     /*
+     * On Fridays our greeting before the day's first penalty (opening) is a
+     * Friday one: people here wish each other "Жума муборак". Placeholders
+     * as in the opening. Not in the panel: read from here; an empty list
+     * keeps the usual opening.
+     */
+    'friday_opening' => [
+        'uz' => [
+            'plain' => [
+                'Ассалому алайкум, жума муборак!',
+                'Жума муборак, {address}!',
+                'Жумангиз муборак булсин!',
+            ],
+            'respectful' => [
+                'Ассалому алайкум, {address}, жума муборак булсин!',
+                'Жумангиз муборак булсин!',
+                'Жума айёми муборак булсин!',
+            ],
+        ],
+        'ru' => [
+            'plain' => [
+                'Здравствуйте! Жума муборак!',
+                'С пятницей, {address}!',
+            ],
+            'respectful' => [
+                'Здравствуйте, {address}! Жума муборак!',
+                'Здравствуйте! Хорошей пятницы!',
+            ],
+        ],
+    ],
+
+    /*
      * Words that make a message one for the person in charge, whatever "ok"
      * word is in it: a complaint ("нарх берилган, нега штраф келяпти"), a
      * "but" ("бердим, лекин..."), a request to hand the request over
@@ -535,7 +566,6 @@ return [
                         'Жавоб борми, {address}?',
                         'Куряпсизми, {address}?',
                         '{address}, жарималар тупланиб колди',
-                        'Хеч булмаса + ёзиб куйинг',
                         'Жарималарни куриб чикинг, {address}',
                         'Статуслар хали хам турибди, {address}',
                         'Жавоб ёзиб куйинг, {address}',
@@ -546,7 +576,6 @@ return [
                         'Жавобингизни кутяпман, {address}',
                         'Илтимос, бир караб куйинг, {address}',
                         'Жарималар тупланиб колди, {address}, илтимос',
-                        'Илтимос, + булса хам ёзиб куйинг',
                         'Илтимос, {address}, статусларни янгилаб беринг',
                     ],
                 ],
@@ -556,7 +585,6 @@ return [
                         'Ответьте, пожалуйста, {address}',
                         '{address}, ответ будет?',
                         'Штрафы копятся, {address}',
-                        'Хотя бы + напишите',
                         '{address}, видите сообщения?',
                         'Я не просто так пишу, {address}',
                         '{address}, отпишитесь, пожалуйста',
@@ -566,7 +594,6 @@ return [
                         'Ответьте, пожалуйста, {address}',
                         '{address}, посмотрите, пожалуйста',
                         'Жду вашего ответа, {address}',
-                        'Пожалуйста, хотя бы +, {address}',
                         'Штрафы накопились, {address}, посмотрите, пожалуйста',
                     ],
                 ],
@@ -585,11 +612,57 @@ return [
                 'aka', 'akajon', 'opa', 'opajon', 'apa', 'uka', 'ukam', 'brat', 'hammaga',
                 'ака', 'акажон', 'опа', 'опажон', 'апа', 'ука', 'укам', 'брат', 'хаммага',
                 'всем', 'коллеги', 'вам', 'тебе',
+                'yaxshimisiz', 'яхшимисиз', 'muborak', 'муборак', 'bolsin', 'bulsin', 'булсин',
                 '🙂', '😊', '☺', '🤝', '👋', '🌞', '☀',
             ],
 
             'list' => [
+                /*
+                 * "Juma ayyomi muborak bo'lsin" on Fridays (2026-11-13: one
+                 * operator wrote it three Fridays in a row and got a penalty
+                 * back). First, so "Assalomu alaykum, juma muborak" is
+                 * answered with the Friday words.
+                 */
                 [
+                    'id' => 'gfriday',
+                    'name' => 'Жума муборак',
+                    'keywords' => [
+                        'juma ayyomi muborak', 'juma ayyom muborak', 'juma muborak', 'jumangiz muborak', 'xayrli juma',
+                        'жума айёми муборак', 'жума айеми муборак', 'жума муборак', 'жумангиз муборак', 'хайрли жума',
+                        'джума мубарак', 'жума мубарак', 'с пятницей',
+                        /* "Ayyom muborak bulsin" without the word "juma" (2026-11-13, a Friday). */
+                        'ayyom muborak', 'ayyomi muborak', 'ayyomingiz muborak',
+                        'айём муборак', 'айёми муборак', 'айёмингиз муборак', 'айем муборак',
+                    ],
+                    'answers' => [
+                        'uz' => [
+                            'plain' => [
+                                'Сизга хам жума муборак!',
+                                'Жума муборак, {address}!',
+                                'Сизга хам муборак булсин!',
+                            ],
+                            'respectful' => [
+                                'Сизга хам жума муборак булсин, {address}!',
+                                'Жумангиз муборак булсин!',
+                                'Сизга хам муборак булсин!',
+                            ],
+                        ],
+                        'ru' => [
+                            'plain' => [
+                                'И вас с пятницей!',
+                                'Жума муборак!',
+                                'Взаимно, {address}!',
+                            ],
+                            'respectful' => [
+                                'И вас с пятницей, {address}!',
+                                'Жума муборак!',
+                                'Взаимно, спасибо!',
+                            ],
+                        ],
+                    ],
+                ],
+                [
+                    'id' => 'g0',
                     'name' => 'Утро',
                     'keywords' => ['доброе утро', 'доброго утра', 'утро доброе', 'xayrli tong', 'hayrli tong', 'хайрли тонг', 'good morning'],
                     'answers' => [
@@ -624,6 +697,7 @@ return [
                     ],
                 ],
                 [
+                    'id' => 'g1',
                     'name' => 'День',
                     'keywords' => ['добрый день', 'xayrli kun', 'hayrli kun', 'хайрли кун'],
                     'answers' => [
@@ -658,6 +732,7 @@ return [
                     ],
                 ],
                 [
+                    'id' => 'g2',
                     'name' => 'Вечер',
                     'keywords' => ['добрый вечер', 'xayrli kech', 'hayrli kech', 'хайрли кеч'],
                     'answers' => [
@@ -692,6 +767,7 @@ return [
                     ],
                 ],
                 [
+                    'id' => 'g3',
                     'name' => 'Ассалому алайкум',
                     'keywords' => [
                         'assalomu alaykum', 'assalomu aleykum', 'assalamu alaykum', 'assalamu aleykum',
@@ -738,6 +814,7 @@ return [
                     ],
                 ],
                 [
+                    'id' => 'g4',
                     'name' => 'Салом',
                     'keywords' => ['здравствуйте', 'здраствуйте', 'здравствуй', 'приветствую', 'привет', 'salom', 'salam', 'салом', 'салам', 'hello'],
                     'answers' => [
@@ -916,6 +993,15 @@ return [
      * its own copy: telegram:merge-defaults takes these out of it, from
      * every answer list, leaving whatever was added in the panel itself.
      */
+    /*
+     * Answers taken out by what they say (regular expressions), as
+     * client_checks.retired_matching: no "at least write +" (2026-11-13).
+     * Only answers and nudges - a "+" stays a keyword people are read by.
+     */
+    'retired_matching' => [
+        '/\+/u',
+    ],
+
     'retired' => [
         'Хайрли тонг, {address}!',
         'Хайрли тонг!',

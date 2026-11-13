@@ -25,7 +25,9 @@ use Illuminate\Console\Command;
  *
  * The one thing taken out: auto reply texts no longer shipped
  * (auto_replies.retired) and penalty comments no longer shipped
- * (client_checks.retired), from every list of the saved copy.
+ * (client_checks.retired), from every list of the saved copy; and the
+ * texts the retired_matching patterns of either file take, however they
+ * were copied (2026-11-13: no "at least write +").
  */
 final class MergeDefaultPhrasesCommand extends Command
 {
@@ -111,6 +113,25 @@ final class MergeDefaultPhrasesCommand extends Command
         }
         unset($greeting);
 
+        /* A shipped greeting the saved copy does not have (2026-11-13: Жума муборак), at its place: the first found answers. */
+        $names = array_column($rules['greetings']['list'], 'name');
+
+        foreach ($defaults['greetings']['list'] as $index => $default) {
+            if (in_array($default['name'], $names, true) || count($rules['greetings']['list']) >= AutoReplyRules::MAX_GREETINGS) {
+                continue;
+            }
+
+            /* An id of its own: one taken by a saved greeting would rename that one, and its personal answers would follow the new. */
+            $taken = array_column($rules['greetings']['list'], 'id');
+            while (in_array($default['id'], $taken, true)) {
+                $default['id'] .= 'x';
+            }
+
+            array_splice($rules['greetings']['list'], min($index, count($rules['greetings']['list'])), 0, [$default]);
+            $names = array_column($rules['greetings']['list'], 'name');
+            $this->added++;
+        }
+
         $rules['greetings']['fillers'] = $this->list($rules['greetings']['fillers'], $defaults['greetings']['fillers'], AutoReplyRules::MAX_FILLERS);
 
         foreach ([['silence', 'answers'], ['opening', 'answers'], ['follow_up', 'answers'], ['follow_up', 'answers_many']] as [$owner, $field]) {
@@ -158,7 +179,7 @@ final class MergeDefaultPhrasesCommand extends Command
     {
         foreach ($sets as $language => $tones) {
             foreach ($tones as $tone => $texts) {
-                $kept = array_values(array_diff($texts, $this->retiredPenalties));
+                $kept = $this->unmatched(array_values(array_diff($texts, $this->retiredPenalties)), 'client_checks.retired_matching');
 
                 $this->removed += count($texts) - count($kept);
 
@@ -179,7 +200,7 @@ final class MergeDefaultPhrasesCommand extends Command
     {
         foreach ($sets as $language => $tones) {
             foreach ($tones as $tone => $texts) {
-                $kept = array_values(array_diff($texts, $this->retired));
+                $kept = $this->unmatched(array_values(array_diff($texts, $this->retired)), 'auto_replies.retired_matching');
 
                 $this->removed += count($texts) - count($kept);
 
@@ -188,6 +209,34 @@ final class MergeDefaultPhrasesCommand extends Command
         }
 
         return $sets;
+    }
+
+    /**
+     * $texts without the ones a pattern of config $key takes (2026-11-13:
+     * no "at least write +", however it was copied).
+     *
+     * @param list<string> $texts
+     * @return list<string>
+     */
+    private function unmatched(array $texts, string $key): array
+    {
+        $patterns = array_values(array_filter(
+            array_map('strval', (array) config($key, [])),
+            static fn (string $pattern): bool => @preg_match($pattern, '') !== false,
+        ));
+
+        return array_values(array_filter(
+            $texts,
+            static function (string $text) use ($patterns): bool {
+                foreach ($patterns as $pattern) {
+                    if (preg_match($pattern, $text) === 1) {
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+        ));
     }
 
     /**

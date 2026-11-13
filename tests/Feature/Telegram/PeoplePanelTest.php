@@ -656,12 +656,14 @@ class PeoplePanelTest extends TestCase
         try {
             $this->getJson('/api/telegram/auto-replies')
                 ->assertJsonPath('data.greetings.enabled', true)
-                ->assertJsonPath('data.greetings.list.0.name', 'Утро');
+                /* The Friday one first, so it wins over the "Assalomu alaykum" in the same message. */
+                ->assertJsonPath('data.greetings.list.0.name', 'Жума муборак')
+                ->assertJsonPath('data.greetings.list.1.name', 'Утро');
 
             /* Left out, as by a page from before them: the config's are kept. */
             $this->putJson('/api/telegram/auto-replies', $this->autoReplies())
                 ->assertOk()
-                ->assertJsonPath('data.greetings.list.0.name', 'Утро');
+                ->assertJsonPath('data.greetings.list.1.name', 'Утро');
 
             $this->putJson('/api/telegram/auto-replies', $this->autoReplies([
                 'greetings' => [

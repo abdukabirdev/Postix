@@ -18,6 +18,8 @@ use App\Models\Telegram\OperationUser;
  *   reply:<kind id>   - an auto reply kind (AutoReplyRules ids)
  *   greeting:<id>     - an auto reply greeting
  *   silence           - the nudge after ignored penalties
+ *   ping              - the call by name: the person's name alone ("Зуба",
+ *                       "Рушана апа") when a penalty stays unanswered
  *   opening           - our greeting before the day's first penalty
  *
  * Each holds texts (placeholders as in the shared ones), voice messages and
@@ -37,6 +39,8 @@ final class PersonalAnswers
 
     public const OPENING = 'opening';
 
+    public const PING = 'ping';
+
     public static function penaltySlot(int $level): string
     {
         return 'penalty:' . $level;
@@ -54,7 +58,7 @@ final class PersonalAnswers
 
     public static function validSlot(string $slot): bool
     {
-        return in_array($slot, [self::SILENCE, self::OPENING], true)
+        return in_array($slot, [self::SILENCE, self::OPENING, self::PING], true)
             || preg_match('/^(penalty:\d{1,2}|reply:[a-z0-9]{1,24}|greeting:[a-z0-9]{1,24})$/', $slot) === 1;
     }
 

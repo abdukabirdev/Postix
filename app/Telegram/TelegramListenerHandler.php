@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Telegram;
 
 use App\Application\Telegram\Actions\NudgeSilentClientChecks;
+use App\Application\Telegram\Actions\PingSilentByName;
 use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
 use App\Application\Telegram\Actions\ProcessRequestCancellation;
@@ -381,6 +382,17 @@ final class TelegramListenerHandler extends SimpleEventHandler
             app(NudgeSilentClientChecks::class)->execute($this, self::$key);
         } catch (Throwable $e) {
             Log::error('TelegramListenerHandler: client check nudge failed', [
+                'key' => self::$key,
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+
+        /* After the nudge: a penalty still unanswered gets the person's name alone. Apart, as the nudge. */
+        try {
+            app(PingSilentByName::class)->execute($this, self::$key);
+        } catch (Throwable $e) {
+            Log::error('TelegramListenerHandler: client check call by name failed', [
                 'key' => self::$key,
                 'error' => $e->getMessage(),
                 'exception' => $e::class,

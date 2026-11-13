@@ -151,6 +151,7 @@ final class PersonalAnswerController extends Controller
             ),
             'silence' => PersonalAnswers::SILENCE,
             'opening' => PersonalAnswers::OPENING,
+            'ping' => PersonalAnswers::PING,
         ];
     }
 }

@@ -129,6 +129,8 @@ class TelegramClientCheck extends Model
         'nudged_at',
         'seen_at',
         'nudge_text',
+        'pinged_at',
+        'ping_text',
     ];
 
     protected function casts(): array
@@ -155,6 +157,7 @@ class TelegramClientCheck extends Model
             'reply_answered_at' => 'datetime',
             'nudged_at' => 'datetime',
             'seen_at' => 'datetime',
+            'pinged_at' => 'datetime',
         ];
     }
 

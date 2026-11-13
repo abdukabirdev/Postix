@@ -65,7 +65,7 @@ export function personalAnswersPage(config) {
 
         people: [],
 
-        situations: { penalties: { operation: [], sales: [] }, replies: [], greetings: [], silence: 'silence', opening: 'opening' },
+        situations: { penalties: { operation: [], sales: [] }, replies: [], greetings: [], silence: 'silence', opening: 'opening', ping: 'ping' },
 
         filters: { search: '', role: '', withoutVoice: false },
 
@@ -292,6 +292,7 @@ export function personalAnswersPage(config) {
                 })),
                 { slot: s.silence, group: t.groups.silence, label: t.situations.silence },
                 { slot: s.opening, group: t.groups.opening, label: t.situations.opening },
+                { slot: s.ping || 'ping', group: t.groups.ping, label: t.situations.ping },
             ];
         },
 

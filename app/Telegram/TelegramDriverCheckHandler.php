@@ -6,6 +6,7 @@ namespace App\Telegram;
 
 use App\Application\Telegram\Actions\NotifyTelegramResolverExhaustion;
 use App\Application\Telegram\Actions\NudgeSilentClientChecks;
+use App\Application\Telegram\Actions\PingSilentByName;
 use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
 use App\Application\Telegram\Actions\ProcessCreatedDriverMessage;
@@ -516,6 +517,19 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
         } catch (Throwable $e) {
             Log::error(
                 'TelegramDriverCheckHandler: client check nudge failed',
+                [
+                    'error' => $e->getMessage(),
+                    'exception' => $e::class,
+                ],
+            );
+        }
+
+        /* After the nudge: a penalty still unanswered gets the person's name alone. Apart, as the nudge. */
+        try {
+            app(PingSilentByName::class)->execute($this);
+        } catch (Throwable $e) {
+            Log::error(
+                'TelegramDriverCheckHandler: client check call by name failed',
                 [
                     'error' => $e->getMessage(),
                     'exception' => $e::class,

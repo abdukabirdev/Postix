@@ -1,0 +1,497 @@
+{
+    "about": "Personal answers in the owner's own words, taken from his messages in the private chats of the main account and in the work groups (2026-11-13). Added to what each card has (never replaces it), 'only' stays off: his phrases come up among the shared ones. Slots: thanks - the answer to '+' / 'done' (the auto reply kind 'Благодарность'); silence - the nudge after ignored penalties; ping - the call by name when a penalty stays unanswered (PingSilentByName); penalty - the penalty comment on every level but an operator's last one (the 'hand it over' threat). Swearing from the chats is left out on purpose. Run: php artisan telegram:personal-answers-import --dry, then without --dry.",
+    "people": [
+        {
+            "person_id": 27,
+            "name": "HUSANOV ZUBAYR BOBIR O'G'LI",
+            "penalty": [
+                "Зуба, нарх бер",
+                "Бер нарх",
+                "Укажоним, нарх?"
+            ],
+            "silence": [
+                "Зуба",
+                "Укажоним?",
+                "Нега жимсан?",
+                "Зуба укажоним?",
+                "Мен буларни шунчаки ёзмайман"
+            ],
+            "thanks": [
+                "Маладес укажоним",
+                "Зўр"
+            ],
+            "ping": [
+                "Зуба",
+                "Укажоним?",
+                "Зуба укажоним?"
+            ]
+        },
+        {
+            "person_id": 17,
+            "name": "SHUKURXONOV ISLOMXON NE'MATULLAXON O'G'LI",
+            "penalty": [
+                "Нарх бер!",
+                "Нархинг борми?",
+                "Исломхон, нарх бер",
+                "Топ мошина"
+            ],
+            "silence": [
+                "Исломхон?",
+                "Нима муаммо?",
+                "Нега жимсан?"
+            ],
+            "thanks": [
+                "Зўр",
+                "Тўғри"
+            ],
+            "ping": [
+                "Исломхон?"
+            ]
+        },
+        {
+            "person_id": 13,
+            "name": "ASOMIDDINOV JALOLIDDIN KAMOLIDDIN OGLI",
+            "penalty": [
+                "Қидир, қидир",
+                "Бор мошинага бер"
+            ],
+            "silence": [
+                "Ишдамисан?",
+                "Жавоб бермайсан ўзингча",
+                "Шунчаки жўнатиб ўтирмайманку"
+            ],
+            "thanks": [
+                "Зўр"
+            ]
+        },
+        {
+            "person_id": 5,
+            "name": "SAPARBAEV KHUSNUDDIN NURIDDIN O'G'LI",
+            "penalty": [
+                "Хуси, нарх беринг",
+                "Сапарбаев, нега қидирилмаган?"
+            ],
+            "silence": [
+                "Хуси?",
+                "Хуси"
+            ],
+            "thanks": [
+                "Маладес укажоним"
+            ],
+            "ping": [
+                "Хуси?",
+                "Хуси"
+            ]
+        },
+        {
+            "person_id": 23,
+            "name": "FAYZIYEV ASLIDDIN MUHIDDINOVICH",
+            "penalty": [
+                "Борми янгилик?",
+                "Аслиддин, нарх беринг илтимос"
+            ],
+            "silence": [
+                "Аслиддин?",
+                "Борми янгилик?"
+            ],
+            "thanks": [
+                "Яшанг!",
+                "Зўр",
+                "Майли, чарчаманг"
+            ],
+            "ping": [
+                "Аслиддин?"
+            ]
+        },
+        {
+            "person_id": 29,
+            "name": "XASANOV FARXOD TAXIROVICH",
+            "penalty": [
+                "Нарх бер, жигарим!",
+                "Фара, нарх?",
+                "Қанча?"
+            ],
+            "silence": [
+                "Жигар?",
+                "Фара жигар?",
+                "Беэътиборсан?",
+                "Дусим"
+            ],
+            "thanks": [
+                "Тамом, жигар!",
+                "Маладес"
+            ],
+            "ping": [
+                "Жигар?",
+                "Фара",
+                "Фара жигар?"
+            ]
+        },
+        {
+            "person_id": 1,
+            "name": "SHAMSHIYEV SIROJIDDIN SADRIDDINOVICH",
+            "penalty": [
+                "Сирожиддин, нарх?",
+                "Тоғо, нарх бер",
+                "Нархни занжирга кирит"
+            ],
+            "silence": [
+                "Тоғо?",
+                "Сирожиддин?"
+            ],
+            "thanks": [
+                "Маладес",
+                "Зўр"
+            ],
+            "ping": [
+                "Тоғо",
+                "Сирожиддин?"
+            ]
+        },
+        {
+            "person_id": 7,
+            "name": "NABIYEV SHAXBOZ FAXRIDDIN O'G'LI",
+            "penalty": [
+                "Бир марта ҳам қидирилмаган, укажон",
+                "Борми машина?",
+                "Катта машина бер"
+            ],
+            "silence": [
+                "Шабо",
+                "Жим ўтирма",
+                "Эй Шабо"
+            ],
+            "thanks": [
+                "Маладес"
+            ],
+            "ping": [
+                "Шабо",
+                "Эй Шабо"
+            ]
+        },
+        {
+            "person_id": 18,
+            "name": "JALILOV JAHONGIR TOXIR O'GLI",
+            "penalty": [
+                "Қидир",
+                "Бугун кечгача машина топиб бер",
+                "Қидирилмаганку"
+            ],
+            "silence": [
+                "Нега жимсан?",
+                "Жигар?"
+            ],
+            "thanks": [
+                "Маладес",
+                "Тамом, укажоним"
+            ],
+            "ping": [
+                "Жигар?"
+            ]
+        },
+        {
+            "person_id": 2,
+            "name": "ABDAZIMOV BAHTIYOR GAYRATOVICH",
+            "penalty": [
+                "Нарх, Бахтиер",
+                "Ҳаракат қилинг илтимос!"
+            ],
+            "silence": [
+                "Бахтиер",
+                "Бахтиер, илтимос"
+            ],
+            "thanks": [
+                "Раҳмат"
+            ],
+            "ping": [
+                "Бахтиер"
+            ]
+        },
+        {
+            "person_id": 8,
+            "name": "MALIKOV XABIBULLAXON NASRULLAXANOVICH",
+            "penalty": [
+                "Акажон, шуни тизимда бериб қўйинг",
+                "Бугун имкони борми?"
+            ],
+            "silence": [
+                "Акамжоним?"
+            ],
+            "ping": [
+                "Акамжоним?"
+            ]
+        },
+        {
+            "person_id": 16,
+            "name": "QOSIMOV DILSHOD   KOMIL OGLI",
+            "penalty": [
+                "Машина борми?",
+                "Нархни киритиб қўйиш керак"
+            ],
+            "silence": [
+                "Дилшод жигар",
+                "Йўқми машина?"
+            ],
+            "ping": [
+                "Дилшод жигар"
+            ]
+        },
+        {
+            "person_id": 20,
+            "name": "PULATOV AFZAL AHMADJON O'G'LI",
+            "penalty": [
+                "Пулатов, нарх?"
+            ],
+            "silence": [
+                "Пулатов",
+                "Нега жим ўтирасиз?",
+                "Иш кўпми?"
+            ],
+            "thanks": [
+                "Маладес"
+            ],
+            "ping": [
+                "Пулатов"
+            ]
+        },
+        {
+            "person_id": 6,
+            "name": "OQBUTAYEV FERUZ NASIRIDDINOVICH",
+            "penalty": [
+                "Кеч бўлдику"
+            ],
+            "silence": [
+                "Феруз, нега жимсан?"
+            ],
+            "ping": [
+                "Феруз?"
+            ]
+        },
+        {
+            "person_id": 4,
+            "name": "TO'LAGANOV OYBEK SHOKIRJON O'G'LI",
+            "penalty": [
+                "Қидиринг!"
+            ],
+            "thanks": [
+                "Яшанг"
+            ]
+        },
+        {
+            "person_id": 33,
+            "name": "ISAKOV FARRUX FAXRIDIN O’G'LI",
+            "penalty": [
+                "Фаррух, нарх чўзмасдан",
+                "Кун ўтибди"
+            ],
+            "silence": [
+                "Фаррух"
+            ],
+            "ping": [
+                "Фаррух"
+            ]
+        },
+        {
+            "person_id": 3,
+            "name": "BERDIBEKOV JAMSHID PERDEBOY O'G'LI",
+            "penalty": [
+                "Поменяй статус и вноси цену",
+                "Два дня очень много",
+                "Тогда дай то, что есть"
+            ],
+            "silence": [
+                "Жамшид?"
+            ],
+            "thanks": [
+                "Молодец!"
+            ],
+            "ping": [
+                "Жамшид?"
+            ]
+        },
+        {
+            "person_id": 9,
+            "name": "MUSAYEV ISMOIL DILSHOD O'G'LI",
+            "penalty": [
+                "Нарх берасанми?"
+            ],
+            "silence": [
+                "Исмоил?"
+            ],
+            "ping": [
+                "Исмоил?"
+            ]
+        },
+        {
+            "person_id": 50,
+            "name": "ABDUKARIM TOSHMUQUMOV",
+            "silence": [
+                "Абдукарим",
+                "Қара бу ёққа"
+            ],
+            "ping": [
+                "Абдукарим"
+            ]
+        },
+        {
+            "person_id": 44,
+            "name": "SHADIYEVA RUSHANA SHAVKATOVNA",
+            "penalty": [
+                "Рушана апа, илтимос",
+                "Поменяйте статус или же укажите причину, пожалуйста",
+                "Обновили?"
+            ],
+            "silence": [
+                "Рушана апа",
+                "Рушана апа, илтимос"
+            ],
+            "thanks": [
+                "Вы самая лучшая, Рушана апа!"
+            ],
+            "ping": [
+                "Рушана апа"
+            ]
+        },
+        {
+            "person_id": 46,
+            "name": "KIM ELENA GEORGIEVNA",
+            "penalty": [
+                "Обновили?"
+            ],
+            "silence": [
+                "Да ответьте, пожалуйста"
+            ]
+        },
+        {
+            "person_id": 61,
+            "name": "ASHUROVA SHAXLO ABDURAXMONOVNA",
+            "penalty": [
+                "Обновили?",
+                "Ассаламу алайкум! Я просто напоминаю вам."
+            ],
+            "thanks": [
+                "Яшанг!",
+                "Зўр!"
+            ]
+        },
+        {
+            "person_id": 45,
+            "name": "SOLIYEVA SEVARA SANATJON QIZI",
+            "penalty": [
+                "Не забудьте",
+                "Обновили?"
+            ],
+            "silence": [
+                "Севара апа?"
+            ],
+            "thanks": [
+                "Сэнк ю! Вы самая лучшая!"
+            ],
+            "ping": [
+                "Севара апа?"
+            ]
+        },
+        {
+            "person_id": 41,
+            "name": "XAYDAROVA DILOBAR OKTAMOVNA",
+            "penalty": [
+                "Статусни ўзгартириб қўйинг",
+                "Ўзгартирдингизми?"
+            ]
+        },
+        {
+            "person_id": 58,
+            "name": "MAMADALIYEVA XOSIYAT KENJAYEVNA",
+            "penalty": [
+                "Бабуля!",
+                "Бабуля, уже {time_in_status} прошло"
+            ],
+            "silence": [
+                "Бабуля"
+            ],
+            "thanks": [
+                "Супер!"
+            ],
+            "ping": [
+                "Бабуля",
+                "Бабуля!"
+            ]
+        },
+        {
+            "person_id": 56,
+            "name": "O'KTAMOVA SEVINCH UYG'UNOVNA",
+            "penalty": [
+                "Обновили?"
+            ],
+            "thanks": [
+                "Зўр!"
+            ]
+        },
+        {
+            "person_id": 52,
+            "name": "ABDUSAMATOVA DILNOZA MAVLANOVNA",
+            "penalty": [
+                "Вежливое напоминание",
+                "Вежливое напоминание!"
+            ]
+        },
+        {
+            "person_id": 55,
+            "name": "DANIYAROVA SABINA YUNUSOVNA",
+            "penalty": [
+                "Поменяли?"
+            ],
+            "silence": [
+                "Сабина, вы в офисе?"
+            ],
+            "ping": [
+                "Сабина?"
+            ]
+        },
+        {
+            "person_id": 47,
+            "name": "ISAYEVA DIYORA XAMID QIZI",
+            "silence": [
+                "Диёрахон?"
+            ],
+            "ping": [
+                "Диёрахон?",
+                "Исаева"
+            ]
+        },
+        {
+            "person_id": 65,
+            "name": "RAJABOVA UMIDA AKROM QIZI",
+            "silence": [
+                "Уми",
+                "Умида, я жду ответа!"
+            ],
+            "ping": [
+                "Уми",
+                "Умида?"
+            ]
+        },
+        {
+            "person_id": 51,
+            "name": "ADILOVA ODILA MAQSUD QIZI",
+            "thanks": [
+                "Зўр",
+                "Маладес"
+            ]
+        },
+        {
+            "person_id": 63,
+            "name": "RAJABOVA MAKHBUBA ERMAMAT KIZI",
+            "thanks": [
+                "Яшанг"
+            ]
+        },
+        {
+            "person_id": 53,
+            "name": "ORTIQOVA BARNOKHON ALISHER QIZI",
+            "thanks": [
+                "Отлично"
+            ]
+        }
+    ]
+}

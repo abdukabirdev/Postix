@@ -595,6 +595,7 @@ return [
             'reply' => 'Auto reply',
             'silence' => 'Nudge',
             'opening' => 'Greeting before a penalty',
+            'ping' => 'Call by name',
         ],
         'situations' => [
             'penalty' => ':name (from the :from.)',
@@ -603,6 +604,7 @@ return [
             'reply' => 'Kind :n',
             'silence' => 'After ignored penalties',
             'opening' => 'Before the day\'s first penalty',
+            'ping' => 'Silent after a penalty: the name alone ("Зуба", "Рушана апа")',
             'gone' => 'This situation is gone',
             'gone_hint' => 'The kind, greeting or level was removed in the settings: these answers are not sent. Remove them or keep them for its return.',
         ],

@@ -148,6 +148,23 @@ return [
     ],
 
     /*
+     * The call by name (PingSilentByName): a penalty nobody answered for
+     * `after_minutes` gets the person's name alone - "Зуба", "Рушана апа" -
+     * from their card ("Личные ответы" -> "Оклик по имени", else how the
+     * card says to call them; with neither, nothing goes). The owner does it
+     * by hand: 45% answered within 10 minutes, 79% within the hour, against
+     * 15% for the nudges (2026-11-13). So it stays rare: once per penalty, at
+     * most `max_per_day` a day per person, `gap_minutes` apart, in the
+     * penalties' working hours, never right after a nudge.
+     */
+    'name_ping' => [
+        'enabled' => (bool) env('CLIENT_CHECKS_NAME_PING', true),
+        'after_minutes' => 20,
+        'max_per_day' => 2,
+        'gap_minutes' => 120,
+    ],
+
+    /*
      * Who counts as someone who never answers (SilentPeople, telegram:silent-people,
      * the report /api/telegram/report/silent-people): this many penalties
      * forwarded in this many days, and not a word or a reaction back.
@@ -165,6 +182,17 @@ return [
     'retired' => [
         'Нима килай, бошкага олайми?',
         'Булмаса айт, бошкага утказаман',
+    ],
+
+    /*
+     * The same, by what the text says rather than letter for letter (it may
+     * have been copied with other quotes or a name after it): 2026-11-13 the
+     * owner wants no "at least write +" ("Хотя бы «+» напишите", "Хеч
+     * булмаса + ёзиб куйинг") anywhere - a "+" in a text we send is only
+     * that. Regular expressions.
+     */
+    'retired_matching' => [
+        '/\+/u',
     ],
 
     /*
@@ -504,12 +532,9 @@ return [
                                 '{address}, ёпасанми ёки бошкага?',
                                 'Бошкага берсам буладими?',
                                 'Булди, бошкага берайми?',
-                                'Хеч булмаса «+» ёзиб куй, {address}',
-                                'Жавоб ёз, хеч булмаса +',
                             ],
                             'respectful' => [
                                 'Нима киласиз, ёпа оласизми ёки бошкага берамизми?',
-                                'Хеч булмаса «+» ёзиб куйинг, илтимос',
                                 'Бошкага берайликми?',
                                 'Ёпасизми ёки бошка хамкасбга берайликми?',
                                 'Уддалай олмасангиз, бошкага берайликми?',
@@ -553,12 +578,9 @@ return [
                                 '{address}, закроешь или другому?',
                                 'Можно отдам другому?',
                                 'Всё, отдаю другому?',
-                                'Хотя бы «+» напиши',
-                                'Напиши хотя бы +, {address}',
                             ],
                             'respectful' => [
                                 'Как поступим, передать запрос другому?',
-                                'Напишите хотя бы «+», пожалуйста',
                                 'Передадим другому?',
                                 'Закроете или передадим коллеге?',
                                 'Если не получается, давайте передадим другому?',
