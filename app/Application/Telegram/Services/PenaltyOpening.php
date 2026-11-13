@@ -95,6 +95,17 @@ final class PenaltyOpening
         }
 
         /*
+         * They wrote to us today: the conversation is on, and their own
+         * "Ассалому алейкум" is answered by the auto reply. 2026-11-13: an
+         * operator greeted at 14:39:25, the penalty came while the answer
+         * waited its pause, and our "Ассалому алайкум" went at 14:40:06 as
+         * if she had not been heard.
+         */
+        if ($person->last_private_message_at !== null && $person->last_private_message_at->greaterThanOrEqualTo(now()->startOfDay())) {
+            return;
+        }
+
+        /*
          * The bot posts a person's penalties in bursts: one greets, the
          * others wait for it rather than overtake it.
          */
@@ -119,7 +130,7 @@ final class PenaltyOpening
             $tone = $person->respectful ? ClientCheckRules::TONE_RESPECTFUL : ClientCheckRules::TONE_PLAIN;
 
             $choices = $this->personal->merge(
-                self::friday($rules->choices('opening', $person->messageLanguage(), $tone), $person->messageLanguage(), $tone),
+                self::friday($rules->choices('opening', $person->messageLanguage(), $tone), $person->messageLanguage(), $tone, self::wishesFriday($person)),
                 $person,
                 PersonalAnswers::OPENING,
             );
@@ -179,9 +190,9 @@ final class PenaltyOpening
      * @param array{language: string, items: list<array<string, mixed>>} $choices
      * @return array{language: string, items: list<array<string, mixed>>}
      */
-    public static function friday(array $choices, string $language, string $tone): array
+    public static function friday(array $choices, string $language, string $tone, bool $wishes = true): array
     {
-        if (! now()->isFriday()) {
+        if (! $wishes || ! now()->isFriday()) {
             return $choices;
         }
 
@@ -203,6 +214,25 @@ final class PenaltyOpening
         }
 
         return $choices;
+    }
+
+    /**
+     * "Жума муборак" from us goes to the operators who are men only
+     * (2026-11-13, the owner: almost all operators are men, sales are
+     * women). There is no gender on the card: an Uzbek or Russian full name
+     * tells it - "QIZI", "-OVNA/-EVNA", a surname in "-OVA/-EVA", a name
+     * in "-IA/-IYA" (Natalia, Yuliya).
+     */
+    public static function wishesFriday(OperationUser $person): bool
+    {
+        if ($person->roleOrDefault() !== OperationUser::ROLE_OPERATION) {
+            return false;
+        }
+
+        return preg_match(
+            '/\b(qizi|qiz|kizi|кизи|қизи)\b|(ovna|evna|овна|евна|ova|eva|ова|ева|ia|iya|ija|ия)\b/iu',
+            str_replace(['\'', '‘', '’', 'ʻ', 'ʼ', '`'], '', (string) $person->name),
+        ) !== 1;
     }
 
     /**

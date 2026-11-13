@@ -1484,6 +1484,26 @@ class ClientCheckTest extends TestCase
         $this->assertSame(['forward'], $this->messages->kinds());
     }
 
+    /**
+     * 2026-11-13: she greeted at 14:39:25, the penalty came while the
+     * answer waited its pause, and our "Ассалому алайкум" went first.
+     */
+    public function test_someone_who_wrote_today_is_not_greeted_before_the_penalty(): void
+    {
+        $this->openingOn();
+        $person = $this->person(attributes: ['address' => ['uz' => 'Afzal aka']]);
+        $person->update(['last_private_message_at' => now()->subSeconds(40)]);
+
+        $this->penalty(repeat: 1);
+        $this->assertSame(['forward'], $this->messages->kinds());
+
+        /* Written yesterday: today's first penalty is greeted. */
+        $this->messages->calls = [];
+        Carbon::setTestNow(now()->addDay());
+        $this->penalty(repeat: 1, request: 'TLS00011');
+        $this->assertSame(['send', 'forward'], $this->messages->kinds());
+    }
+
     public function test_without_the_opening_the_penalty_goes_alone(): void
     {
         $this->person();
@@ -2232,6 +2252,19 @@ class ClientCheckTest extends TestCase
         $ru = \App\Application\Telegram\Services\PenaltyOpening::friday($usual, 'ru', 'plain');
         $this->assertSame('ru', $ru['language']);
         $this->assertContains('Здравствуйте! Жума муборак!', array_column($ru['items'], 'text'));
+
+        /* Only the operators who are men (2026-11-13): not the sales, not a woman operator. */
+        $this->assertSame($usual, \App\Application\Telegram\Services\PenaltyOpening::friday($usual, 'uz', 'plain', false));
+
+        $who = fn (string $name, string $role = 'operation'): bool => \App\Application\Telegram\Services\PenaltyOpening::wishesFriday(new OperationUser(['name' => $name, 'role' => $role]));
+        $this->assertTrue($who("HUSANOV ZUBAYR BOBIR O'G'LI"));
+        $this->assertTrue($who('FAYZIYEV ASLIDDIN MUHIDDINOVICH'));
+        $this->assertTrue($who('UMAROV MUHIDDIN'));
+        $this->assertFalse($who('SHARIFJONOVA HILOLA BAHODIR QIZI'));
+        $this->assertFalse($who('KARSHIBAYEVA AZIZA ABDULLAYEVNA'));
+        $this->assertFalse($who('JULIJA ROMANOVA'));
+        $this->assertFalse($who('KIRTORUN NATALIA'));
+        $this->assertFalse($who("ABDUMALIKOV AZAMAT ABDULAZIZ O'G'LI", 'sales'));
 
         /* None written: the usual opening. */
         config()->set('auto_replies.friday_opening', []);
