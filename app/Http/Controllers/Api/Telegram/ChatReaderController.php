@@ -106,9 +106,10 @@ final class ChatReaderController extends Controller
         $penalties = TelegramClientCheck::query()
             ->whereIn('operation_user_id', $people->pluck('id'))
             ->where('created_at', '>=', now()->subDays(30))
-            ->selectRaw('operation_user_id, COUNT(*) as total')
+            ->selectRaw('operation_user_id, COUNT(*) as total, SUM(CASE WHEN replied_at IS NULL THEN 0 ELSE 1 END) as replied')
             ->groupBy('operation_user_id')
-            ->pluck('total', 'operation_user_id');
+            ->get()
+            ->keyBy('operation_user_id');
 
         return $this->json([
             'people' => $people->map(fn (OperationUser $person): array => [
@@ -121,7 +122,9 @@ final class ChatReaderController extends Controller
                 'reachable' => $person->hasTelegramPeer(),
                 'dm_enabled' => (bool) $person->dm_enabled,
                 'account_id' => $this->accountFor($person),
-                'penalties_30d' => (int) ($penalties[$person->id] ?? 0),
+                'penalties_30d' => (int) ($penalties[$person->id]->total ?? 0),
+                /* A word or a reaction back, as the penalty journal keeps it: the chat's own count of incoming misses reactions. */
+                'penalty_replies_30d' => (int) ($penalties[$person->id]->replied ?? 0),
                 'last_private_message_at' => $person->last_private_message_at?->toDateTimeString(),
             ])->values()->all(),
         ]);

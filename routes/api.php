@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\Telegram\AccountsReportController;
 use App\Http\Controllers\Api\Telegram\ChatReaderController;
 use App\Http\Controllers\Api\Telegram\ContactSyncDevReportController;
 use App\Http\Controllers\Api\Telegram\GroupInviteReportController;
+use App\Http\Controllers\Api\Telegram\SilentPeopleReportController;
 use App\Http\Controllers\Api\Telegram\TelegramAccountController;
 use App\Http\Controllers\Api\Telegram\TelegramBotWebhookController;
 use App\Http\Controllers\Api\Telegram\TelegramDriverCheckController;
@@ -29,6 +30,11 @@ Route::get('/telegram/report/group-invites', GroupInviteReportController::class)
 Route::get('/telegram/report/accounts', AccountsReportController::class)
     ->middleware('throttle:30,1')
     ->name('telegram.report.accounts');
+
+// Who never answers the penalties (no word, no reaction), the same token.
+Route::get('/telegram/report/silent-people', SilentPeopleReportController::class)
+    ->middleware('throttle:30,1')
+    ->name('telegram.report.silent-people');
 
 // The contact sync's report for the developer, the same token.
 Route::get('/telegram/report/contact-sync', ContactSyncDevReportController::class)
