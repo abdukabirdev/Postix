@@ -11,6 +11,7 @@ use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
 use App\Application\Telegram\Actions\ProcessCreatedDriverMessage;
 use App\Application\Telegram\Actions\ProcessRequestCancellation;
+use App\Application\Telegram\Actions\ProcessUntrackedOrders;
 use App\Application\Telegram\Actions\ProcessTelegramDriverCheckResults;
 use App\Application\Telegram\Actions\ProcessUpdatedDriverMessage;
 use App\Application\Telegram\Actions\RouteTelegramFile;
@@ -21,6 +22,7 @@ use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
 use App\Application\Telegram\Services\MessageReactions;
 use App\Application\Telegram\Services\RequestCancellationAsker;
+use App\Application\Telegram\Services\UntrackedOrdersReminder;
 use App\Application\Telegram\Services\ScheduledMessageSender;
 use App\Application\Telegram\Services\TelegramDriverCheckChats;
 use App\Application\Telegram\Services\TelegramDriverCheckRecorder;
@@ -317,6 +319,18 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
                 return;
             }
 
+            /*
+             * "📍 Не назначенные слежения": every operator of the list is
+             * hurried. Read by whoever reads the penalties.
+             */
+            if ($type === TelegramDriverMessageType::UNTRACKED_ORDERS) {
+                if (app(DutyOwners::class)->ownedBy(TelegramListener::DUTY_PENALTY_INTAKE, null)) {
+                    app(ProcessUntrackedOrders::class)->execute((int) $chatId, $messageId, $text);
+                }
+
+                return;
+            }
+
             $check = app(
                 TelegramDriverCheckRecorder::class,
             )->record(
@@ -543,6 +557,19 @@ final class TelegramDriverCheckHandler extends SimpleEventHandler
         } catch (Throwable $e) {
             Log::error(
                 'TelegramDriverCheckHandler: cancellation question failed',
+                [
+                    'error' => $e->getMessage(),
+                    'exception' => $e::class,
+                ],
+            );
+        }
+
+        /* The orders with no tracking: their operators are hurried. */
+        try {
+            app(UntrackedOrdersReminder::class)->flush($this);
+        } catch (Throwable $e) {
+            Log::error(
+                'TelegramDriverCheckHandler: untracked orders reminder failed',
                 [
                     'error' => $e->getMessage(),
                     'exception' => $e::class,

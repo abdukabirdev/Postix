@@ -6,9 +6,13 @@ use App\Application\Telegram\Actions\NudgeSilentClientChecks;
 use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
 use App\Application\Telegram\Actions\ProcessRequestCancellation;
+use App\Application\Telegram\Actions\ProcessUntrackedOrders;
 use App\Application\Telegram\Services\RequestCancellationAsker;
 use App\Application\Telegram\Services\RequestCancellationParser;
+use App\Application\Telegram\Services\UntrackedOrdersParser;
+use App\Application\Telegram\Services\UntrackedOrdersReminder;
 use App\Models\Telegram\TelegramRequestCancellation;
+use App\Models\Telegram\TelegramUntrackedReminder;
 use App\Application\Telegram\Services\AutoReplyMatcher;
 use App\Application\Telegram\Services\AutoReplyRules;
 use App\Application\Telegram\Services\AutoReplyStore;
@@ -319,6 +323,7 @@ class ClientCheckTest extends TestCase
     private function createTables(): void
     {
         Schema::dropIfExists('telegram_settings');
+        Schema::dropIfExists('telegram_untracked_reminders');
         Schema::dropIfExists('telegram_request_cancellations');
         Schema::dropIfExists('telegram_client_checks');
         Schema::dropIfExists('operation_users');
@@ -412,6 +417,7 @@ class ClientCheckTest extends TestCase
         });
 
         (require base_path('database/migrations/2026_11_11_100100_create_telegram_request_cancellations_table.php'))->up();
+        (require base_path('database/migrations/2026_11_14_100000_create_telegram_untracked_reminders_table.php'))->up();
     }
 
     private function person(string $name = "PULATOV AFZAL AHMADJON O'G'LI", array $attributes = []): OperationUser
@@ -3629,5 +3635,226 @@ class ClientCheckTest extends TestCase
         $this->assertSame(TelegramRequestCancellation::STATUS_FAILED, $row->status);
         $this->assertSame(3, $row->attempts);
         $this->assertStringContainsString('FLOOD_WAIT', (string) $row->error);
+    }
+
+    /*
+     * ------------------------------------------------------------------
+     * Orders with no tracking: their operators are hurried
+     * ------------------------------------------------------------------
+     */
+
+    private const UNTRACKED = <<<'TXT'
+        📍 Не назначенные слежения — 02.10.2026 12:00
+        Заказов без слежения за сегодня: 14
+
+        По компаниям:
+        • EGS GROUP: 9
+        • TRANSCEKA: 5
+
+        По оперейшнам:
+        • ABDUKARIM TOSHMUQUMOV: 10
+        • PULATOV AFZAL AHMADJON O`G`LI : 3
+        • NASRIDDINOV USMON  DONIYOR O`GLI: 1
+
+        Открыть слежение (https://crm.zanjeer.uz/orders/trackings?status=-10)
+        TXT;
+
+    /** The report of $time ("02.10.2026 12:00" in the header), with PULATOV's count. */
+    private function untracked(string $time = '12:00', int $count = 3): array
+    {
+        config()->set('client_checks.untracked.levels', [
+            ['uz' => ['plain' => ['L1 {count} та', 'L1b {count}'], 'respectful' => ['L1R {count}']], 'ru' => ['plain' => ['R1 {orders}']]],
+            ['uz' => ['plain' => ['L2 {count}']]],
+            ['uz' => ['plain' => ['L3 {count}']]],
+        ]);
+
+        return app(ProcessUntrackedOrders::class)->execute(
+            self::BOT_CHAT_ID,
+            ++$this->messageId,
+            str_replace(['02.10.2026', '12:00', ': 3'], [now()->format('d.m.Y'), $time, ': ' . $count], self::UNTRACKED),
+        );
+    }
+
+    private function remindUntracked(): void
+    {
+        app(UntrackedOrdersReminder::class)->flush($this->telegram);
+    }
+
+    public function test_the_untracked_orders_report_is_detected_and_read(): void
+    {
+        $this->assertSame(TelegramDriverMessageType::UNTRACKED_ORDERS, app(TelegramMessageTypeDetector::class)->detect(self::UNTRACKED));
+
+        $parsed = app(UntrackedOrdersParser::class)->parse(self::UNTRACKED);
+
+        $this->assertSame('02.10.2026 12:00', $parsed['reported_at']);
+        $this->assertSame(14, $parsed['total']);
+        $this->assertSame(['EGS GROUP' => 9, 'TRANSCEKA' => 5], $parsed['companies']);
+        $this->assertSame([
+            ['name' => 'ABDUKARIM TOSHMUQUMOV', 'count' => 10],
+            ['name' => 'PULATOV AFZAL AHMADJON O`G`LI', 'count' => 3],
+            ['name' => 'NASRIDDINOV USMON DONIYOR O`GLI', 'count' => 1],
+        ], $parsed['operations']);
+        $this->assertSame('https://crm.zanjeer.uz/orders/trackings?status=-10', $parsed['url']);
+    }
+
+    public function test_a_known_operator_is_hurried_and_the_unknown_are_skipped(): void
+    {
+        $this->person();
+
+        $rows = $this->untracked();
+
+        $this->assertCount(3, $rows);
+        $this->assertSame(
+            [TelegramUntrackedReminder::REASON_NO_OPERATOR, null, TelegramUntrackedReminder::REASON_NO_OPERATOR],
+            array_map(static fn (TelegramUntrackedReminder $row): ?string => $row->reason, $rows),
+        );
+
+        $this->remindUntracked();
+
+        $sent = $this->messages->sent();
+        $this->assertCount(1, $sent);
+        $this->assertSame('@afzal', $sent[0]['peer']);
+        $this->assertMatchesRegularExpression('/^L1b? 3/u', $sent[0]['message']);
+
+        $row = TelegramUntrackedReminder::query()->where('status', TelegramUntrackedReminder::STATUS_SENT)->first();
+        $this->assertSame(1, $row->level);
+        $this->assertNotNull($row->sent_at);
+
+        /* Sent once. */
+        $this->remindUntracked();
+        $this->assertCount(1, $this->messages->sent());
+    }
+
+    public function test_every_report_of_the_day_is_one_level_harder_and_the_same_report_counts_once(): void
+    {
+        $this->person();
+
+        $this->untracked('12:00');
+        $this->remindUntracked();
+
+        /* The same message read again (a restart): nothing new. */
+        $this->assertSame([], app(ProcessUntrackedOrders::class)->execute(self::BOT_CHAT_ID, $this->messageId, self::UNTRACKED));
+
+        $this->at('14:00:00');
+        $this->untracked('14:00', 2);
+        $this->remindUntracked();
+
+        $this->at('16:00:00');
+        $this->untracked('16:00', 2);
+        $this->remindUntracked();
+
+        $this->at('17:00:00');
+        $this->untracked('17:00', 1);
+        $this->remindUntracked();
+
+        $this->assertSame(['L2 2', 'L3 2', 'L3 1'], array_slice(array_column($this->messages->sent(), 'message'), 1));
+
+        /* The next day starts over. */
+        Carbon::setTestNow('2026-10-03 12:00:00');
+        $this->untracked('12:00', 4);
+        $this->remindUntracked();
+
+        $this->assertMatchesRegularExpression('/^L1b? 4/u', array_column($this->messages->sent(), 'message')[4]);
+    }
+
+    public function test_the_tone_and_language_of_the_person_and_never_the_same_text_twice(): void
+    {
+        $this->person(attributes: ['respectful' => true]);
+        $this->untracked();
+        $this->remindUntracked();
+
+        $this->assertSame('L1R 3', $this->messages->sent()[0]['message']);
+
+        OperationUser::query()->update(['respectful' => false, 'language' => 'ru']);
+        TelegramUntrackedReminder::query()->delete();
+        $this->untracked('12:30', 5);
+        $this->remindUntracked();
+
+        $this->assertSame('R1 5 заказов', $this->messages->sent()[1]['message']);
+        $this->assertSame('1 заказ', UntrackedOrdersReminder::ordersRu(1));
+        $this->assertSame('22 заказа', UntrackedOrdersReminder::ordersRu(22));
+        $this->assertSame('12 заказов', UntrackedOrdersReminder::ordersRu(12));
+
+        /* Two plain Uzbek texts at the first level: never the one sent last. */
+        OperationUser::query()->update(['language' => 'uz']);
+        $last = null;
+
+        foreach (['13:00', '13:10', '13:20', '13:30'] as $time) {
+            TelegramUntrackedReminder::query()->where('status', '!=', TelegramUntrackedReminder::STATUS_SENT)->delete();
+            TelegramUntrackedReminder::query()->update(['created_at' => now()->subDay()]);
+            $this->untracked($time);
+            $this->remindUntracked();
+
+            $text = (string) end($this->messages->calls)[1]['message'];
+            $this->assertNotSame($last, $text);
+            $last = $text;
+        }
+    }
+
+    public function test_a_newer_report_replaces_one_not_sent_and_outside_the_hours_nothing_goes(): void
+    {
+        $this->person();
+
+        $this->at('08:00:00');
+        $this->untracked('08:00', 5);
+        $this->remindUntracked();
+        $this->assertSame([], $this->messages->sent());
+
+        $this->at('09:00:00');
+        $this->untracked('09:00', 4);
+
+        $this->assertSame(
+            TelegramUntrackedReminder::REASON_SUPERSEDED,
+            TelegramUntrackedReminder::query()->where('orders_count', 5)->value('reason'),
+        );
+
+        $this->remindUntracked();
+
+        $this->assertSame(['L2 4'], array_column($this->messages->sent(), 'message'));
+
+        /* What waited too long is given up. */
+        $this->at('18:00:00');
+        $this->untracked('18:00', 2);
+        $this->at('18:40:00');
+        $this->remindUntracked();
+        Carbon::setTestNow('2026-10-03 09:00:00');
+        $this->remindUntracked();
+
+        $this->assertCount(1, $this->messages->sent());
+        $this->assertSame(
+            TelegramUntrackedReminder::REASON_STALE,
+            TelegramUntrackedReminder::query()->where('orders_count', 2)->value('reason'),
+        );
+    }
+
+    /** The owner tests by posting copies into a group: every message is a report, the same text too. */
+    public function test_every_copy_of_the_report_is_a_report_of_its_own(): void
+    {
+        $this->person();
+
+        foreach ([1, 2, 3] as $ignored) {
+            $this->untracked();
+            $this->remindUntracked();
+        }
+
+        $this->assertSame(['L2 3', 'L3 3'], array_slice(array_column($this->messages->sent(), 'message'), 1));
+    }
+
+    public function test_switched_off_penalties_or_person_send_no_reminder(): void
+    {
+        $this->person(attributes: ['penalties_enabled' => false]);
+        $this->untracked();
+        $this->remindUntracked();
+
+        $this->assertSame([], $this->messages->sent());
+        $this->assertSame(TelegramUntrackedReminder::REASON_PERSON_OFF, TelegramUntrackedReminder::query()->whereNotNull('operation_user_id')->value('reason'));
+
+        OperationUser::query()->update(['penalties_enabled' => true]);
+        config()->set('client_checks.untracked.enabled', false);
+        $this->untracked('13:00');
+        $this->remindUntracked();
+
+        $this->assertSame([], $this->messages->sent());
+        $this->assertSame(TelegramUntrackedReminder::REASON_DISABLED, TelegramUntrackedReminder::query()->whereNotNull('operation_user_id')->latest('id')->value('reason'));
     }
 }

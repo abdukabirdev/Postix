@@ -73,6 +73,11 @@ final class TelegramMessageTypeDetector
             return TelegramDriverMessageType::REQUEST_CANCELLED;
         }
 
+        /* "📍 Не назначенные слежения — 13.11.2026 16:00" */
+        if (UntrackedOrdersParser::matches($text)) {
+            return TelegramDriverMessageType::UNTRACKED_ORDERS;
+        }
+
         return TelegramDriverMessageType::UNKNOWN;
     }
 }

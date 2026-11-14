@@ -24,5 +24,12 @@ enum TelegramDriverMessageType: string
      */
     case REQUEST_CANCELLED = 'request_cancelled';
 
+    /**
+     * "📍 Не назначенные слежения — 13.11.2026 16:00": every operator of
+     * the list is hurried to give their orders a tracking
+     * (ProcessUntrackedOrders).
+     */
+    case UNTRACKED_ORDERS = 'untracked_orders';
+
     case UNKNOWN = 'unknown';
 }

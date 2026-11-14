@@ -9,6 +9,7 @@ use App\Application\Telegram\Actions\PingSilentByName;
 use App\Application\Telegram\Actions\ProcessAutoReply;
 use App\Application\Telegram\Actions\ProcessClientCheckMessage;
 use App\Application\Telegram\Actions\ProcessRequestCancellation;
+use App\Application\Telegram\Actions\ProcessUntrackedOrders;
 use App\Application\Telegram\Actions\RouteTelegramFile;
 use App\Application\Telegram\Services\AutoReplyTelegramGifs;
 use App\Application\Telegram\Services\ChatReader;
@@ -16,6 +17,7 @@ use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
 use App\Application\Telegram\Services\MessageReactions;
 use App\Application\Telegram\Services\RequestCancellationAsker;
+use App\Application\Telegram\Services\UntrackedOrdersReminder;
 use App\Application\Telegram\Services\ScheduledMessageSender;
 use App\Application\Telegram\Services\TelegramDriverCheckChats;
 use App\Application\Telegram\Services\TelegramMessageTypeDetector;
@@ -271,7 +273,8 @@ final class TelegramListenerHandler extends SimpleEventHandler
                 return;
             }
 
-            if ($chatId < 0 && $owners->ownedBy(TelegramListener::DUTY_PENALTY_INTAKE, self::$key) && $this->takePenaltyIn($message, $chatId)) {
+            /* A watched place may be a private chat too: the CRM bot writes the tracking report to the account. */
+            if ($owners->ownedBy(TelegramListener::DUTY_PENALTY_INTAKE, self::$key) && $this->takePenaltyIn($message, $chatId)) {
                 return;
             }
 
@@ -313,6 +316,13 @@ final class TelegramListenerHandler extends SimpleEventHandler
         /* "❌ Запрос отменён": the one who got its last penalty is asked why. */
         if ($type === TelegramDriverMessageType::REQUEST_CANCELLED) {
             app(ProcessRequestCancellation::class)->execute($chatId, (int) ($message->id ?? 0), $text);
+
+            return true;
+        }
+
+        /* "📍 Не назначенные слежения": every operator of the list is hurried. */
+        if ($type === TelegramDriverMessageType::UNTRACKED_ORDERS) {
+            app(ProcessUntrackedOrders::class)->execute($chatId, (int) ($message->id ?? 0), $text);
 
             return true;
         }
@@ -404,6 +414,17 @@ final class TelegramListenerHandler extends SimpleEventHandler
             app(RequestCancellationAsker::class)->flush($this, self::$key);
         } catch (Throwable $e) {
             Log::error('TelegramListenerHandler: cancellation question failed', [
+                'key' => self::$key,
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+
+        /* The orders with no tracking: their operators are hurried. */
+        try {
+            app(UntrackedOrdersReminder::class)->flush($this, self::$key);
+        } catch (Throwable $e) {
+            Log::error('TelegramListenerHandler: untracked orders reminder failed', [
                 'key' => self::$key,
                 'error' => $e->getMessage(),
                 'exception' => $e::class,

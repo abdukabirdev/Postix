@@ -148,6 +148,142 @@ return [
     ],
 
     /*
+     * "📍 Не назначенные слежения — 13.11.2026 16:00" from the bot (12, 14,
+     * 16, 18 o'clock): every operator of its "По оперейшнам" list is hurried
+     * in their private chat (UntrackedOrdersReminder), from the account
+     * that delivers their penalties. The owner, 2026-11-14: "их надо
+     * поторопить и упрекнуть - слежения бер, 5 та заказни слеженияси йук".
+     *
+     * Taken from every place of "Отслеживаемые чаты": the bot writes it to
+     * the account in a private chat (@zanjeer_notifications_bot - that is
+     * production, add it there), a group is where the owner tests by hand.
+     * Every message is a report of its own.
+     *
+     * Level = the n-th report of the day that names the person: the 1st
+     * hurries, the 2nd reproaches ("still"), the 3rd and every later one
+     * reproaches harder. Only `min_count` orders or more; within `hours`
+     * (the 18:00 report still goes); what has not gone in `wait_minutes`
+     * is given up. A newer report replaces one not sent yet. Off with the
+     * penalties (panel) or the person's "penalties" switch.
+     *
+     * Placeholders: {count} - the number, {orders} - "5 заказов" in Russian,
+     * "5 та заказ" in Uzbek, {address}, {name} as in `roles` below. Per
+     * level, language and tone (respectful for people older than the one
+     * writing); one is picked at random, never the one the person got last.
+     */
+    'untracked' => [
+        'enabled' => (bool) env('CLIENT_CHECKS_UNTRACKED', true),
+        'min_count' => 1,
+        'hours' => [
+            'from' => '09:00',
+            'to' => '18:30',
+        ],
+        'wait_minutes' => 90,
+        'max_attempts' => 3,
+        'levels' => [
+            [
+                'uz' => [
+                    'plain' => [
+                        'Слежения бер, {count} та заказ слежениясиз турибди',
+                        '{count} та заказни слеженияси йук, тезрок бер',
+                        '{address}, {count} та заказга слежения берилмаган, тезрок куй',
+                        '{count} та заказга слежения керак, бериб юбор',
+                        'Слежениялар йук, {count} та заказ, тезрок назначить кил',
+                        'Заказларга слежения бер, {count} таси слежениясиз',
+                        '{count} та заказ слежениясиз турибди, караб юбор',
+                        'Слежения назначить килиб юбор, {count} та заказ колди',
+                        '{address}, слежения бер, {count} та заказ кутяпти',
+                        'Тезрок слежения бер, {count} та заказда йук',
+                    ],
+                    'respectful' => [
+                        'Слежения бериб юборинг илтимос, {count} та заказ слежениясиз турибди',
+                        '{count} та заказни слеженияси йук, тезрок бериб юборинг',
+                        '{address}, {count} та заказга слежения берилмаган, караб юборинг',
+                        'Илтимос, {count} та заказга слежения назначить килиб юборинг',
+                        '{count} та заказга слежения керак эди, илтимос',
+                        'Слежениялар йук, {count} та заказ, тезрок куйиб юборинг',
+                    ],
+                ],
+                'ru' => [
+                    'plain' => [
+                        'Назначь слежение, {orders} без слежения',
+                        '{address}, у тебя {orders} без слежения, давай быстрее',
+                        'Слежение не назначено: {orders}, поставь побыстрее',
+                        '{orders} висят без слежения, назначь',
+                    ],
+                    'respectful' => [
+                        'Назначьте, пожалуйста, слежение: {orders} без слежения',
+                        '{address}, у вас {orders} без слежения, поставьте побыстрее',
+                        'Слежение не назначено: {orders}, назначьте, пожалуйста',
+                    ],
+                ],
+            ],
+            [
+                'uz' => [
+                    'plain' => [
+                        'Хали хам {count} та заказ слежениясиз, нега бермаяпсан?',
+                        'Слежения хали йук, {count} та заказ турибди, тезрок бер',
+                        '{address}, яна {count} та заказ слежениясиз, айтгандим-ку',
+                        'Нима гап, слежения хали берилмабди, {count} та заказ',
+                        'Слежения бер деб айтдим-ку, {count} та хали хам йук',
+                        'Хали хам слежения йук, {count} та заказ, тезлаштир',
+                        '{count} та заказ хали хам слежениясиз, нима киляпсан?',
+                        '{address}, хали хам {count} та заказни слеженияси йук',
+                    ],
+                    'respectful' => [
+                        'Хали хам {count} та заказ слежениясиз турибди, тезрок бериб юборинг',
+                        '{address}, слежения хали берилмабди, {count} та заказ, илтимос тезлаштиринг',
+                        'Слежениялар хали хам йук, {count} та заказ, караб юборинг илтимос',
+                        'Яна {count} та заказ слежениясиз, илтимос эътибор беринг',
+                        'Айтгандим, {count} та заказни слеженияси хали хам йук',
+                    ],
+                ],
+                'ru' => [
+                    'plain' => [
+                        'Всё ещё {orders} без слежения, почему не назначаешь?',
+                        'Слежение так и не назначено, {orders}, давай быстрее',
+                        '{address}, я же говорил, {orders} всё ещё без слежения',
+                    ],
+                    'respectful' => [
+                        'Всё ещё {orders} без слежения, назначьте, пожалуйста, побыстрее',
+                        '{address}, слежение так и не назначено, {orders}, ускорьтесь, пожалуйста',
+                    ],
+                ],
+            ],
+            [
+                'uz' => [
+                    'plain' => [
+                        'Кун буйи {count} та заказ слежениясиз турибди, бу нима?',
+                        'Неча марта айтиш керак, {count} та заказга слежения бер',
+                        '{address}, хали хам слежения йук, {count} та заказ. Бугун берасанми?',
+                        'Кун тугаяпти, {count} та заказ хали слежениясиз',
+                        'Слежения хали хам берилмади, {count} та заказ, бу кетишда булмайди',
+                        'Эрталабдан бери айтяпман, {count} та заказни слеженияси йук',
+                        '{address}, {count} та заказ кун буйи слежениясиз, жиддийрок бул',
+                    ],
+                    'respectful' => [
+                        'Кун буйи {count} та заказ слежениясиз турибди, илтимос бугун тугатиб беринг',
+                        '{address}, бир неча марта айтдим, {count} та заказга слежения керак',
+                        'Хали хам {count} та заказ слежениясиз, илтимос, бугун колдирманг',
+                        'Эрталабдан бери {count} та заказни слеженияси йук, илтимос, эътибор беринг',
+                    ],
+                ],
+                'ru' => [
+                    'plain' => [
+                        'Весь день {orders} без слежения, сколько можно?',
+                        'Сколько раз говорить, {orders} без слежения, назначь',
+                        '{address}, день заканчивается, а {orders} всё ещё без слежения',
+                    ],
+                    'respectful' => [
+                        'Весь день {orders} без слежения, пожалуйста, закройте сегодня',
+                        '{address}, уже несколько раз напоминаю: {orders} без слежения',
+                    ],
+                ],
+            ],
+        ],
+    ],
+
+    /*
      * The call by name (PingSilentByName): a penalty nobody answered for
      * `after_minutes` gets the person's name alone - "Зуба", "Рушана апа" -
      * from their card ("Личные ответы" -> "Оклик по имени", else how the
