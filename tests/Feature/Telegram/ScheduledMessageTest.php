@@ -469,6 +469,9 @@ class ScheduledMessageTest extends TestCase
 
         $message = $this->make(['skip_if_file_today' => true]);
 
+        /* The morning reminder went into both groups today: a file after it is the report. */
+        $morning = $this->make(['name' => 'Morning', 'send_at' => '09:59', 'last_sent_on' => now()->toDateString()]);
+
         $report = ['_' => 'message', 'id' => 5, 'date' => now()->subHour()->getTimestamp(), 'out' => false, 'media' => ['_' => 'messageMediaDocument', 'document' => ['attributes' => [['_' => 'documentAttributeFilename', 'file_name' => 'otchet.xlsx']]]]];
 
         /* A voice message and an old file do not count; neither does our own. */
@@ -487,6 +490,7 @@ class ScheduledMessageTest extends TestCase
 
         /* Everywhere a report: nothing goes out, it is no failure, and today is over for it. */
         $this->travelTo(now()->addDay()->setTime(17, 0));
+        $morning->update(['last_sent_on' => now()->toDateString()]);
         $this->messages->sent = [];
         $report['date'] = now()->subHour()->getTimestamp();
         $this->messages->history = [self::FIRST => [$report], self::SECOND => [$report]];
@@ -504,6 +508,56 @@ class ScheduledMessageTest extends TestCase
         $this->flush();
 
         $this->assertSame([self::FIRST, self::SECOND], $this->messages->peers());
+    }
+
+    /**
+     * The owner, 2026-11-13: "after the first reminder they sent a file -
+     * the next one is not needed". A file before it, or with no reminder
+     * sent today, holds nothing back.
+     */
+    public function test_only_a_file_after_the_day_first_reminder_holds_the_next_one_back(): void
+    {
+        $this->travelTo(now()->setTime(17, 0));
+
+        $message = $this->make(['skip_if_file_today' => true]);
+        $file = fn (string $at): array => ['_' => 'message', 'id' => 5, 'date' => now()->setTimeFromTimeString($at)->getTimestamp(), 'out' => false, 'media' => ['_' => 'messageMediaDocument', 'document' => ['attributes' => [['_' => 'documentAttributeFilename', 'file_name' => 'otchet.xlsx']]]]];
+
+        /* No reminder went today: the file of 11:00 is not "after the first one". */
+        $this->messages->history = [self::FIRST => [$file('11:00')], self::SECOND => [$file('11:00')]];
+        $this->flush();
+        $this->assertSame([self::FIRST, self::SECOND], $this->messages->peers());
+
+        /* The next day the morning one went at 09:59 to the first group only: a file at 09:30 there is before it, one at 11:00 after it. */
+        $this->travelTo(now()->addDay()->setTime(17, 0));
+        $this->messages->sent = [];
+        $this->make(['name' => 'Morning', 'send_at' => '09:59', 'chat_ids' => [self::FIRST], 'last_sent_on' => now()->toDateString()]);
+
+        $this->messages->history = [self::FIRST => [$file('09:30')], self::SECOND => [$file('11:00')]];
+        $this->flush();
+        $this->assertSame([self::FIRST, self::SECOND], $this->messages->peers(), 'before the reminder, or in a group it did not go to');
+
+        $this->travelTo(now()->addDay()->setTime(17, 0));
+        $this->messages->sent = [];
+        TelegramScheduledMessage::query()->where('name', 'Morning')->update(['last_sent_on' => now()->toDateString()]);
+
+        $this->messages->history = [self::FIRST => [$file('11:00')], self::SECOND => [$file('11:00')]];
+        $this->flush();
+        $this->assertSame([self::SECOND], $this->messages->peers());
+    }
+
+    public function test_the_migration_turns_the_skip_on_for_the_noon_and_evening_reminders_only(): void
+    {
+        $morning = $this->make(['text' => 'Отчетлар эсдан чикмасин, соат 5 да сорайман']);
+        $noon = $this->make(['text' => 'Эслатиб койабман']);
+        $evening = $this->make(['text' => 'Нима болди отчетлар?']);
+        $other = $this->make(['text' => 'Бошка нарса']);
+
+        (require database_path('migrations/2026_11_13_150000_skip_report_reminders_after_a_file.php'))->up();
+
+        $this->assertFalse($morning->refresh()->skip_if_file_today);
+        $this->assertTrue($noon->refresh()->skip_if_file_today);
+        $this->assertTrue($evening->refresh()->skip_if_file_today);
+        $this->assertFalse($other->refresh()->skip_if_file_today);
     }
 
     public function test_an_unreadable_group_does_not_hold_the_reminder_back(): void

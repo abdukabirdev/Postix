@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Application\Telegram\Services;
 
 use App\Models\Telegram\TelegramScheduledMessage;
+use Carbon\CarbonInterface;
 use danog\MadelineProto\SimpleEventHandler;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -75,10 +76,10 @@ final class ScheduledMessageSender
         foreach ($targets as $chatId) {
             /*
              * The evening "where are the reports": not in a group where one
-             * was already posted today. Only on its own time - "Send now" is
-             * somebody asking for it.
+             * was posted after the day's first reminder. Only on its own
+             * time - "Send now" is somebody asking for it.
              */
-            if ($scheduled && $message->skip_if_file_today && $this->fileToday($telegram, $chatId)) {
+            if ($scheduled && $message->skip_if_file_today && ($since = $this->firstReminderToday($message, $chatId)) !== null && $this->fileToday($telegram, $chatId, $since)) {
                 $skipped++;
 
                 continue;
@@ -138,20 +139,55 @@ final class ScheduledMessageSender
     }
 
     /**
-     * Whether somebody (not us) posted a file into the group since midnight:
-     * a document that is no voice message, music, video, sticker or GIF, and
-     * whose caption carries no request's hashtag (a CMR). A group that cannot
-     * be read counts as "no", so the reminder still goes.
+     * When the day's first reminder went into this group: the earliest time
+     * of the other scheduled messages already sent there today. Null when
+     * none went yet - a file is only "the report came after the reminder"
+     * (the owner, 2026-11-13: once a file came after the first reminder, the
+     * next ones are not needed).
      */
-    public function fileToday(SimpleEventHandler $telegram, int|string $peer): bool
+    public function firstReminderToday(TelegramScheduledMessage $message, int|string $chatId): ?CarbonInterface
+    {
+        $today = now()->startOfDay();
+        $first = null;
+
+        $others = TelegramScheduledMessage::query()
+            ->whereKeyNot($message->getKey())
+            ->where('is_active', true)
+            ->whereDate('last_sent_on', $today->toDateString())
+            ->get();
+
+        foreach ($others as $other) {
+            if (! in_array((int) $chatId, $other->targets(), true)) {
+                continue;
+            }
+
+            $at = $other->runAt($today);
+
+            if ($at->lessThanOrEqualTo(now()) && ($first === null || $at->lessThan($first))) {
+                $first = $at;
+            }
+        }
+
+        return $first;
+    }
+
+    /**
+     * Whether somebody (not us) posted a file into the group since $since
+     * (midnight when not given): a document that is no voice message, music,
+     * video, sticker or GIF, and whose caption carries no request's hashtag
+     * (a CMR). A group that cannot be read counts as "no", so the reminder
+     * still goes.
+     */
+    public function fileToday(SimpleEventHandler $telegram, int|string $peer, ?CarbonInterface $since = null): bool
     {
         try {
+            /* A busy group writes ~120 messages a day: the most a page holds, to reach back to the morning. */
             $page = (array) $telegram->messages->getHistory([
                 'peer' => $peer,
                 'offset_id' => 0,
                 'offset_date' => 0,
                 'add_offset' => 0,
-                'limit' => 60,
+                'limit' => 100,
                 'max_id' => 0,
                 'min_id' => 0,
                 'hash' => 0,
@@ -162,10 +198,10 @@ final class ScheduledMessageSender
             return false;
         }
 
-        $midnight = now()->startOfDay()->getTimestamp();
+        $from = ($since ?? now()->startOfDay())->getTimestamp();
 
         foreach ((array) ($page['messages'] ?? []) as $message) {
-            if (! is_array($message) || ! empty($message['out']) || (int) ($message['date'] ?? 0) < $midnight) {
+            if (! is_array($message) || ! empty($message['out']) || (int) ($message['date'] ?? 0) < $from) {
                 continue;
             }
 
