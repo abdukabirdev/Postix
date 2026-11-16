@@ -26,13 +26,13 @@ export function groupInvitesPage(config) {
     return {
         ...inviteHelpers(t),
         ...runState(t),
-        ...stages({ now: 'loadNow', light: 'loadLight', groups: 'loadGroups', base: 'loadBase', day: 'loadDay' }),
+        ...stages({ now: 'loadNow', light: 'loadLight', groups: 'loadGroups', base: 'loadBase', activity: 'loadActivity', day: 'loadDay' }),
 
         t,
         endpoints: config.endpoints,
         links: config.links,
         /* A card on the control panel asks for fewer stages than the page. */
-        stageList: config.stageList ?? ['now', 'light', 'groups', 'base', 'day'],
+        stageList: config.stageList ?? ['now', 'light', 'activity', 'groups', 'base', 'day'],
 
         loading: false,
         busy: false,
@@ -40,6 +40,7 @@ export function groupInvitesPage(config) {
         /* Filled stage by stage; empty until its stage is in, so that the page can be drawn at once. */
         data: {
             base: null,
+            activity: null,
             progress: null,
             today: { added: 0, calls: 0, lookups: 0, stops: 0 },
             added: { total: 0, still: 0, left: 0, not_added: 0, failed: 0, already: 0, sent: 0 },
@@ -92,7 +93,7 @@ export function groupInvitesPage(config) {
 
             /* The run just ended: what it did to the numbers is read once more. */
             if (ended) {
-                this.loadStages(this.stageList.filter((name) => ['groups', 'base', 'day'].includes(name)));
+                this.loadStages(this.stageList.filter((name) => ['groups', 'base', 'activity', 'day'].includes(name)));
             }
         },
 
@@ -108,6 +109,10 @@ export function groupInvitesPage(config) {
             Object.assign(this.data, await requestJson(`${this.endpoints.show}?part=base`));
         },
 
+        async loadActivity() {
+            Object.assign(this.data, await requestJson(`${this.endpoints.show}?part=activity`));
+        },
+
         async loadDay() {
             Object.assign(this.data, await requestJson(`${this.endpoints.show}?part=day`));
         },
@@ -121,7 +126,7 @@ export function groupInvitesPage(config) {
             });
             this.slowPoll ??= everyVisible(30000, () => {
                 if (!this.anyStageLoading()) {
-                    this.loadStages(this.stageList.filter((name) => ['groups', 'day'].includes(name)));
+                    this.loadStages(this.stageList.filter((name) => ['groups', 'activity', 'day'].includes(name)));
                 }
             });
             this.startTicker();
@@ -235,6 +240,75 @@ export function groupInvitesPage(config) {
 
         peopleLink(params) {
             return `${this.links.people}?${new URLSearchParams(params)}`;
+        },
+
+        /*
+        |--------------------------------------------------------------
+        | Who is worth inviting
+        |--------------------------------------------------------------
+        */
+
+        activity() {
+            return this.data?.activity ?? {
+                only_active: false, total: 0, green: 0, red: 0, unchecked: 0, checked: 0, checked_today: 0,
+                why: { posted: 0, seen: 0, ours: 0 },
+                accounts: { taking_part: 0, looked: 0, never: 0, last_at: null },
+                day: { contacts: 0, groups: 0, authors: 0, green: 0, new: 0, looks: 0 },
+                last_run: null, welcome_groups: [],
+            };
+        },
+
+        /* Share of the whole base, for the bar: a sliver stays visible however small. */
+        activityShare(value) {
+            const total = this.activity().total;
+
+            return total > 0 && value > 0 ? Math.max(0.6, (100 * value) / total) : 0;
+        },
+
+        /* Who is left to invite into the current group: green and reachable, not tried there. */
+        activityLeft() {
+            const queue = this.data?.current?.queue;
+
+            return queue ? queue.proven + queue.other : null;
+        },
+
+        activityWhyLine() {
+            const a = this.activity();
+            const s = this.data?.settings ?? {};
+
+            return t.overview.activity_box.why
+                .replace(':posted', this.number(a.why.posted))
+                .replace(':pdays', this.number(s.posted_days ?? 3))
+                .replace(':seen', this.number(a.why.seen))
+                .replace(':sdays', this.number(s.seen_days ?? 7))
+                .replace(':ours', this.number(a.why.ours));
+        },
+
+        activityAccountsLine() {
+            const a = this.activity().accounts;
+            const hours = this.data?.settings?.activity_hours ?? 20;
+            const line = t.overview.activity_box.accounts
+                .replace(':looked', this.number(a.looked))
+                .replace(':total', this.number(a.taking_part))
+                .replace(':hours', this.number(hours));
+
+            return a.last_at ? `${line} · ${t.overview.activity_box.last_look.replace(':time', this.time(a.last_at))}` : `${line} · ${t.overview.activity_box.never_looked}`;
+        },
+
+        activityDayLine() {
+            const d = this.activity().day;
+
+            return t.overview.activity_box.day
+                .replace(':contacts', this.number(d.contacts))
+                .replace(':groups', this.number(d.groups))
+                .replace(':authors', this.number(d.authors))
+                .replace(':green', this.number(d.green))
+                .replace(':new', this.number(d.new));
+        },
+
+        /* An activity check runs right now. */
+        activityRunning() {
+            return this.running && !!this.now?.activity_check;
         },
 
         /*

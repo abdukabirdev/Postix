@@ -19,8 +19,8 @@ import { inviteHelpers, notify } from './group-invites-shared';
 const FILTERS = ['flag', 'reach', 'activity', 'group_id', 'status', 'search'];
 
 const ACTIVITY_TONES = {
-    green: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
-    red: 'bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-500/10 dark:text-rose-300',
+    green: 'bg-success-50 text-success-700 ring-success-600/20 dark:bg-success-500/10 dark:text-success-300',
+    red: 'bg-error-50 text-error-700 ring-error-600/20 dark:bg-error-500/10 dark:text-error-300',
     unchecked: 'bg-gray-100 text-gray-600 dark:bg-white/[0.07] dark:text-gray-300',
 };
 
@@ -203,17 +203,32 @@ export function groupInvitesPeoplePage(config) {
             this.load();
         },
 
-        /* Worth inviting or not: green, red, not looked at yet. */
-        activityChips() {
+        /* Worth inviting or not - green, red, not looked at yet - as big tiles over the list: a number and a filter in one. */
+        activityTiles() {
             const counts = this.counts ?? {};
+            const box = t.overview.activity_box;
 
             return [
-                { value: '', label: t.activity.any },
-                ...['green', 'red', 'unchecked'].map((state) => ({
-                    value: state,
-                    label: `${t.activity[state]} · ${this.number(counts[state] ?? 0)}`,
-                })),
+                { value: 'green', label: box.green, hint: '', dot: 'bg-success-500', n: counts.green ?? 0 },
+                { value: 'red', label: box.red, hint: box.red_hint, dot: 'bg-error-500', n: counts.red ?? 0 },
+                { value: 'unchecked', label: box.unchecked, hint: box.unchecked_hint, dot: 'bg-gray-300 dark:bg-gray-600', n: counts.unchecked ?? 0 },
             ];
+        },
+
+        /* Checked 1 234 of 349 355 (0.4%). */
+        checkedLine() {
+            const c = this.counts ?? {};
+            const checked = (c.green ?? 0) + (c.red ?? 0);
+
+            return t.overview.activity_box.checked_short
+                .replace(':checked', this.number(checked))
+                .replace(':total', this.number(c.total ?? 0))
+                .replace(':share', this.percent(checked, c.total ?? 0));
+        },
+
+        /* A second press on the chosen tile shows everybody again. */
+        toggleActivity(value) {
+            this.setActivity(this.filters.activity === value ? '' : value);
         },
 
         setActivity(value) {

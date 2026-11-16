@@ -44,6 +44,26 @@
             </template>
         </div>
 
+        {{-- Worth inviting: only the green are invited while "only active" is on --}}
+        <div>
+            <p class="mb-2 flex flex-wrap items-baseline gap-x-2 text-[13px]" title="{{ __('driver_check.invites.activity.rule') }}">
+                <span class="font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.overview.activity_box.title') }}</span>
+                <span class="tabular-nums text-gray-500" x-text="counts ? checkedLine() : ''"></span>
+            </p>
+            <div class="dc-stats">
+                <template x-for="tile in activityTiles()" :key="tile.value">
+                    <button type="button" class="dc-stat" :aria-pressed="filters.activity === tile.value" x-on:click="toggleActivity(tile.value)">
+                        <p class="dc-stat__label flex items-center gap-1.5">
+                            <span class="h-2 w-2 shrink-0 rounded-full" :class="tile.dot"></span>
+                            <span x-text="tile.label"></span>
+                        </p>
+                        <p class="dc-stat__value" x-text="counts ? number(tile.n) : '…'"></p>
+                        <p x-show="tile.hint" class="dc-stat__note" x-text="tile.hint"></p>
+                    </button>
+                </template>
+            </div>
+        </div>
+
         <x-driver-check.block>
             {{-- Which group, which status, who --}}
             <div class="dc-toolbar">
@@ -64,8 +84,6 @@
                         <option value="{{ $status }}">{{ __("driver_check.invites.statuses.{$status}") }}</option>
                     @endforeach
                 </x-driver-check.select>
-
-                <x-driver-check.chips items="activityChips()" selected="filters.activity" action="setActivity" :title="__('driver_check.invites.activity.rule')" />
 
                 <div x-show="filters.flag === 'untried'" x-cloak>
                     <x-driver-check.chips items="reachChips()" selected="filters.reach" action="setReach" :title="__('driver_check.invites.people.reach_hint')" />

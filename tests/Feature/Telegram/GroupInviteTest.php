@@ -2683,6 +2683,34 @@ final class GroupInviteTest extends TestCase
         $this->assertSame(1, $page(['part' => 'meta'])['counts']['green']);
     }
 
+    public function test_the_overview_tells_who_is_worth_inviting(): void
+    {
+        $this->person(3901, 'Wrote')->forceFill(['invite_ok' => true, 'activity_checked_at' => now(), 'last_posted_at' => now()->subDay()])->save();
+        $this->person(3902, 'Online')->forceFill(['invite_ok' => true, 'activity_checked_at' => now(), 'seen_status' => 'online', 'last_seen_at' => now()])->save();
+        $this->person(3903, 'Gone')->forceFill(['invite_ok' => false, 'activity_checked_at' => now()->subDays(2)])->save();
+        $this->person(3904, 'Unknown');
+
+        TelegramGroupInviteLog::query()->create([
+            'run_id' => 'r-activity',
+            'event' => TelegramGroupInviteLog::EVENT_CHECK,
+            'message' => 'Activity',
+            'context' => ['mode' => 'activity', 'contacts' => 40, 'groups' => 3, 'authors' => 12, 'green' => 9, 'new' => 5],
+        ]);
+
+        $activity = $this->app->make(GroupInviteController::class)
+            ->show(Request::create('/', 'GET', ['part' => 'activity']))
+            ->getData(true)['activity'];
+
+        $this->assertSame(2, $activity['green']);
+        $this->assertSame(1, $activity['red']);
+        $this->assertSame(1, $activity['unchecked']);
+        $this->assertSame(3, $activity['checked']);
+        $this->assertSame(2, $activity['checked_today']);
+        $this->assertSame(['posted' => 1, 'seen' => 1, 'ours' => 0], $activity['why']);
+        $this->assertSame(40, $activity['day']['contacts']);
+        $this->assertSame(1, $activity['day']['looks']);
+    }
+
     private function onlyActive(): void
     {
         $this->app->make(GroupInviteSettings::class)->save([

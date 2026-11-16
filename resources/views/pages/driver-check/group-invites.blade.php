@@ -136,6 +136,82 @@
             </div>
         </div>
 
+        {{-- Who is worth inviting: the green are the only ones invited while "only active" is on --}}
+        <x-driver-check.block :title="__('driver_check.invites.overview.activity_box.title')" :hint="__('driver_check.invites.overview.activity_box.hint')" stage="activity" :lines="3">
+            <x-slot:actions>
+                <span x-show="activityRunning()" x-cloak class="dc-tag" data-tone="run">{{ __('driver_check.invites.overview.activity_box.running') }}</span>
+                <x-driver-check.button size="sm" icon="users" x-show="!running" x-on:click="checkActivity()" ::disabled="busy || !stages.now.loaded" :title="__('driver_check.invites.overview.activity_hint')">
+                    {{ __('driver_check.invites.overview.activity_button') }}
+                </x-driver-check.button>
+                <x-driver-check.button size="sm" variant="ghost" :href="route('driver-check.group-invites.people', ['activity' => 'green'])">
+                    {{ __('driver_check.invites.overview.activity_box.open') }} →
+                </x-driver-check.button>
+            </x-slot:actions>
+
+            <div class="p-4">
+                {{-- Nobody green yet while only the green are invited: the invite has nobody to take --}}
+                <div x-show="activity().only_active && activity().green === 0" x-cloak class="mb-4 rounded-xl border border-warning-200 bg-warning-50 px-4 py-3 text-[13px] text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300">
+                    <p class="font-semibold">{{ __('driver_check.invites.overview.activity_box.nobody_title') }}</p>
+                    <p class="mt-0.5" x-text="activityRunning() ? t.overview.activity_box.nobody_running : t.overview.activity_box.nobody_text"></p>
+                </div>
+                <p x-show="!activity().only_active" x-cloak class="mb-4 rounded-xl border border-gray-200 px-4 py-3 text-[13px] text-gray-600 dark:border-gray-700 dark:text-gray-300">
+                    {{ __('driver_check.invites.overview.activity_box.all_invited') }}
+                    <a href="{{ route('driver-check.group-invites.settings') }}" class="font-medium underline">{{ __('driver_check.invites.overview.open_settings') }}</a>
+                </p>
+
+                <div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                    <a :href="peopleLink({ activity: 'green' })" class="block rounded-xl border border-success-200 bg-success-50/60 p-3 transition hover:border-success-400 dark:border-success-500/30 dark:bg-success-500/10">
+                        <span class="flex items-center gap-2 text-[12.5px] font-medium text-success-800 dark:text-success-300">
+                            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-success-500"></span>
+                            {{ __('driver_check.invites.overview.activity_box.green') }}
+                        </span>
+                        <span class="mt-1.5 block text-[26px] font-semibold leading-none tabular-nums text-gray-950 dark:text-white" x-text="number(activity().green)"></span>
+                        <span class="mt-1 block text-[11.5px] leading-snug text-gray-500" x-text="activityWhyLine()"></span>
+                    </a>
+                    <div class="rounded-xl border border-gray-100 p-3 dark:border-gray-800">
+                        <span class="flex items-center gap-2 text-[12.5px] font-medium text-gray-600 dark:text-gray-300">
+                            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-brand-500"></span>
+                            {{ __('driver_check.invites.overview.activity_box.left') }}
+                        </span>
+                        <span class="mt-1.5 block text-[26px] font-semibold leading-none tabular-nums text-gray-950 dark:text-white" x-text="activityLeft() === null ? '—' : number(activityLeft())"></span>
+                        <span class="mt-1 block text-[11.5px] leading-snug text-gray-400" x-text="data.current ? t.overview.activity_box.left_hint.replace(':group', data.current.title) : t.overview.no_current"></span>
+                    </div>
+                    <a :href="peopleLink({ activity: 'red' })" class="block rounded-xl border border-gray-100 p-3 transition hover:border-gray-300 dark:border-gray-800 dark:hover:border-gray-600">
+                        <span class="flex items-center gap-2 text-[12.5px] font-medium text-gray-600 dark:text-gray-300">
+                            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-error-500"></span>
+                            {{ __('driver_check.invites.overview.activity_box.red') }}
+                        </span>
+                        <span class="mt-1.5 block text-[26px] font-semibold leading-none tabular-nums text-gray-950 dark:text-white" x-text="number(activity().red)"></span>
+                        <span class="mt-1 block text-[11.5px] leading-snug text-gray-400">{{ __('driver_check.invites.overview.activity_box.red_hint') }}</span>
+                    </a>
+                    <a :href="peopleLink({ activity: 'unchecked' })" class="block rounded-xl border border-gray-100 p-3 transition hover:border-gray-300 dark:border-gray-800 dark:hover:border-gray-600">
+                        <span class="flex items-center gap-2 text-[12.5px] font-medium text-gray-600 dark:text-gray-300">
+                            <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-gray-300 dark:bg-gray-600"></span>
+                            {{ __('driver_check.invites.overview.activity_box.unchecked') }}
+                        </span>
+                        <span class="mt-1.5 block text-[26px] font-semibold leading-none tabular-nums text-gray-950 dark:text-white" x-text="number(activity().unchecked)"></span>
+                        <span class="mt-1 block text-[11.5px] leading-snug text-gray-400">{{ __('driver_check.invites.overview.activity_box.unchecked_hint') }}</span>
+                    </a>
+                </div>
+
+                {{-- How much of the base is looked at: green and red of the whole --}}
+                <div class="mt-4">
+                    <p class="text-[13px] tabular-nums text-gray-700 dark:text-gray-200" x-text="t.overview.activity_box.checked.replace(':checked', number(activity().checked)).replace(':total', number(activity().total)).replace(':share', percent(activity().checked, activity().total)).replace(':today', number(activity().checked_today))"></p>
+                    <div class="mt-2 flex h-2.5 w-full gap-[2px] overflow-hidden rounded-full bg-gray-100 dark:bg-white/[0.06]">
+                        <span x-show="activity().green > 0" class="h-full bg-success-500" :style="`width: ${activityShare(activity().green)}%`"></span>
+                        <span x-show="activity().red > 0" class="h-full bg-error-500" :style="`width: ${activityShare(activity().red)}%`"></span>
+                    </div>
+                </div>
+
+                <ul class="mt-4 space-y-1 text-[12.5px] tabular-nums text-gray-500">
+                    <li x-text="activityAccountsLine()"></li>
+                    <li x-show="activity().day.looks > 0" x-cloak x-text="activityDayLine()"></li>
+                    <li x-show="activity().welcome_groups.length > 0" x-cloak x-text="t.overview.activity_box.welcome.replace(':groups', activity().welcome_groups.join(', '))"></li>
+                    <li class="text-gray-400">{{ __('driver_check.invites.overview.activity_box.who_checked') }}</li>
+                </ul>
+            </div>
+        </x-driver-check.block>
+
         <div class="grid items-start gap-5 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
 
             {{-- Our groups --}}
@@ -298,22 +374,6 @@
                     <a :href="peopleLink({ flag: 'untried', reach: 'unreachable' })" class="font-medium text-gray-900 hover:underline dark:text-white" x-text="t.overview.untried_unreachable.replace(':n', number(base().untried_unreachable))"></a>
                 </p>
 
-                {{-- Worth inviting: only the green ones are taken while "only active" is on --}}
-                <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-gray-500" :title="t.overview.activity_rule">
-                    <span x-text="t.overview.activity_lead"></span>
-                    <a :href="peopleLink({ activity: 'green' })" class="inline-flex items-center gap-1.5 font-medium text-gray-900 hover:underline dark:text-white">
-                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-                        <span x-text="t.activity.green + ' ' + number(base().green)"></span>
-                    </a>
-                    <a :href="peopleLink({ activity: 'red' })" class="inline-flex items-center gap-1.5 font-medium text-gray-900 hover:underline dark:text-white">
-                        <span class="h-2 w-2 rounded-full bg-rose-500"></span>
-                        <span x-text="t.activity.red + ' ' + number(base().red)"></span>
-                    </a>
-                    <a :href="peopleLink({ activity: 'unchecked' })" class="inline-flex items-center gap-1.5 font-medium text-gray-900 hover:underline dark:text-white">
-                        <span class="h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600"></span>
-                        <span x-text="t.activity.unchecked + ' ' + number(base().unchecked)"></span>
-                    </a>
-                </p>
             </div>
         </x-driver-check.block>
 

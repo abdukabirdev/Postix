@@ -8,6 +8,7 @@ use App\Application\Telegram\Services\GroupInviteBase;
 use App\Application\Telegram\Services\GroupInviteDayProgress;
 use App\Application\Telegram\Services\GroupInviteService;
 use App\Application\Telegram\Services\GroupInviteSettings;
+use App\Application\Telegram\Services\PeopleActivity;
 use App\Console\Commands\Telegram\TelegramGroupInviteCommand;
 use App\Enums\Telegram\TelegramAccountProcess as ProcessEnum;
 use App\Http\Controllers\Controller;
@@ -21,6 +22,8 @@ use App\Models\Telegram\TelegramSetting;
 use App\Telegram\TelegramProcessLock;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
 
 /**
  * Group invites: the overview, the buttons that start and stop a run, the
@@ -45,6 +48,8 @@ final class GroupInviteController extends Controller
      *   groups   what each group got, today, the current group's queue,
      *            the last "who left" - scans of the invites table
      *   base     the base in numbers (kept for half a minute)
+     *   activity who is worth inviting: green / red / not checked, why the
+     *            green are green, how far the accounts' looks went
      *   day      the ideal day and how far the accounts are into it
      *
      * Without `part` everything comes at once, as it used to.
@@ -58,12 +63,14 @@ final class GroupInviteController extends Controller
             'light' => $this->lightPart($config),
             'groups' => $this->groupsPart($config),
             'base' => ['base' => $this->base->cachedCounts($config)],
+            'activity' => ['activity' => $this->activityPart($config)],
             'day' => ['progress' => $this->progress->today($config)],
             default => [
                 ...$this->nowPart(),
                 ...$this->lightPart($config),
                 ...$this->groupsPart($config),
                 'base' => $this->base->cachedCounts($config),
+                'activity' => $this->activityPart($config),
                 'progress' => $this->progress->today($config),
             ],
         });
@@ -189,6 +196,106 @@ final class GroupInviteController extends Controller
                 'stopped' => (bool) ($lastLeft->context['stopped'] ?? false),
             ] : null,
         ];
+    }
+
+    /**
+     * Who is worth inviting (PeopleActivity), as the owner asks it: how many
+     * are green - the only ones invited while "only active" is on - how many
+     * red, how many nobody looked at yet; why the green are green; how many
+     * of the accounts taking part looked at their people lately, and what
+     * the looks of the last day found.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return array<string, mixed>
+     */
+    private function activityPart(array $config): array
+    {
+        $counts = $this->base->cachedCounts($config);
+        $checked = $counts['green'] + $counts['red'];
+
+        /* Over the green only (indexed): a few thousand rows, not the whole base. Kept like the counts. */
+        $why = Cache::remember('group_invite.activity_why:' . $config['posted_days'] . ':' . $config['seen_days'], 30, function () use ($config) {
+            $row = $this->base->people()
+                ->where('invite_ok', true)
+                ->selectRaw('SUM(last_posted_at >= ?) as posted, SUM(last_seen_at >= ?) as seen, SUM(our_group_at >= ?) as ours', [
+                    now()->subDays((int) $config['posted_days'])->toDateTimeString(),
+                    now()->subDays((int) $config['seen_days'])->toDateTimeString(),
+                    now()->subDays(PeopleActivity::OUR_GROUP_DAYS)->toDateTimeString(),
+                ])
+                ->first();
+
+            return [
+                'posted' => (int) ($row->posted ?? 0),
+                'seen' => (int) ($row->seen ?? 0),
+                'ours' => (int) ($row->ours ?? 0),
+            ];
+        });
+
+        $taking = $this->takingPart($config);
+        $looks = collect(PeopleActivity::lastLooks())->only($taking->all());
+        $fresh = now()->subHours((int) $config['activity_hours']);
+
+        /* What the accounts' looks found in the last day, added up. */
+        $found = ['contacts' => 0, 'groups' => 0, 'authors' => 0, 'green' => 0, 'new' => 0, 'looks' => 0];
+
+        TelegramGroupInviteLog::query()
+            ->where('event', TelegramGroupInviteLog::EVENT_CHECK)
+            ->where('context->mode', 'activity')
+            ->where('created_at', '>=', now()->subDay())
+            ->pluck('context')
+            ->each(function ($context) use (&$found) {
+                foreach (['contacts', 'groups', 'authors', 'green', 'new'] as $key) {
+                    $found[$key] += (int) (((array) $context)[$key] ?? 0);
+                }
+
+                $found['looks']++;
+            });
+
+        $lastRun = TelegramGroupInviteLog::query()
+            ->where('event', 'finished')
+            ->where('context->activity_check', true)
+            ->latest('id')
+            ->first();
+
+        return [
+            'only_active' => (bool) ($config['only_active'] ?? false),
+            'total' => $counts['total'],
+            'green' => $counts['green'],
+            'red' => $counts['red'],
+            'unchecked' => $counts['unchecked'],
+            'checked' => $checked,
+            'checked_today' => $this->base->people()->where('activity_checked_at', '>=', now()->startOfDay())->count(),
+            'why' => $why,
+            'accounts' => [
+                'taking_part' => $taking->count(),
+                'looked' => $looks->filter(fn ($at) => $at->gte($fresh))->count(),
+                'never' => $taking->count() - $looks->count(),
+                'last_at' => $looks->max()?->toIso8601String(),
+            ],
+            'day' => $found,
+            'last_run' => $lastRun ? [
+                'at' => $lastRun->created_at,
+                'stopped' => (bool) ($lastRun->context['stopped'] ?? false),
+            ] : null,
+            'welcome_groups' => TelegramInviteGroup::query()->where('members_welcome', true)->pluck('title')->filter()->values(),
+        ];
+    }
+
+    /**
+     * The authorized accounts the invite may use: not switched off on the panel.
+     *
+     * @param array<string, mixed> $config
+     *
+     * @return Collection<int, int>
+     */
+    private function takingPart(array $config): Collection
+    {
+        return TelegramAccount::query()
+            ->where('is_authorized', true)
+            ->pluck('id')
+            ->reject(fn (int $id) => in_array($id, $config['excluded_accounts'], true))
+            ->values();
     }
 
     public function settings(): JsonResponse

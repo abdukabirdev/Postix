@@ -97,8 +97,8 @@
                                             <span class="dc-sub2 truncate" x-text="group.link"></span>
                                         </button>
                                     </div>
-                                    <p x-show="group.members_welcome" x-cloak class="mt-1 flex items-center gap-1.5 text-[12px] text-emerald-700 dark:text-emerald-400" :title="t.groups.welcome_hint">
-                                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                                    <p x-show="group.members_welcome" x-cloak class="mt-1 flex items-center gap-1.5 text-[12px] text-success-700 dark:text-success-400" :title="t.groups.welcome_hint">
+                                        <span class="h-2 w-2 rounded-full bg-success-500"></span>
                                         <span x-text="t.groups.welcome_badge"></span>
                                     </p>
                                     <p x-show="group.last_error" x-cloak class="mt-1 max-w-[230px] truncate text-[12px] text-error-600 dark:text-error-400" x-text="errorLabel(group.last_error, true)" :title="group.last_error"></p>
