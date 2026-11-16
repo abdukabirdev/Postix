@@ -105,7 +105,7 @@ final class GroupInviteBase
      *
      * @param array<string, mixed> $config
      *
-     * @return array{total: int, processed: int, can: int, cannot: int, tried: int, untried: int, untried_reachable: int, untried_unreachable: int}
+     * @return array{total: int, processed: int, can: int, cannot: int, tried: int, untried: int, untried_reachable: int, untried_unreachable: int, green: int, red: int, unchecked: int}
      */
     public function counts(array $config): array
     {
@@ -125,6 +125,10 @@ final class GroupInviteBase
             'untried' => $untried,
             'untried_reachable' => $reachable,
             'untried_unreachable' => max(0, $untried - $reachable),
+            /* Worth inviting or not (PeopleActivity): active lately / not / not looked at yet. */
+            'green' => $green = $this->people()->where('invite_ok', true)->count(),
+            'red' => $red = $this->people()->where('invite_ok', false)->count(),
+            'unchecked' => max(0, $total - $green - $red),
         ];
     }
 
@@ -135,7 +139,7 @@ final class GroupInviteBase
      *
      * @param array<string, mixed> $config
      *
-     * @return array{total: int, processed: int, can: int, cannot: int, tried: int, untried: int, untried_reachable: int, untried_unreachable: int}
+     * @return array{total: int, processed: int, can: int, cannot: int, tried: int, untried: int, untried_reachable: int, untried_unreachable: int, green: int, red: int, unchecked: int}
      */
     public function cachedCounts(array $config): array
     {
@@ -160,7 +164,8 @@ final class GroupInviteBase
     /**
      * Who is still left to try for a group, among the people an account
      * can reach: those already added somewhere, and the rest not refused.
-     * With the "proven" audience the rest waits.
+     * With the "proven" audience the rest waits. With "only active" only
+     * the green ones count.
      *
      * @param array<string, mixed> $config
      *
@@ -169,6 +174,7 @@ final class GroupInviteBase
     public function queue(TelegramInviteGroup $group, array $config): array
     {
         $left = fn () => $this->whereReachable($this->people(), (bool) $config['use_usernames'])
+            ->when(! empty($config['only_active']), fn ($q) => $q->where('invite_ok', true))
             ->whereDoesntHave('groupInvites', fn ($q) => $q->where('invite_group_id', $group->id));
 
         return [

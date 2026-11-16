@@ -81,6 +81,43 @@
                     </div>
                 </x-driver-check.surface>
 
+                {{-- Only people who live in Telegram --}}
+                <x-driver-check.surface class="overflow-hidden">
+                    <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">
+                        <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.invites.settings.sections.activity') }}</h2>
+                        <p class="mt-0.5 text-[12px] text-gray-400">{{ __('driver_check.invites.settings.activity_lead') }}</p>
+                    </div>
+                    <div class="grid gap-4 p-4 sm:grid-cols-2">
+                        <label class="flex cursor-pointer items-start gap-3 sm:col-span-2">
+                            <span class="relative mt-0.5 inline-flex h-6 w-10 shrink-0 items-center">
+                                <input type="checkbox" x-model="form.only_active" class="peer sr-only">
+                                <span class="absolute inset-0 rounded-full bg-gray-300 transition peer-checked:bg-brand-500 peer-focus-visible:ring-2 peer-focus-visible:ring-brand-500/50 dark:bg-gray-700"></span>
+                                <span class="absolute left-0.5 h-5 w-5 rounded-full bg-white shadow transition peer-checked:translate-x-4"></span>
+                            </span>
+                            <span>
+                                <span class="block text-[13px] font-semibold text-gray-900 dark:text-white">{{ __('driver_check.invites.settings.only_active') }}</span>
+                                <span class="block text-[11.5px] leading-snug text-gray-400">{{ __('driver_check.invites.settings.only_active_hint') }}</span>
+                            </span>
+                        </label>
+
+                        <x-driver-check.field :label="__('driver_check.invites.settings.posted_days')" :hint="__('driver_check.invites.settings.posted_days_hint')">
+                            <x-driver-check.input type="number" inputmode="numeric" x-model="form.posted_days" ::min="limits.posted_days?.[0]" ::max="limits.posted_days?.[1]" required />
+                        </x-driver-check.field>
+
+                        <x-driver-check.field :label="__('driver_check.invites.settings.seen_days')" :hint="__('driver_check.invites.settings.seen_days_hint')">
+                            <x-driver-check.input type="number" inputmode="numeric" x-model="form.seen_days" ::min="limits.seen_days?.[0]" ::max="limits.seen_days?.[1]" required />
+                        </x-driver-check.field>
+
+                        <x-driver-check.field :label="__('driver_check.invites.settings.activity_hours')" :hint="__('driver_check.invites.settings.activity_hours_hint')">
+                            <x-driver-check.input type="number" inputmode="numeric" x-model="form.activity_hours" ::min="limits.activity_hours?.[0]" ::max="limits.activity_hours?.[1]" required />
+                        </x-driver-check.field>
+
+                        <x-driver-check.field :label="__('driver_check.invites.settings.activity_groups')" :hint="__('driver_check.invites.settings.activity_groups_hint')">
+                            <x-driver-check.input type="number" inputmode="numeric" x-model="form.activity_groups" ::min="limits.activity_groups?.[0]" ::max="limits.activity_groups?.[1]" required />
+                        </x-driver-check.field>
+                    </div>
+                </x-driver-check.surface>
+
                 {{-- How much --}}
                 <x-driver-check.surface class="overflow-hidden">
                     <div class="border-b border-gray-100 px-4 py-3 dark:border-gray-800">

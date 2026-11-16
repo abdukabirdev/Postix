@@ -160,6 +160,10 @@ export function inviteHelpers(t) {
         },
 
         modeLabel(run) {
+            if (run?.activity_check) {
+                return t.now.mode_activity;
+            }
+
             if (run?.left_check) {
                 return t.now.mode_left;
             }
@@ -180,7 +184,7 @@ export function inviteHelpers(t) {
 
             switch (line.event) {
                 case 'started':
-                    return (c.left_check ? e.started_left : (c.check_only ? e.started_check : e.started)).replace(':trigger', trigger);
+                    return (c.activity_check ? e.started_activity : (c.left_check ? e.started_left : (c.check_only ? e.started_check : e.started))).replace(':trigger', trigger);
                 case 'finished':
                     if (c.reason === 'no_groups') {
                         return e.no_groups;
@@ -235,6 +239,15 @@ export function inviteHelpers(t) {
                     return error ? `${text} · ${this.errorLabel(error)}` : text;
                 }
                 case 'check':
+                    if (c.mode === 'activity') {
+                        return e.check_activity
+                            .replace(':contacts', this.number(c.contacts ?? 0))
+                            .replace(':groups', this.number(c.groups ?? 0))
+                            .replace(':authors', this.number(c.authors ?? 0))
+                            .replace(':green', this.number(c.green ?? 0))
+                            .replace(':new', this.number(c.new ?? 0));
+                    }
+
                     if (c.mode === 'left' && c.auto) {
                         return (c.auto === 'after' ? e.check_left_after : e.check_left_before).replace(':summary', this.summaryText(c));
                     }
@@ -298,6 +311,10 @@ export function inviteHelpers(t) {
                     return 'warn';
                 case 'batch':
                 case 'check':
+                    if (c.mode === 'activity') {
+                        return 'ok';
+                    }
+
                     if (c.mode === 'left') {
                         return Number(c.left ?? 0) > 0 ? 'warn' : 'ok';
                     }

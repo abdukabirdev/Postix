@@ -134,6 +134,9 @@ final class AccountContactsService
                 });
             }
 
+            /* Every contact's status comes with the list: whether they are worth inviting is known at once. */
+            PeopleActivity::quietly((array) ($result['users'] ?? []));
+
             /* What this read did not carry is no longer in the account. */
             $removed = DB::table('telegram_account_contact_links')
                 ->where('telegram_account_id', $account->id)

@@ -91,6 +91,7 @@ final class GroupInviteGroupController extends Controller
                 'title' => $group->title,
                 'link' => $group->link,
                 'is_active' => $group->is_active,
+                'members_welcome' => (bool) $group->members_welcome,
                 'archived_at' => $group->deleted_at,
                 'created_at' => $group->created_at,
                 'last_error' => $group->last_error,
@@ -219,8 +220,29 @@ final class GroupInviteGroupController extends Controller
     public function update(Request $request, TelegramInviteGroup $inviteGroup): JsonResponse
     {
         $data = $request->validate([
-            'is_active' => ['required', 'boolean'],
+            'is_active' => ['required_without:members_welcome', 'boolean'],
+            'members_welcome' => ['required_without:is_active', 'boolean'],
         ]);
+
+        /* Its members green for the invites or not: read from its members list at the next run. */
+        if (array_key_exists('members_welcome', $data)) {
+            /*
+             * Off: its list is no longer read, so the "in our group" mark of
+             * its members runs out within PeopleActivity::OUR_GROUP_DAYS -
+             * unless they sit in another such group (whose list renews it).
+             * Not wiped at once: the mark is not kept per group.
+             */
+            $inviteGroup->update(['members_welcome' => (bool) $data['members_welcome']]);
+
+            if (! array_key_exists('is_active', $data)) {
+                return response()->json([
+                    'data' => $inviteGroup->fresh(),
+                    'message' => __($data['members_welcome'] ? 'driver_check.invites.messages.welcome_on' : 'driver_check.invites.messages.welcome_off', [
+                        'group' => $inviteGroup->title ?: $inviteGroup->link,
+                    ]),
+                ]);
+            }
+        }
 
         /* On: it becomes the one group people are added into, the others go off. */
         $data['is_active'] ? $inviteGroup->makeCurrent() : $inviteGroup->update(['is_active' => false]);

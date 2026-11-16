@@ -229,6 +229,11 @@ final class GroupInviteController extends Controller
             'warm_up' => ['nullable', 'boolean'],
             'usernames_per_day' => ['required', 'integer', "min:{$usernamesMin}", "max:{$usernamesMax}"],
             'audience' => ['nullable', 'in:' . implode(',', GroupInviteSettings::AUDIENCES)],
+            'only_active' => ['nullable', 'boolean'],
+            'posted_days' => self::bounded('posted_days'),
+            'seen_days' => self::bounded('seen_days'),
+            'activity_hours' => self::bounded('activity_hours'),
+            'activity_groups' => self::bounded('activity_groups'),
             'excluded_accounts' => ['nullable', 'array'],
             'excluded_accounts.*' => ['integer', 'exists:telegram_accounts,id'],
         ]);
@@ -249,6 +254,16 @@ final class GroupInviteController extends Controller
             'saved' => true,
             'message' => __('driver_check.invites.messages.settings_saved'),
         ]);
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function bounded(string $key): array
+    {
+        [$min, $max] = GroupInviteSettings::LIMITS[$key];
+
+        return ['nullable', 'integer', "min:{$min}", "max:{$max}"];
     }
 
     public function run(): JsonResponse
@@ -272,6 +287,16 @@ final class GroupInviteController extends Controller
     public function checkLeft(): JsonResponse
     {
         return $this->start(new StartGroupInviteJob(left: true), 'left_queued');
+    }
+
+    /**
+     * Every account looks at its people now: the statuses of its contacts,
+     * who wrote in its groups lately; our groups' members lists are read
+     * too. Who is green and who is red after it - nobody invited.
+     */
+    public function checkActivity(): JsonResponse
+    {
+        return $this->start(new StartGroupInviteJob(activity: true), 'activity_queued');
     }
 
     /**
@@ -335,6 +360,7 @@ final class GroupInviteController extends Controller
             'finished_at' => $finished->get($start->run_id)?->created_at,
             'check_only' => (bool) ($start->context['check_only'] ?? false),
             'left_check' => (bool) ($start->context['left_check'] ?? false),
+            'activity_check' => (bool) ($start->context['activity_check'] ?? false),
             'trigger' => $start->context['trigger'] ?? 'manual',
             'stopped' => (bool) ($finished->get($start->run_id)?->context['stopped'] ?? false),
             'totals' => $finished->get($start->run_id)?->context,

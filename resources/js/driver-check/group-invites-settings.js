@@ -14,8 +14,8 @@
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify } from './group-invites-shared';
 
-const FIELDS = ['enabled', 'schedule_at', 'runs_per_day', 'batch_size', 'batches_per_day', 'warm_up', 'delay_min', 'delay_max', 'use_usernames', 'usernames_per_day', 'audience'];
-const NUMBERS = ['runs_per_day', 'batch_size', 'batches_per_day', 'delay_min', 'delay_max', 'usernames_per_day'];
+const FIELDS = ['enabled', 'schedule_at', 'runs_per_day', 'batch_size', 'batches_per_day', 'warm_up', 'delay_min', 'delay_max', 'use_usernames', 'usernames_per_day', 'audience', 'only_active', 'posted_days', 'seen_days', 'activity_hours', 'activity_groups'];
+const NUMBERS = ['runs_per_day', 'batch_size', 'batches_per_day', 'delay_min', 'delay_max', 'usernames_per_day', 'posted_days', 'seen_days', 'activity_hours', 'activity_groups'];
 
 export function groupInvitesSettingsPage(config) {
     const t = config.translations;

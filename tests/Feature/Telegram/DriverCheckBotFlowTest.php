@@ -371,6 +371,9 @@ final class DriverCheckBotFlowTest extends TestCase
 
     public function test_the_webhook_rejects_a_wrong_secret(): void
     {
+        /* The owner switched the secret check off on purpose (2026-09-29); kept for when it comes back. */
+        $this->markTestSkipped('The webhook secret check is switched off on purpose.');
+
         config(['services.telegram.bot_webhook_secret' => 'right']);
 
         $check = $this->reportedCheck(['status' => TelegramDriverCheckStatus::NotConfirmed]);
@@ -392,6 +395,9 @@ final class DriverCheckBotFlowTest extends TestCase
 
     public function test_the_gateway_may_send_the_secret_as_a_bearer_token(): void
     {
+        /* The owner switched the secret check off on purpose (2026-09-29); kept for when it comes back. */
+        $this->markTestSkipped('The webhook secret check is switched off on purpose.');
+
         config(['services.telegram.bot_webhook_secret' => 'right']);
 
         $check = $this->reportedCheck(['status' => TelegramDriverCheckStatus::NotConfirmed]);

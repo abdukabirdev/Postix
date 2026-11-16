@@ -141,6 +141,14 @@ class TelegramScrapeGroup extends Model
     }
 
     /**
+     * Groups with a public @name: anybody reads them by it, without joining.
+     */
+    public function scopePublicLink(Builder $query): Builder
+    {
+        return $query->where('link', 'not like', '+%')->where('link', 'not like', 'joinchat/%');
+    }
+
+    /**
      * An invite link (+hash): opens only by joining, so nothing can be read
      * from it beforehand.
      */

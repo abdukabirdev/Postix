@@ -16,7 +16,13 @@
 import { requestJson } from './monitoring';
 import { inviteHelpers, notify } from './group-invites-shared';
 
-const FILTERS = ['flag', 'reach', 'group_id', 'status', 'search'];
+const FILTERS = ['flag', 'reach', 'activity', 'group_id', 'status', 'search'];
+
+const ACTIVITY_TONES = {
+    green: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300',
+    red: 'bg-rose-50 text-rose-700 ring-rose-600/20 dark:bg-rose-500/10 dark:text-rose-300',
+    unchecked: 'bg-gray-100 text-gray-600 dark:bg-white/[0.07] dark:text-gray-300',
+};
 
 export function groupInvitesPeoplePage(config) {
     const t = config.translations;
@@ -195,6 +201,53 @@ export function groupInvitesPeoplePage(config) {
         setReach(value) {
             this.filters.reach = value;
             this.load();
+        },
+
+        /* Worth inviting or not: green, red, not looked at yet. */
+        activityChips() {
+            const counts = this.counts ?? {};
+
+            return [
+                { value: '', label: t.activity.any },
+                ...['green', 'red', 'unchecked'].map((state) => ({
+                    value: state,
+                    label: `${t.activity[state]} · ${this.number(counts[state] ?? 0)}`,
+                })),
+            ];
+        },
+
+        setActivity(value) {
+            this.filters.activity = value;
+            this.load();
+        },
+
+        activityTone(state) {
+            return ACTIVITY_TONES[state] ?? ACTIVITY_TONES.unchecked;
+        },
+
+        /* Why green or red: wrote when, online when, in our group. */
+        activityLine(row) {
+            const parts = [];
+
+            if (row.last_posted_at) {
+                parts.push(t.activity.posted.replace(':time', this.time(row.last_posted_at)));
+            }
+
+            if (row.seen_status) {
+                const seen = t.activity.seen[row.seen_status] ?? row.seen_status;
+
+                parts.push(row.seen_status === 'offline' && row.last_seen_at ? t.activity.seen_at.replace(':time', this.time(row.last_seen_at)) : seen);
+            }
+
+            if (row.our_group_at) {
+                parts.push(t.activity.our_group);
+            }
+
+            if (parts.length === 0 && row.activity === 'unchecked') {
+                parts.push(t.activity.not_checked);
+            }
+
+            return parts.join(' · ');
         },
 
         clearGroup() {

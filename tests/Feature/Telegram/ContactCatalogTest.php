@@ -96,7 +96,7 @@ final class ContactCatalogTest extends TestCase
         $all = $this->catalog();
 
         $this->assertSame(2, $all['meta']['total'], 'bots are left out unless asked for');
-        $this->assertSame(['people' => 2, 'people_own_groups' => 2, 'people_other_groups' => 0, 'waiting_first' => 0, 'added' => 1, 'pending' => 0, 'failed' => 0, 'skipped' => 0, 'unassigned' => 0, 'by_link' => 1, 'today' => 1], $all['stats']);
+        $this->assertSame(['people' => 2, 'people_own_groups' => 2, 'people_other_groups' => 0, 'waiting_first' => 0, 'added' => 1, 'pending' => 0, 'failed' => 0, 'skipped' => 0, 'unassigned' => 0, 'by_link' => 1, 'today' => 1], $this->catalog(['part' => 'stats'])['stats']);
 
         $row = collect($all['data'])->firstWhere('telegram_user_id', 10);
         $this->assertSame('added', $row['status']);
@@ -122,13 +122,13 @@ final class ContactCatalogTest extends TestCase
         $settings = $this->app->make(\App\Application\Telegram\Services\ContactSyncSettings::class);
 
         $settings->save(['skip_usernames' => false]);
-        $off = $this->catalog();
+        $off = $this->catalog(['part' => 'stats']);
 
         $this->assertSame([0, 2], [$off['stats']['by_link'], $off['stats']['unassigned']], 'switched off: everybody waits');
         $this->assertSame([], $this->catalog(['status' => 'by_link'])['data']);
 
         $settings->save(['skip_usernames' => true]);
-        $on = $this->catalog();
+        $on = $this->catalog(['part' => 'stats']);
 
         $this->assertSame([1, 1], [$on['stats']['by_link'], $on['stats']['unassigned']]);
         $this->assertSame(['Vali'], collect($this->catalog(['status' => 'unassigned'])['data'])->pluck('name')->all());
@@ -155,7 +155,7 @@ final class ContactCatalogTest extends TestCase
         $this->assertSame(['Vali'], $names(['account_id' => 2]));
         $this->assertSame([], $names(['group_id' => $drivers->id, 'account_id' => 2]));
 
-        $options = $this->catalog()['options'];
+        $options = $this->catalog(['part' => 'options'])['options'];
 
         $this->assertSame(['Drivers', 'two'], array_column($options['groups'], 'title'), 'a group without a title shows its link');
         $this->assertSame([1, 2], array_column($options['accounts'], 'id'));

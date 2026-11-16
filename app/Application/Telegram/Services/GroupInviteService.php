@@ -373,6 +373,9 @@ final class GroupInviteService
     /** The "proven" audience: only people already added into some group. */
     private bool $provenOnly = false;
 
+    /** Only people PeopleActivity found green are invited (the panel's "only active"); null: read from the panel. */
+    private ?bool $onlyActive = null;
+
     /** A scheduled run: each account makes its share of the day's calls, the rest is for the runs after it. */
     private bool $byShare = false;
 
@@ -388,6 +391,7 @@ final class GroupInviteService
         private readonly JoinBotSettings $joinBot,
         private readonly JoinRequestService $joinRequests,
         private readonly SessionProbe $probe,
+        private readonly PeopleActivity $activity,
     ) {}
 
     /**
@@ -395,13 +399,15 @@ final class GroupInviteService
      * checked yet, then invites. $checkOnly: the check alone, nobody invited.
      * $whoLeft: "who left" alone - the members lists of the groups first,
      * then whoever they could not settle looked up one by one, nobody
-     * invited.
+     * invited. $activity: every account looks at who of its people is
+     * active (PeopleActivity), after our groups' members lists are read;
+     * nobody invited.
      *
      * @param callable(string): void|null $output
      *
      * @return array{accounts: int, batches: int, invited: int, not_added: int, already: int, sent: int, failed: int, left: int, stayed: int, back: int}
      */
-    public function run(?callable $output = null, string $trigger = 'manual', bool $checkOnly = false, bool $whoLeft = false): array
+    public function run(?callable $output = null, string $trigger = 'manual', bool $checkOnly = false, bool $whoLeft = false, bool $activity = false): array
     {
         $this->runId = (string) Str::uuid();
         $this->troubled = [];
@@ -423,9 +429,11 @@ final class GroupInviteService
 
         $config = $this->settings->current();
         $this->provenOnly = $config['audience'] === GroupInviteSettings::AUDIENCE_PROVEN;
+        $this->onlyActive = (bool) $config['only_active'];
         $this->byShare = $trigger === 'schedule';
         $this->runCalls = [];
-        $checkOnly = $checkOnly || $whoLeft;
+        $whoLeft = $whoLeft && ! $activity;
+        $checkOnly = $checkOnly || $whoLeft || $activity;
         $totals = ['accounts' => 0, 'batches' => 0, ...self::ZERO, 'stayed' => 0, 'back' => 0];
 
         /* A stop asked of an earlier run is not this one's. */
@@ -436,6 +444,7 @@ final class GroupInviteService
             'pid' => getmypid(),
             'check_only' => $checkOnly,
             'left_check' => $whoLeft,
+            'activity_check' => $activity,
             'trigger' => $trigger,
             'started_at' => now()->toIso8601String(),
             'finished_at' => null,
@@ -448,10 +457,12 @@ final class GroupInviteService
 
         $groups = $this->targets();
 
-        $this->log('started', $whoLeft ? 'Who left: check started' : ($checkOnly ? 'Check started' : 'Invite started'), null, null, [
+        $this->log('started', $activity ? 'Activity: check started' : ($whoLeft ? 'Who left: check started' : ($checkOnly ? 'Check started' : 'Invite started')), null, null, [
             'trigger' => $trigger,
             'check_only' => $checkOnly,
             'left_check' => $whoLeft,
+            'activity_check' => $activity,
+            'only_active' => $this->onlyActive,
             'audience' => $config['audience'],
             'pid' => getmypid(),
             'groups' => $groups->pluck('link')->all(),
@@ -467,6 +478,17 @@ final class GroupInviteService
 
         $this->releaseStuck();
 
+        /* Who wrote four days ago is not "lately" any more: the green are told again. Never stops the run. */
+        try {
+            $recoloured = $this->activity->recompute();
+
+            if ($recoloured['green'] + $recoloured['red'] > 0) {
+                $say("Activity: {$recoloured['green']} became active, {$recoloured['red']} inactive since the last look");
+            }
+        } catch (Throwable $e) {
+            Log::warning('Group invite: the activity colours were not told again', ['message' => $e->getMessage()]);
+        }
+
         if ($groups->isEmpty() && ! $checkOnly) {
             $this->log('finished', 'No active groups, nothing to do', null, null, ['reason' => 'no_groups', ...$totals]);
             $this->finish();
@@ -478,7 +500,7 @@ final class GroupInviteService
         $excluded = array_map('intval', (array) $config['excluded_accounts']);
         $usedAccountIds = $excluded;
 
-        if ($whoLeft) {
+        if ($whoLeft || $activity) {
             $this->leftByList($config, $say, $excluded, $totals);
 
             /* Whoever the lists could not settle is looked up by the account that added them; not by one in trouble already. */
@@ -528,7 +550,11 @@ final class GroupInviteService
 
             $usedAccountIds[] = $account->id;
 
-            $toCheck = $whoLeft ? $this->toRecheck($account->id)->exists() : $this->hasSent($account);
+            $toCheck = match (true) {
+                $activity => true,
+                $whoLeft => $this->toRecheck($account->id)->exists(),
+                default => $this->hasSent($account),
+            };
 
             if (! $toCheck && ($checkOnly || ! $this->hasWork($account, $config))) {
                 $this->pool->release($account, ProcessEnum::GroupInvite);
@@ -552,9 +578,11 @@ final class GroupInviteService
                     continue;
                 }
 
-                $result = $whoLeft
-                    ? $this->checkLeft($api, $account, $config, $say)
-                    : $this->runAccount($api, $account, $config, $say, $checkOnly);
+                $result = match (true) {
+                    $activity => $this->lookAtPeople($api, $account, $say),
+                    $whoLeft => $this->checkLeft($api, $account, $config, $say),
+                    default => $this->runAccount($api, $account, $config, $say, $checkOnly),
+                };
 
                 $totals['batches'] += $result['calls'] ?? 0;
                 $totals['stayed'] += $result['stayed'] ?? 0;
@@ -589,10 +617,10 @@ final class GroupInviteService
 
         $this->log(
             'finished',
-            $this->stopping ? 'Stopped from the panel' : ($whoLeft ? 'Who left: check finished' : ($checkOnly ? 'Check finished' : 'Invite finished')),
+            $this->stopping ? 'Stopped from the panel' : ($activity ? 'Activity: check finished' : ($whoLeft ? 'Who left: check finished' : ($checkOnly ? 'Check finished' : 'Invite finished'))),
             null,
             null,
-            [...$totals, 'stopped' => $this->stopping, 'left_check' => $whoLeft],
+            [...$totals, 'stopped' => $this->stopping, 'left_check' => $whoLeft, 'activity_check' => $activity],
         );
         $this->finish();
 
@@ -1334,6 +1362,15 @@ final class GroupInviteService
             return $result;
         }
 
+        /* Once a day before it invites, the account looks at who of its people is active: only they are taken. */
+        if ($this->onlyActive && $this->activity->dueFor($account)) {
+            $this->lookAtPeople($api, $account, $say);
+
+            if ($this->stopping()) {
+                return $result;
+            }
+        }
+
         while (! $this->stopping()) {
             if ($this->callsToday($account->id) >= $this->dailyCap($account, $config)) {
                 $this->cleanDay($account);
@@ -1761,6 +1798,32 @@ final class GroupInviteService
     }
 
     /**
+     * The account looks at who of its people is active (PeopleActivity):
+     * its contacts' statuses, who wrote in its groups lately. Invites
+     * nothing; the run's totals get nothing from it.
+     *
+     * @param callable(string): void $say
+     *
+     * @return array{}
+     */
+    private function lookAtPeople(API $api, TelegramAccount $account, callable $say): array
+    {
+        $this->doing('activity');
+
+        $done = $this->activity->checkAccount($api, $account, $say, fn () => $this->stopping());
+
+        $this->log(TelegramGroupInviteLog::EVENT_CHECK, "Activity: {$done['contacts']} contacts looked at, {$done['groups']} groups read, {$done['authors']} wrote lately, {$done['green']} active, {$done['new']} new to the base"
+            . ($done['error'] !== null ? ", stopped by {$done['error']}" : ''), $account->id, null, [
+            'mode' => 'activity',
+            ...$done,
+        ]);
+
+        GroupInviteBase::forget();
+
+        return [];
+    }
+
+    /**
      * People this account sent earlier whose check broke off, or who were
      * sent before checks were made: each is looked up in the group now.
      *
@@ -2057,7 +2120,10 @@ final class GroupInviteService
     {
         /** @var Collection<int, TelegramInviteGroup> $pending */
         $pending = TelegramInviteGroup::query()
-            ->whereIn('id', TelegramGroupInvite::query()->whereIn('status', TelegramGroupInvite::ADDED)->select('invite_group_id'))
+            ->where(fn ($q) => $q
+                ->whereIn('id', TelegramGroupInvite::query()->whereIn('status', TelegramGroupInvite::ADDED)->select('invite_group_id'))
+                /* Its members are green for the invites: read even with nobody of ours added. */
+                ->orWhere('members_welcome', true))
             ->orderBy('id')
             ->get()
             ->keyBy('id');
@@ -2268,6 +2334,11 @@ final class GroupInviteService
                 $participants = is_array($page) ? (array) ($page['participants'] ?? []) : [];
                 $count = is_array($page) ? (int) ($page['count'] ?? 0) : 0;
                 $most = max($most, $count);
+
+                /* Everybody's status comes with the list: kept; a welcome group's members are green. A fault here never stops the reading. */
+                if (is_array($page)) {
+                    PeopleActivity::quietly((array) ($page['users'] ?? []), insert: (bool) $group->members_welcome, ourGroup: (bool) $group->members_welcome);
+                }
 
                 if ($participants === []) {
                     break;
@@ -2654,6 +2725,11 @@ final class GroupInviteService
 
         $open = $this->openGroups($account, $this->targets());
 
+        /* Its people not looked at yet: nobody of them is green before the look, the look makes the work. */
+        if ($this->onlyActive && $open->isNotEmpty() && $this->activity->dueFor($account)) {
+            return true;
+        }
+
         if ($open->contains(fn (TelegramInviteGroup $group) => $this->candidates($account, $group, 1)->isNotEmpty())) {
             return true;
         }
@@ -2779,6 +2855,7 @@ final class GroupInviteService
                 fn ($q) => $q->where('can_add_to_group', true),
                 fn ($q) => $q->addableToGroup(),
             )
+            ->when($this->onlyActive ?? (bool) $this->settings->current()['only_active'], fn ($q) => $q->where('invite_ok', true))
             ->when($own !== [], fn ($q) => $q->whereNotIn('telegram_user_id', $own))
             ->whereNotIn(
                 'id',

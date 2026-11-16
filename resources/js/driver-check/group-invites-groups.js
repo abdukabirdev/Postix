@@ -186,6 +186,17 @@ export function groupInvitesGroupsPage(config) {
             await this.act(`${this.endpoints.index}/${group.id}`, 'PATCH', { is_active: false });
         },
 
+        /* Its members count as people who do not mind being invited: green for the other groups. */
+        async toggleWelcome(group) {
+            const on = !group.members_welcome;
+
+            if (!window.confirm((on ? t.groups.welcome_on_confirm : t.groups.welcome_off_confirm).replace(':group', group.title || group.link))) {
+                return;
+            }
+
+            await this.act(`${this.endpoints.index}/${group.id}`, 'PATCH', { members_welcome: on });
+        },
+
         async archive(group) {
             if (!window.confirm(t.groups.archive_confirm)) {
                 return;

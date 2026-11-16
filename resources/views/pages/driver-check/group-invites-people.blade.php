@@ -65,6 +65,8 @@
                     @endforeach
                 </x-driver-check.select>
 
+                <x-driver-check.chips items="activityChips()" selected="filters.activity" action="setActivity" :title="__('driver_check.invites.activity.rule')" />
+
                 <div x-show="filters.flag === 'untried'" x-cloak>
                     <x-driver-check.chips items="reachChips()" selected="filters.reach" action="setReach" :title="__('driver_check.invites.people.reach_hint')" />
                 </div>
@@ -91,11 +93,12 @@
             <p x-show="!loading && rows.length === 0" x-cloak class="dc-none">{{ __('driver_check.invites.people.empty') }}</p>
 
             <div x-show="rows.length > 0" x-cloak>
-                <x-driver-check.table min="860px">
+                <x-driver-check.table min="1000px">
                     <thead>
                         <tr>
                             <th>{{ __('driver_check.invites.people.cols.person') }}</th>
                             <th>{{ __('driver_check.invites.people.cols.stand') }}</th>
+                            <th>{{ __('driver_check.invites.people.cols.activity') }}</th>
                             <th>{{ __('driver_check.invites.people.cols.groups') }}</th>
                             <th class="dc-acts"></th>
                         </tr>
@@ -118,6 +121,14 @@
                                         <span x-text="flagLabel(row.flag)"></span>
                                     </x-driver-check.badge>
                                     <span x-show="reasonLine(row)" x-cloak class="dc-sub2 max-w-[260px] truncate !whitespace-normal" x-text="reasonLine(row)"></span>
+                                </td>
+
+                                {{-- Worth inviting: active lately or not --}}
+                                <td>
+                                    <x-driver-check.badge x-bind:class="activityTone(row.activity)">
+                                        <span x-text="t.activity[row.activity]"></span>
+                                    </x-driver-check.badge>
+                                    <span x-show="activityLine(row)" x-cloak class="dc-sub2 max-w-[240px] truncate !whitespace-normal" x-text="activityLine(row)"></span>
                                 </td>
 
                                 {{-- What became of them in each of our groups --}}

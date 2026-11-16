@@ -20,6 +20,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property string|null $title
  * @property string      $link
  * @property bool        $is_active
+ * @property bool        $members_welcome whose members do not mind being invited: green
  */
 class TelegramInviteGroup extends Model
 {
@@ -33,6 +34,7 @@ class TelegramInviteGroup extends Model
         'members_after',
         'members_checked_at',
         'is_active',
+        'members_welcome',
         'last_error',
     ];
 
@@ -40,6 +42,7 @@ class TelegramInviteGroup extends Model
     {
         return [
             'is_active' => 'boolean',
+            'members_welcome' => 'boolean',
             'telegram_chat_id' => 'integer',
             'members_before' => 'integer',
             'members_after' => 'integer',

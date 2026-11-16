@@ -29,6 +29,12 @@ class TelegramScrapedUser extends Model
         'can_add_to_group',
         'add_to_group_error',
         'add_to_group_checked_at',
+        'invite_ok',
+        'last_seen_at',
+        'seen_status',
+        'last_posted_at',
+        'our_group_at',
+        'activity_checked_at',
     ];
 
     protected function casts(): array
@@ -38,6 +44,11 @@ class TelegramScrapedUser extends Model
             'is_bot' => 'boolean',
             'can_add_to_group' => 'boolean',
             'add_to_group_checked_at' => 'datetime',
+            'invite_ok' => 'boolean',
+            'last_seen_at' => 'datetime',
+            'last_posted_at' => 'datetime',
+            'our_group_at' => 'datetime',
+            'activity_checked_at' => 'datetime',
         ];
     }
 
@@ -86,6 +97,20 @@ class TelegramScrapedUser extends Model
     public function scopeAddableToGroup(Builder $query): Builder
     {
         return $query->where(fn ($q) => $q->whereNull('can_add_to_group')->orWhere('can_add_to_group', true));
+    }
+
+    /**
+     * Green, red or not checked yet: whether the person lives in Telegram
+     * enough to be invited (PeopleActivity).
+     */
+    public function scopeWhereActivity(Builder $query, string $state): Builder
+    {
+        return match ($state) {
+            'green' => $query->where('invite_ok', true),
+            'red' => $query->where('invite_ok', false),
+            'unchecked' => $query->whereNull('invite_ok'),
+            default => $query,
+        };
     }
 
     public function groups(): BelongsToMany

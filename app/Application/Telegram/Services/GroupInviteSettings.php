@@ -27,6 +27,10 @@ final class GroupInviteSettings
         'delay_min' => [0, 300],
         'delay_max' => [0, 300],
         'usernames_per_day' => [0, 500],
+        'posted_days' => [1, 30],
+        'seen_days' => [1, 60],
+        'activity_hours' => [1, 168],
+        'activity_groups' => [0, 100],
     ];
 
     /** Everybody not refused yet, those added before first; or only those added before. */
@@ -40,7 +44,7 @@ final class GroupInviteSettings
     public const WARM_UP = [0.5, 0.6, 0.7, 0.85];
 
     /**
-     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, only_active: bool, posted_days: int, seen_days: int, activity_hours: int, activity_groups: int, excluded_accounts: list<int>}
      */
     public function defaults(): array
     {
@@ -80,12 +84,26 @@ final class GroupInviteSettings
              * unknown is spent on. People Telegram refused never are.
              */
             'audience' => self::AUDIENCE_ALL,
+            /*
+             * Only people who live in Telegram are invited (the owner,
+             * 2026-11-16): wrote in a group in the last posted_days days,
+             * or were online in the last seen_days, or sit in our welcome
+             * groups (PeopleActivity). The rest - and whoever is not
+             * checked yet - waits.
+             */
+            'only_active' => true,
+            'posted_days' => 3,
+            'seen_days' => 7,
+            /* Each account looks at its people again after this many hours: its contacts' statuses, who wrote in its groups. */
+            'activity_hours' => 20,
+            /* The groups one account reads the last days' messages of in one look. */
+            'activity_groups' => 15,
             'excluded_accounts' => self::listenerIds(),
         ];
     }
 
     /**
-     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, only_active: bool, posted_days: int, seen_days: int, activity_hours: int, activity_groups: int, excluded_accounts: list<int>}
      */
     public function current(): array
     {
@@ -97,7 +115,7 @@ final class GroupInviteSettings
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, only_active: bool, posted_days: int, seen_days: int, activity_hours: int, activity_groups: int, excluded_accounts: list<int>}
      */
     public function save(array $input): array
     {
@@ -109,7 +127,7 @@ final class GroupInviteSettings
     }
 
     /**
-     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, only_active: bool, posted_days: int, seen_days: int, activity_hours: int, activity_groups: int, excluded_accounts: list<int>}
      */
     public function reset(): array
     {
@@ -221,7 +239,7 @@ final class GroupInviteSettings
     /**
      * @param array<string, mixed> $input
      *
-     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, excluded_accounts: list<int>}
+     * @return array{enabled: bool, schedule_at: string, runs_per_day: int, batch_size: int, batches_per_day: int, warm_up: bool, delay_min: int, delay_max: int, use_usernames: bool, usernames_per_day: int, audience: string, only_active: bool, posted_days: int, seen_days: int, activity_hours: int, activity_groups: int, excluded_accounts: list<int>}
      */
     private function normalise(array $input): array
     {
@@ -235,6 +253,7 @@ final class GroupInviteSettings
         $values['enabled'] = filter_var($values['enabled'], FILTER_VALIDATE_BOOLEAN);
         $values['use_usernames'] = filter_var($values['use_usernames'], FILTER_VALIDATE_BOOLEAN);
         $values['warm_up'] = filter_var($values['warm_up'], FILTER_VALIDATE_BOOLEAN);
+        $values['only_active'] = filter_var($values['only_active'], FILTER_VALIDATE_BOOLEAN);
 
         if (! in_array($values['audience'], self::AUDIENCES, true)) {
             $values['audience'] = self::AUDIENCE_ALL;

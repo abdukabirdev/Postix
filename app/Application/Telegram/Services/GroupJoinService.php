@@ -740,6 +740,9 @@ final class GroupJoinService
             'score' => $group->score,
         ]);
 
+        /* Who wrote there lately is active: kept; only a group of our topic brings new people into the base. */
+        PeopleActivity::quietly([], (array) $history, ! in_array($group->reject_reason, ['off_topic', 'script', 'channel'], true));
+
         /* Only a group of our topic is followed further: its neighbours are likely ours too. */
         if (in_array($group->reject_reason, ['off_topic', 'script', 'channel'], true)) {
             return 0;
@@ -1240,6 +1243,9 @@ final class GroupJoinService
                 'seen_at' => $now,
             ])->all());
         }
+
+        /* Everybody's status comes with the list: whether they are worth inviting is known at once. */
+        PeopleActivity::quietly($users);
 
         return count($rows);
     }

@@ -498,10 +498,10 @@ final class GroupJoinTest extends TestCase
 
         $people = fn (array $query) => $controller->people(Request::create('/', 'GET', $query))->getData(true);
 
-        $this->assertSame(2, $people([])['meta']['total']);
+        $this->assertSame(2, $people(['part' => 'total'])['total']);
         $this->assertSame(['ali_aka'], array_column($people(['search' => '@ali'])['data'], 'username'));
         $this->assertSame(['ali_aka'], array_column($people(['search' => '99890111'])['data'], 'username'));
-        $this->assertSame(1, $people(['phone' => 1])['meta']['total']);
+        $this->assertSame(1, $people(['phone' => 1, 'part' => 'total'])['total']);
         $this->assertSame('joined_one', $people(['group_id' => $joined->id])['group']['link']);
 
         /* Handed to the contact sync: it reads the group from now on. */

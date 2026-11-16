@@ -6,6 +6,7 @@ namespace App\Http\Controllers\Api\Telegram;
 
 use App\Application\Telegram\Services\GroupInviteBase;
 use App\Application\Telegram\Services\GroupInviteSettings;
+use App\Application\Telegram\Services\PeopleActivity;
 use App\Http\Controllers\Controller;
 use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramInviteGroup;
@@ -42,6 +43,7 @@ final class GroupInvitePeopleController extends Controller
         $data = $request->validate([
             'flag' => ['nullable', 'in:' . implode(',', GroupInviteBase::FLAGS)],
             'reach' => ['nullable', 'in:reachable,unreachable'],
+            'activity' => ['nullable', 'in:' . implode(',', PeopleActivity::STATES)],
             'group_id' => ['nullable', 'integer'],
             'status' => ['nullable', 'in:' . implode(',', self::GROUP_STATUSES) . ',added'],
             'search' => ['nullable', 'string', 'max:100'],
@@ -113,6 +115,7 @@ final class GroupInvitePeopleController extends Controller
         return $this->base->people()
             ->when(filled($data['flag'] ?? null), fn ($q) => $this->base->whereFlag($q, $data['flag']))
             ->when(filled($data['reach'] ?? null), fn ($q) => $this->base->whereReachable($q, (bool) $config['use_usernames'], $data['reach'] === 'reachable'))
+            ->when(filled($data['activity'] ?? null), fn ($q) => $q->whereActivity($data['activity']))
             ->when($groupId !== null, fn ($q) => $q->whereHas('groupInvites', fn ($q) => $q
                 ->where('invite_group_id', $groupId)
                 ->when($status !== null, fn ($q) => $q->whereIn('status', $status === 'added' ? TelegramGroupInvite::ADDED : [$status]))))
@@ -145,6 +148,13 @@ final class GroupInvitePeopleController extends Controller
     private function total(array $data, $query, array $config): int
     {
         $narrowed = filled($data['group_id'] ?? null) || filled($data['status'] ?? null) || filled($data['search'] ?? null);
+
+        /* Only the colour chosen: counted with the base already. */
+        if (! $narrowed && filled($data['activity'] ?? null) && ! filled($data['flag'] ?? null) && ! filled($data['reach'] ?? null)) {
+            return $this->base->cachedCounts($config)[$data['activity']];
+        }
+
+        $narrowed = $narrowed || filled($data['activity'] ?? null);
         $flag = $data['flag'] ?? null;
         $reach = $data['reach'] ?? null;
 
@@ -209,6 +219,16 @@ final class GroupInvitePeopleController extends Controller
             ),
             'reason' => $user->add_to_group_error,
             'flag_at' => $user->add_to_group_checked_at,
+            'activity' => match ($user->invite_ok) {
+                true => PeopleActivity::GREEN,
+                false => PeopleActivity::RED,
+                default => PeopleActivity::UNCHECKED,
+            },
+            'last_seen_at' => $user->last_seen_at,
+            'seen_status' => $user->seen_status,
+            'last_posted_at' => $user->last_posted_at,
+            'our_group_at' => $user->our_group_at,
+            'activity_checked_at' => $user->activity_checked_at,
             'groups' => $tries->map(fn (TelegramGroupInvite $try) => [
                 'group_id' => $try->invite_group_id,
                 'title' => $try->group ? ($try->group->title ?: $try->group->link) : '#' . $try->invite_group_id,

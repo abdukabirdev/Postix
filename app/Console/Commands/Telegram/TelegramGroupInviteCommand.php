@@ -23,7 +23,8 @@ final class TelegramGroupInviteCommand extends Command
     protected $signature = 'telegram:group-invites
         {--trigger=manual : Who started it: manual or schedule}
         {--check : Only look up the people already sent in their groups, invite nobody}
-        {--left : Who left: read the groups\' members lists, look up one by one whoever they do not settle, invite nobody}';
+        {--left : Who left: read the groups\' members lists, look up one by one whoever they do not settle, invite nobody}
+        {--activity : Every account looks at who of its people is active (contacts\' statuses, who wrote in its groups), invite nobody}';
 
     protected $description = 'Invite the accounts\' contacts into the chosen groups';
 
@@ -55,6 +56,7 @@ final class TelegramGroupInviteCommand extends Command
                 $trigger,
                 (bool) $this->option('check'),
                 (bool) $this->option('left'),
+                (bool) $this->option('activity'),
             );
         } catch (Throwable $e) {
             $this->error($e->getMessage());

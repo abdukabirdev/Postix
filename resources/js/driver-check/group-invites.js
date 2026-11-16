@@ -168,6 +168,10 @@ export function groupInvitesPage(config) {
             this.start(this.endpoints.checkLeft, t.overview.left_confirm);
         },
 
+        checkActivity() {
+            this.start(this.endpoints.checkActivity, t.overview.activity_confirm);
+        },
+
         /* Every account asks @SpamBot about its limits; the answers come to the accounts page. Not a run: nothing to follow here. */
         async askSpamBot() {
             if (this.busy || !this.endpoints.spamCheck) {
@@ -211,7 +215,7 @@ export function groupInvitesPage(config) {
         */
 
         base() {
-            return this.data?.base ?? { total: 0, processed: 0, can: 0, cannot: 0, tried: 0, untried: 0, untried_reachable: 0, untried_unreachable: 0 };
+            return this.data?.base ?? { total: 0, processed: 0, can: 0, cannot: 0, tried: 0, untried: 0, untried_reachable: 0, untried_unreachable: 0, green: 0, red: 0, unchecked: 0 };
         },
 
         /* The four parts of the bar, in a fixed order; an empty one takes no room. */

@@ -11,6 +11,7 @@
             run: @js(route('api.telegram.group-invites.run')),
             check: @js(route('api.telegram.group-invites.check')),
             checkLeft: @js(route('api.telegram.group-invites.check-left')),
+            checkActivity: @js(route('api.telegram.group-invites.check-activity')),
             stop: @js(route('api.telegram.group-invites.stop')),
             spamCheck: @js(route('api.telegram.group-invites.accounts.spam-check-all')),
         },
@@ -100,6 +101,9 @@
                 </x-driver-check.button>
                 <x-driver-check.button icon="logout" x-show="!running" x-on:click="checkLeft()" ::disabled="busy || !stages.groups.loaded || data.added.still === 0" :title="__('driver_check.invites.overview.left_hint')">
                     {{ __('driver_check.invites.overview.left_button') }}
+                </x-driver-check.button>
+                <x-driver-check.button icon="users" x-show="!running" x-on:click="checkActivity()" ::disabled="busy || !stages.now.loaded" :title="__('driver_check.invites.overview.activity_hint')">
+                    {{ __('driver_check.invites.overview.activity_button') }}
                 </x-driver-check.button>
                 <x-driver-check.button icon="shield" x-on:click="askSpamBot()" ::disabled="busy" :title="__('driver_check.invites.accounts.spam_hint')">
                     {{ __('driver_check.invites.accounts.spam_ask_all') }}
@@ -292,6 +296,23 @@
                     <a :href="peopleLink({ flag: 'untried', reach: 'reachable' })" class="font-medium text-gray-900 hover:underline dark:text-white" x-text="t.overview.untried_reachable.replace(':n', number(base().untried_reachable))"></a>
                     ·
                     <a :href="peopleLink({ flag: 'untried', reach: 'unreachable' })" class="font-medium text-gray-900 hover:underline dark:text-white" x-text="t.overview.untried_unreachable.replace(':n', number(base().untried_unreachable))"></a>
+                </p>
+
+                {{-- Worth inviting: only the green ones are taken while "only active" is on --}}
+                <p class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-gray-500" :title="t.overview.activity_rule">
+                    <span x-text="t.overview.activity_lead"></span>
+                    <a :href="peopleLink({ activity: 'green' })" class="inline-flex items-center gap-1.5 font-medium text-gray-900 hover:underline dark:text-white">
+                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                        <span x-text="t.activity.green + ' ' + number(base().green)"></span>
+                    </a>
+                    <a :href="peopleLink({ activity: 'red' })" class="inline-flex items-center gap-1.5 font-medium text-gray-900 hover:underline dark:text-white">
+                        <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                        <span x-text="t.activity.red + ' ' + number(base().red)"></span>
+                    </a>
+                    <a :href="peopleLink({ activity: 'unchecked' })" class="inline-flex items-center gap-1.5 font-medium text-gray-900 hover:underline dark:text-white">
+                        <span class="h-2 w-2 rounded-full bg-gray-300 dark:bg-gray-600"></span>
+                        <span x-text="t.activity.unchecked + ' ' + number(base().unchecked)"></span>
+                    </a>
                 </p>
             </div>
         </x-driver-check.block>

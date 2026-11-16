@@ -1811,6 +1811,9 @@ final class ContactSyncService
             );
         }
 
+        /* Everybody's status comes with the list: whether they are worth inviting is known at once. */
+        PeopleActivity::quietly($members);
+
         return $new;
     }
 

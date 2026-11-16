@@ -921,6 +921,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::post('/run', 'run')->name('api.telegram.group-invites.run');
                     Route::post('/check', 'check')->name('api.telegram.group-invites.check');
                     Route::post('/check-left', 'checkLeft')->name('api.telegram.group-invites.check-left');
+                    Route::post('/check-activity', 'checkActivity')->name('api.telegram.group-invites.check-activity');
                     Route::post('/stop', 'stop')->name('api.telegram.group-invites.stop');
                     Route::get('/logs', 'logs')->name('api.telegram.group-invites.logs');
                 });
