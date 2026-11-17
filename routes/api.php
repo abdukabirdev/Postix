@@ -5,6 +5,8 @@ use App\Http\Controllers\Api\Telegram\AccountsReportController;
 use App\Http\Controllers\Api\Telegram\ChatReaderController;
 use App\Http\Controllers\Api\Telegram\ContactSyncDevReportController;
 use App\Http\Controllers\Api\Telegram\GroupInviteReportController;
+use App\Http\Controllers\Api\Telegram\SenderBotReportController;
+use App\Http\Controllers\Api\Telegram\SenderBotWebhookController;
 use App\Http\Controllers\Api\Telegram\SilentPeopleReportController;
 use App\Http\Controllers\Api\Telegram\TelegramAccountController;
 use App\Http\Controllers\Api\Telegram\TelegramBotWebhookController;
@@ -21,6 +23,10 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::post('/telegram/webhook', TelegramBotWebhookController::class)
     ->name('telegram.bot.webhook');
 
+// The sender bot's updates, forwarded by izicrm.uz (our own server does not get Telegram's webhooks).
+Route::post('/telegram/sender-bot/webhook', [SenderBotWebhookController::class, 'handle'])
+    ->name('telegram.sender-bot.webhook');
+
 // The group invites' report for the developer: TELEGRAM_REPORT_TOKEN as a bearer token, read only.
 Route::get('/telegram/report/group-invites', GroupInviteReportController::class)
     ->middleware('throttle:30,1')
@@ -30,6 +36,11 @@ Route::get('/telegram/report/group-invites', GroupInviteReportController::class)
 Route::get('/telegram/report/accounts', AccountsReportController::class)
     ->middleware('throttle:30,1')
     ->name('telegram.report.accounts');
+
+// The sender bot: connected, the posting command alive, posts, copies, groups, its log lines - the same token.
+Route::get('/telegram/report/sender-bot', SenderBotReportController::class)
+    ->middleware('throttle:30,1')
+    ->name('telegram.report.sender-bot');
 
 // Who never answers the penalties (no word, no reaction), the same token.
 Route::get('/telegram/report/silent-people', SilentPeopleReportController::class)

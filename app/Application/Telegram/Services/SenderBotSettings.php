@@ -182,7 +182,7 @@ final class SenderBotSettings
     }
 
     /**
-     * @return array{offset: int, polled_at: string|null, error: string|null, error_at: string|null}
+     * @return array{offset: int, polled_at: string|null, error: string|null, error_at: string|null, ran_at: string|null}
      */
     public function state(): array
     {
@@ -194,6 +194,8 @@ final class SenderBotSettings
             'polled_at' => $state['polled_at'] ?? null,
             'error' => $state['error'] ?? null,
             'error_at' => $state['error_at'] ?? null,
+            /* The last time the posting command was alive (not the webhook). */
+            'ran_at' => $state['ran_at'] ?? null,
         ];
     }
 

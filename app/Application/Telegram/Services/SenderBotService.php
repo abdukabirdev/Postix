@@ -8,21 +8,16 @@ use App\Application\Telegram\Support\BotApi;
 use App\Application\Telegram\Support\BotApiError;
 use App\Models\Telegram\TelegramSenderBotGroup;
 use DomainException;
-use Illuminate\Support\Facades\Log;
-use Throwable;
 
 /**
- * The sender bot itself: the token from the panel, the poll that answers
- * people and posts what is due, and the groups it is in.
+ * The sender bot itself: the token from the panel, the updates (they come
+ * by the webhook set in izicrm.uz and forwarded here - this project never
+ * sets, deletes or polls past it), the posts that are due, the groups.
  */
 final class SenderBotService
 {
-    private const LONG_POLL = 25;
-
-    private const UPDATES = ['message', 'callback_query', 'my_chat_member'];
-
-    /** After a network error, at most this long before asking again, seconds. */
-    private const WAIT_IN_PLACE = 30;
+    /** The longest sleep between two looks at the posts, seconds. */
+    private const NAP = 20;
 
     public function __construct(
         private readonly SenderBotSettings $settings,
@@ -31,11 +26,12 @@ final class SenderBotService
     ) {}
 
     /**
-     * The token typed in the panel: a bot of its own, with no webhook.
+     * The token typed in the panel: a bot of its own. Its webhook (set in
+     * izicrm.uz) is left as it is.
      *
      * @return array{id: int, username: string, name: string}
      *
-     * @throws DomainException taken | webhook
+     * @throws DomainException taken
      * @throws BotApiError
      */
     public function connect(string $token): array
@@ -46,11 +42,6 @@ final class SenderBotService
 
         $api = new BotApi($token);
         $me = (array) $api->call('getMe');
-        $hook = (array) $api->call('getWebhookInfo');
-
-        if (($hook['url'] ?? '') !== '') {
-            throw new DomainException('webhook');
-        }
 
         $bot = [
             'id' => (int) ($me['id'] ?? 0),
@@ -71,16 +62,16 @@ final class SenderBotService
     }
 
     /**
-     * Answers people and posts what is due for $seconds. An update is
-     * marked read only once it is handled.
+     * Posts what is due for $seconds, sleeping until the next round. The
+     * people's messages are not asked for here: they come by the webhook.
      *
      * @param callable(string): void $say
      *
-     * @return array{updates: int, copied: int}
+     * @return array{copied: int}
      */
-    public function poll(int $seconds, callable $say): array
+    public function run(int $seconds, callable $say): array
     {
-        $totals = ['updates' => 0, 'copied' => 0];
+        $totals = ['copied' => 0];
         $token = $this->settings->token();
 
         if ($token === null) {
@@ -90,66 +81,39 @@ final class SenderBotService
         $api = new BotApi($token);
         $until = time() + $seconds;
 
-        while (($wait = min(self::LONG_POLL, $until - time() - 1)) >= 1) {
+        do {
             if (! $this->settings->enabled() || $this->settings->token() !== $token) {
                 break;
             }
 
-            /* What is due goes first; the ask waits no longer than the next round. */
             $totals['copied'] += $this->delivery->dispatch($api, $say);
-            $wait = max(1, min($wait, $this->delivery->dueIn($wait)));
+            $this->settings->setState(['polled_at' => now()->toIso8601String(), 'ran_at' => now()->toIso8601String()]);
 
-            try {
-                $updates = $api->call('getUpdates', [
-                    'offset' => $this->settings->state()['offset'],
-                    'timeout' => $wait,
-                    'allowed_updates' => self::UPDATES,
-                ], $wait + 15);
-            } catch (BotApiError $e) {
-                $this->trouble($e, $say);
+            $nap = min(self::NAP, $this->delivery->dueIn(self::NAP), $until - time() - 1);
 
-                if (in_array($e->getCode(), [401, 409], true)) {
-                    break;
-                }
-
-                sleep(max(3, min(self::WAIT_IN_PLACE, $e->retryAfter)));
-
-                continue;
+            if ($nap >= 1) {
+                sleep($nap);
             }
-
-            $this->settings->setState(['polled_at' => now()->toIso8601String(), 'error' => null, 'error_at' => null]);
-
-            foreach ((array) $updates as $update) {
-                if (! is_array($update) || ! isset($update['update_id'])) {
-                    continue;
-                }
-
-                try {
-                    $this->handle($api, $update);
-                } catch (BotApiError $e) {
-                    $this->trouble($e, $say);
-
-                    /* A person who blocked the bot will never take the answer: read, not asked again. */
-                    if ($e->transient) {
-                        sleep(max(3, min(self::WAIT_IN_PLACE, $e->retryAfter)));
-
-                        continue 2;
-                    }
-                } catch (Throwable $e) {
-                    Log::error('Sender bot: an update failed', ['update' => $update['update_id'], 'error' => $e->getMessage()]);
-                    $say('update ' . $update['update_id'] . ' failed: ' . $e->getMessage());
-                }
-
-                $totals['updates']++;
-                $this->settings->setState(['offset' => (int) $update['update_id'] + 1]);
-            }
-        }
-
-        if ($this->settings->enabled() && $this->settings->token() === $token) {
-            $totals['copied'] += $this->delivery->dispatch($api, $say);
-        }
+        } while (time() < $until - 1);
 
         return $totals;
+    }
+
+    /**
+     * One update, as Telegram sent it to the webhook.
+     *
+     * @throws BotApiError
+     */
+    public function handleUpdate(array $update): void
+    {
+        $api = $this->settings->api();
+
+        if ($api === null || ! $this->settings->enabled()) {
+            return;
+        }
+
+        $this->handle($api, $update);
+        $this->settings->setState(['polled_at' => now()->toIso8601String(), 'error' => null, 'error_at' => null]);
     }
 
     /**
@@ -300,11 +264,5 @@ final class SenderBotService
         }
 
         return null;
-    }
-
-    private function trouble(BotApiError $e, callable $say): void
-    {
-        $this->settings->setState(['error' => mb_substr($e->reason(), 0, 300), 'error_at' => now()->toIso8601String()]);
-        $say('Telegram: ' . $e->getMessage());
     }
 }

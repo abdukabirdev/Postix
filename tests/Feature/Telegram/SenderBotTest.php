@@ -210,23 +210,84 @@ final class SenderBotTest extends TestCase
 
     public function test_a_group_the_bot_is_added_to_shows_up_switched_off(): void
     {
-        $this->fakeTelegram(updates: [[
+        $this->postJson('/api/telegram/sender-bot/webhook', [
             'update_id' => 10,
             'my_chat_member' => [
                 'chat' => ['id' => -1009, 'type' => 'supergroup', 'title' => 'Yuk Toshkent'],
                 'from' => ['id' => self::ADMIN],
                 'new_chat_member' => ['status' => 'administrator', 'user' => ['id' => 900]],
             ],
-        ]]);
-
-        $this->app->make(SenderBotService::class)->poll(2, fn () => null);
+        ], ['X-Postix-Secret' => 'c2283uJ2AdZxSQO-oD9XjDNesZ8CLkLnNUhg-K9xuws'])->assertOk();
 
         $group = TelegramSenderBotGroup::query()->sole();
         $this->assertSame(-1009, $group->chat_id);
         $this->assertSame('Yuk Toshkent', $group->title);
         $this->assertSame('administrator', $group->bot_status);
         $this->assertFalse($group->is_active);
-        $this->assertSame(11, $this->app->make(SenderBotSettings::class)->state()['offset']);
+    }
+
+    public function test_the_runner_only_posts_and_never_touches_the_webhook_or_the_updates(): void
+    {
+        $this->group(-1001, true);
+        $this->makePost($this->approved(), times: 1);
+
+        $this->app->make(SenderBotService::class)->run(2, fn () => null);
+
+        $methods = collect($this->sent)->pluck('method')->unique()->values()->all();
+        $this->assertContains('copyMessage', $methods);
+        $this->assertEmpty(array_intersect($methods, ['getUpdates', 'setWebhook', 'deleteWebhook']));
+    }
+
+    public function test_a_bot_with_a_webhook_is_connected_and_its_webhook_left_alone(): void
+    {
+        $this->app->make(SenderBotSettings::class)->forget();
+
+        $bot = $this->app->make(SenderBotService::class)->connect(self::TOKEN);
+
+        $this->assertSame(self::TOKEN, $this->app->make(SenderBotSettings::class)->token());
+        $this->assertSame(['getMe', 'setMyCommands'], collect($this->sent)->pluck('method')->all());
+        $this->assertSame(555, $bot['id']);
+    }
+
+    public function test_a_forwarded_update_needs_the_secret_and_is_answered_once(): void
+    {
+        $update = ['update_id' => 50, 'message' => $this->message('/start')];
+
+        $this->postJson('/api/telegram/sender-bot/webhook', $update)->assertForbidden();
+        $this->assertSame(0, TelegramSenderBotUser::query()->count());
+
+        $headers = ['X-Postix-Secret' => 'c2283uJ2AdZxSQO-oD9XjDNesZ8CLkLnNUhg-K9xuws'];
+
+        $this->postJson('/api/telegram/sender-bot/webhook', $update, $headers)->assertOk()->assertJson(['ok' => true]);
+        $this->assertSame(TelegramSenderBotUser::STATUS_NEW, $this->person()->status);
+        $this->assertSame(['lang:ru', 'lang:uz'], array_column($this->last('sendMessage')['reply_markup']['inline_keyboard'][0], 'callback_data'));
+
+        /* The same update again (Telegram or izicrm retried): not answered twice. */
+        $this->sent = [];
+        $this->postJson('/api/telegram/sender-bot/webhook', $update, $headers)->assertOk()->assertJson(['skipped' => 'duplicate']);
+        $this->assertSame([], $this->sent);
+    }
+
+    public function test_the_report_shows_the_bot_the_runner_and_the_overdue_posts_to_the_token_only(): void
+    {
+        config(['services.telegram.report_token' => str_repeat('r', 40)]);
+        $this->group(-1001, true);
+        $post = $this->makePost($this->approved());
+        $post->forceFill(['next_at' => now()->subMinutes(5)])->save();
+
+        $this->getJson('/api/telegram/report/sender-bot')->assertNotFound();
+
+        $report = $this->getJson('/api/telegram/report/sender-bot', ['Authorization' => 'Bearer ' . str_repeat('r', 40)])
+            ->assertOk()
+            ->json();
+
+        $this->assertTrue($report['bot']['connected']);
+        $this->assertSame('our_sender_bot', $report['bot']['username']);
+        $this->assertNull($report['runner']['last_run_at']);
+        $this->assertSame($post->id, $report['posts'][0]['id']);
+        $this->assertGreaterThanOrEqual(299, $report['posts'][0]['overdue_seconds']);
+        $this->assertTrue($report['groups'][0]['usable']);
+        $this->assertStringNotContainsString(self::TOKEN, json_encode($report));
     }
 
     public function test_a_group_ref_is_read_from_a_name_a_link_or_an_id(): void
@@ -268,6 +329,7 @@ final class SenderBotTest extends TestCase
                 ))],
                 'copyMessage' => $this->copy !== null ? ($this->copy)($params) : ['ok' => true, 'result' => ['message_id' => 100 + (++$copies)]],
                 'sendMessage' => ['ok' => true, 'result' => ['message_id' => 1]],
+                'getMe' => ['ok' => true, 'result' => ['id' => 555, 'is_bot' => true, 'first_name' => 'EGS', 'username' => 'egs_yuk_bot']],
                 default => ['ok' => true, 'result' => true],
             });
         });
