@@ -304,6 +304,7 @@ final class JoinBotSettings
         return array_values(array_filter([
             (string) config('telegram.bots.mybot.token'),
             (string) config('services.telegram.alerts.bot_token'),
+            (string) app(SenderBotSettings::class)->token(),
         ], static fn (string $token) => $token !== '' && $token !== 'YOUR-BOT-TOKEN'));
     }
 }

@@ -135,6 +135,16 @@ final class DriverCheckNav
                 ['spam_messages', 'group-invites/spam/messages', 'trash'],
             ],
         ]],
+        ['sender_bot', 'groups', 'message', [
+            'work' => [
+                ['sender_requests', 'sender-bot', 'inbox'],
+                ['sender_posts', 'sender-bot/posts', 'send'],
+            ],
+            'setup' => [
+                ['sender_groups', 'sender-bot/groups', 'users'],
+                ['sender_settings', 'sender-bot/settings', 'sliders-h'],
+            ],
+        ]],
         ['telegram', 'system', 'telegram', [
             'accounts' => [
                 ['sessions', 'sessions', 'key'],

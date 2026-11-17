@@ -17,6 +17,7 @@ use App\Application\Telegram\Services\ClientCheckSender;
 use App\Application\Telegram\Services\DutyOwners;
 use App\Application\Telegram\Services\MessageReactions;
 use App\Application\Telegram\Services\RequestCancellationAsker;
+use App\Application\Telegram\Services\SenderBotNotices;
 use App\Application\Telegram\Services\UntrackedOrdersReminder;
 use App\Application\Telegram\Services\ScheduledMessageSender;
 use App\Application\Telegram\Services\TelegramDriverCheckChats;
@@ -184,6 +185,28 @@ final class TelegramListenerHandler extends SimpleEventHandler
             app(ScheduledMessageSender::class)->flush($this, $listener->key);
         } catch (Throwable $e) {
             Log::error('TelegramListenerHandler: scheduled messages failed', [
+                'key' => self::$key,
+                'error' => $e->getMessage(),
+                'exception' => $e::class,
+            ]);
+        }
+    }
+
+    /**
+     * The sender bot's new requests: the admin is told in a private message,
+     * when the panel chose this listener for it (or it is the first one on).
+     */
+    #[Cron(period: 5.0)]
+    public function notifySenderBotRequests(): void
+    {
+        if ($this->restartRequested) {
+            return;
+        }
+
+        try {
+            app(SenderBotNotices::class)->flush($this, (string) self::$key);
+        } catch (Throwable $e) {
+            Log::error('TelegramListenerHandler: sender bot notice failed', [
                 'key' => self::$key,
                 'error' => $e->getMessage(),
                 'exception' => $e::class,

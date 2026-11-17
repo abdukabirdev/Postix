@@ -393,6 +393,27 @@ final class DriverCheckController extends Controller
         return view('pages.driver-check.group-invites-spam-admins');
     }
 
+    /* The sender bot: one page, cut into its four jobs. */
+    public function senderBot()
+    {
+        return view('pages.driver-check.sender-bot', ['part' => 'requests']);
+    }
+
+    public function senderBotPosts()
+    {
+        return view('pages.driver-check.sender-bot', ['part' => 'posts']);
+    }
+
+    public function senderBotGroups()
+    {
+        return view('pages.driver-check.sender-bot', ['part' => 'groups']);
+    }
+
+    public function senderBotSettings()
+    {
+        return view('pages.driver-check.sender-bot', ['part' => 'settings']);
+    }
+
     public function groupJoin()
     {
         return view(

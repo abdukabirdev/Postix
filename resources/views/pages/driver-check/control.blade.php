@@ -508,6 +508,69 @@
             </div>
 
             {{-- ============================================================
+                 The sender bot: answering or not, requests waiting, the switch
+            ============================================================= --}}
+            <div
+                x-data="dcSenderBot({
+                    part: 'control',
+                    endpoints: {
+                        show: @js(route('api.telegram.sender-bot')),
+                        update: @js(route('api.telegram.sender-bot.update')),
+                    },
+                    translations: @js(__('driver_check.sender_bot')),
+                })"
+            >
+                <x-driver-check.surface class="flex h-full flex-col overflow-hidden">
+                    <div class="{{ $cardHead }}">
+                        <h2 class="{{ $cardTitle }}">
+                            <x-driver-check.icon name="message" class="h-4 w-4 text-gray-400" />
+                            {{ __('driver_check.control.cards.sender_bot') }}
+                        </h2>
+                        <a href="{{ route('driver-check.sender-bot.settings') }}" class="{{ $cardLink }}">{{ __('driver_check.control.open') }} →</a>
+                    </div>
+
+                    <div class="p-4">
+                        <div x-show="!loaded && loading" class="dc-skeleton h-16 rounded-xl bg-gray-100 dark:bg-white/[0.06]"></div>
+
+                        <template x-if="loaded">
+                            <div class="flex flex-col gap-3">
+                                <div class="flex items-start gap-3">
+                                    <span class="dc-dot mt-[7px] shrink-0" :class="state().tone"></span>
+                                    <div class="min-w-0 text-[13px]">
+                                        <p class="font-semibold text-gray-950 dark:text-white" x-text="bot.connected ? '@' + bot.username : t.bot.not_connected"></p>
+                                        <p class="mt-0.5 text-gray-500" x-text="state().text"></p>
+                                    </div>
+                                </div>
+
+                                <dl x-show="bot.connected" class="grid grid-cols-2 gap-3">
+                                    <a href="{{ route('driver-check.sender-bot') }}" class="rounded-xl bg-gray-50 px-3 py-2.5 dark:bg-white/[0.03]">
+                                        <dt class="text-[11.5px] text-gray-500">{{ __('driver_check.sender_bot.numbers.pending') }}</dt>
+                                        <dd class="text-lg font-semibold tabular-nums" :class="counts.pending > 0 ? 'text-warning-600 dark:text-warning-400' : 'text-gray-950 dark:text-white'" x-text="number(counts.pending)"></dd>
+                                    </a>
+                                    <a href="{{ route('driver-check.sender-bot.posts') }}" class="rounded-xl bg-gray-50 px-3 py-2.5 dark:bg-white/[0.03]">
+                                        <dt class="text-[11.5px] text-gray-500">{{ __('driver_check.sender_bot.numbers.posts_active') }}</dt>
+                                        <dd class="text-lg font-semibold tabular-nums text-gray-950 dark:text-white" x-text="number(counts.posts_active)"></dd>
+                                    </a>
+                                </dl>
+                            </div>
+                        </template>
+                    </div>
+
+                    <div class="{{ $cardFoot }}">
+                        <x-driver-check.button size="sm" variant="danger" icon="stop" x-show="loaded && bot.connected && bot.enabled" x-cloak x-on:click="toggle()" ::disabled="busy">
+                            {{ __('driver_check.control.bot.off') }}
+                        </x-driver-check.button>
+                        <x-driver-check.button size="sm" variant="primary" icon="play" x-show="loaded && bot.connected && !bot.enabled" x-cloak x-on:click="toggle()" ::disabled="busy">
+                            {{ __('driver_check.control.bot.on') }}
+                        </x-driver-check.button>
+                        <x-driver-check.button size="sm" icon="key" x-show="loaded && !bot.connected" x-cloak :href="route('driver-check.sender-bot.settings')">
+                            {{ __('driver_check.tree.pages.sender_settings') }}
+                        </x-driver-check.button>
+                    </div>
+                </x-driver-check.surface>
+            </div>
+
+            {{-- ============================================================
                  The queue every background step goes through
             ============================================================= --}}
             <div

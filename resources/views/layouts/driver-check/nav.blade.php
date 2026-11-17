@@ -12,9 +12,12 @@
     $dcHereSection = $dcHere['section']['key'] ?? null;
     $dcHerePath = $dcHere['item']['path'] ?? null;
     $dcOnHome = '/' . trim(request()->path(), '/') === \App\Helpers\DriverCheckNav::HOME;
+    /* The sender bot's requests waiting: a badge on its section and page, kept fresh by one poller. */
+    $dcSenderPending = \App\Http\Controllers\Api\Telegram\SenderBotController::pendingCount();
 @endphp
 
 <nav class="dc-nav" x-data="dcNav(@js($dcHereSection))" aria-label="{{ __('driver_check.nav.sections') }}">
+    <span hidden x-init="$store.dcSenderBadge.start(@js(route('api.telegram.sender-bot.badge')), {{ $dcSenderPending }}, @js(__('driver_check.sender_bot.badge_toast')))"></span>
     <a href="{{ url(\App\Helpers\DriverCheckNav::HOME) }}" class="dc-nav__home" @if ($dcOnHome) aria-current="page" @endif>
         <x-driver-check.icon name="command" class="dc-nav__icon" />
         {{ __('driver_check.tree.home') }}
@@ -37,6 +40,9 @@
                 >
                     <x-driver-check.icon :name="$section['icon']" class="dc-nav__icon" />
                     <span class="min-w-0 flex-1 truncate">{{ $section['title'] }}</span>
+                    @if ($section['key'] === 'sender_bot')
+                        <span x-show="$store.dcSenderBadge.pending > 0" @if ($dcSenderPending === 0) x-cloak @endif class="dc-nav__badge" x-text="$store.dcSenderBadge.pending">{{ $dcSenderPending }}</span>
+                    @endif
                     <x-driver-check.icon name="chevron-down" class="dc-nav__chev" />
                 </button>
 
@@ -52,6 +58,9 @@
                                 @if ($item['also']) title="{{ __('driver_check.tree.also', ['section' => \App\Helpers\DriverCheckNav::locate($item['path'])['section']['title'] ?? '']) }}" @endif
                             >
                                 <span class="min-w-0 flex-1">{{ $item['name'] }}</span>
+                                @if ($item['key'] === 'sender_requests')
+                                    <span x-show="$store.dcSenderBadge.pending > 0" @if ($dcSenderPending === 0) x-cloak @endif class="dc-nav__badge" x-text="$store.dcSenderBadge.pending">{{ $dcSenderPending }}</span>
+                                @endif
                                 @if ($item['also'])
                                     <x-driver-check.icon name="external" class="dc-nav__also" />
                                 @endif

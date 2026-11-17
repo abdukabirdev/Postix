@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\Telegram\GroupInviteAnalysisController;
 use App\Http\Controllers\Api\Telegram\GroupInviteRankingController;
 use App\Http\Controllers\Api\Telegram\DriverGroupController;
 use App\Http\Controllers\Api\Telegram\GroupInviteBotController;
+use App\Http\Controllers\Api\Telegram\SenderBotController;
 use App\Http\Controllers\Api\Telegram\GroupInviteMemberController;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamAdminController;
 use App\Http\Controllers\Api\Telegram\GroupInviteSpamController;
@@ -455,6 +456,22 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/group-invites/spam/admins',
             [DriverCheckController::class, 'groupInvitesSpamAdmins']
         )->name('driver-check.group-invites.spam.admins');
+
+        /*
+         * The sender bot: our people write to it, it posts their message
+         * into the groups the admin set. Requests, posts, groups, settings.
+         */
+        Route::get(
+            '/sender-bot',
+            [DriverCheckController::class, 'senderBot']
+        )->name('driver-check.sender-bot');
+
+        foreach (['posts', 'groups', 'settings'] as $senderPage) {
+            Route::get(
+                "/sender-bot/{$senderPage}",
+                [DriverCheckController::class, 'senderBot' . ucfirst($senderPage)]
+            )->name("driver-check.sender-bot.{$senderPage}");
+        }
 
         /*
          * Join group: the marked accounts find groups and join them by
@@ -1002,6 +1019,35 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::post('/spam/admins/invite', 'invite')->name('api.telegram.group-invites.spam.admins.invite');
                     Route::delete('/spam/admins/{spamAdmin}', 'destroy')->name('api.telegram.group-invites.spam.admins.destroy');
                 });
+            });
+
+        /*
+         * The sender bot: requests to use it, its groups, the posts, its settings.
+         */
+        Route::prefix('/sender-bot')
+            ->controller(SenderBotController::class)
+            ->group(function () {
+                Route::get('/', 'show')->name('api.telegram.sender-bot');
+                Route::get('/badge', 'badge')->name('api.telegram.sender-bot.badge');
+                Route::patch('/', 'update')->name('api.telegram.sender-bot.update');
+                Route::put('/token', 'connect')->name('api.telegram.sender-bot.connect');
+                Route::delete('/token', 'disconnect')->name('api.telegram.sender-bot.disconnect');
+                Route::patch('/notify', 'notify')->name('api.telegram.sender-bot.notify');
+                Route::post('/notify/test', 'testNotify')->name('api.telegram.sender-bot.notify.test');
+                Route::patch('/limits', 'limits')->name('api.telegram.sender-bot.limits');
+
+                Route::get('/users', 'users')->name('api.telegram.sender-bot.users');
+                Route::post('/users/{senderBotUser}/decide', 'decide')->name('api.telegram.sender-bot.users.decide');
+                Route::post('/users/{senderBotUser}/renotify', 'renotify')->name('api.telegram.sender-bot.users.renotify');
+
+                Route::get('/groups', 'groups')->name('api.telegram.sender-bot.groups');
+                Route::post('/groups', 'storeGroup')->name('api.telegram.sender-bot.groups.store');
+                Route::post('/groups/check', 'checkGroups')->name('api.telegram.sender-bot.groups.check');
+                Route::patch('/groups/{senderBotGroup}', 'updateGroup')->name('api.telegram.sender-bot.groups.update');
+                Route::delete('/groups/{senderBotGroup}', 'destroyGroup')->name('api.telegram.sender-bot.groups.destroy');
+
+                Route::get('/posts', 'posts')->name('api.telegram.sender-bot.posts');
+                Route::post('/posts/{senderBotPost}/stop', 'stopPost')->name('api.telegram.sender-bot.posts.stop');
             });
 
         /*

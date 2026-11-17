@@ -50,6 +50,15 @@ Schedule::command('telegram:join-requests')
     ->runInBackground()
     ->withoutOverlapping(5);
 
+// The sender bot: our people write to it, it posts their message into the
+// groups the admin set. Each start asks Telegram for under a minute and
+// ends; the token and the switch live in the panel (Sender bot -> Settings).
+Schedule::command('telegram:sender-bot')
+    ->everyMinute()
+    ->when(fn () => app(\App\Application\Telegram\Services\SenderBotSettings::class)->enabled())
+    ->runInBackground()
+    ->withoutOverlapping(5);
+
 // The Join group watchdog: one worker per account marked in the panel, each
 // finding the groups of our topic and joining them by itself. Asked every
 // minute while it is on, so it is back by itself after a reboot or a crash
