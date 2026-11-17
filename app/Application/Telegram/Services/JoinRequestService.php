@@ -290,7 +290,8 @@ final class JoinRequestService
     /**
      * A bot in one of our groups may not write there: whoever added it, the
      * moment it is in. The group's own admins' bots are left alone, and so
-     * is our bot. The bot is marked in the base: the invite never adds it.
+     * are our bots (this one and the sender bot). The bot is marked in the
+     * base: the invite never adds it.
      *
      * @param string $who how the report names it
      *
@@ -301,6 +302,11 @@ final class JoinRequestService
         $current = $this->settings->current();
 
         if ($userId === (int) ($current['bot']['id'] ?? 0)) {
+            return null;
+        }
+
+        /* Our sender bot posts into these groups: it is ours too, never muted. */
+        if ($userId === (int) (app(SenderBotSettings::class)->current()['bot']['id'] ?? 0)) {
             return null;
         }
 

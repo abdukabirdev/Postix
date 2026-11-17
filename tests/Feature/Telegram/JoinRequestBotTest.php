@@ -295,6 +295,17 @@ final class JoinRequestBotTest extends TestCase
         $this->assertContains('chat_member', collect($this->sent)->firstWhere('method', 'getUpdates')['params']['allowed_updates']);
     }
 
+    public function test_our_sender_bot_is_never_muted_in_our_groups(): void
+    {
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'title' => 'Drivers UZ', 'telegram_chat_id' => -1001234, 'is_active' => true]);
+        $this->connect();
+        app(\App\Application\Telegram\Services\SenderBotSettings::class)->saveToken('8981309791:AAddddddddddddddddddddddddddddddddd', ['id' => 8981309791, 'username' => 'egs_yuk_bot', 'name' => 'EGS']);
+        $this->sent = [];
+
+        $this->assertNull($this->app->make(JoinRequestService::class)->muteBot($group, 8981309791, 'EGS'));
+        $this->assertCount(0, collect($this->sent)->where('method', 'restrictChatMember'));
+    }
+
     public function test_every_change_of_a_member_is_written_down_with_who_did_it_and_our_added_people_are_marked(): void
     {
         $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'title' => 'Drivers UZ', 'telegram_chat_id' => -1001234, 'is_active' => true]);
