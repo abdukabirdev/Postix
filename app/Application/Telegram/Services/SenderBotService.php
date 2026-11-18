@@ -6,7 +6,9 @@ namespace App\Application\Telegram\Services;
 
 use App\Application\Telegram\Support\BotApi;
 use App\Application\Telegram\Support\BotApiError;
+use App\Models\Telegram\TelegramSenderBotEvent;
 use App\Models\Telegram\TelegramSenderBotGroup;
+use App\Models\Telegram\TelegramSenderBotUser;
 use DomainException;
 
 /**
@@ -23,6 +25,8 @@ final class SenderBotService
         private readonly SenderBotSettings $settings,
         private readonly SenderBotDialog $dialog,
         private readonly SenderBotDelivery $delivery,
+        private readonly SenderBotAdminDialog $admin,
+        private readonly SenderBotDrivers $drivers,
     ) {}
 
     /**
@@ -53,7 +57,10 @@ final class SenderBotService
 
         /* The commands in the bot's menu. */
         try {
-            $api->call('setMyCommands', ['commands' => [['command' => 'start', 'description' => 'Menu / Menyu']]]);
+            $api->call('setMyCommands', ['commands' => [
+                ['command' => 'start', 'description' => 'Menu / Menyu'],
+                ['command' => 'help', 'description' => 'Помощь / Yordam'],
+            ]]);
         } catch (BotApiError) {
             /* Only the menu button: the bot works without it. */
         }
@@ -140,7 +147,11 @@ final class SenderBotService
             'type' => (string) ($info['type'] ?? ''),
             'is_active' => true,
             'bot_status' => $this->standing($api, (int) $info['id']),
-        ])->save();
+        ]);
+        $group->invite_link = $this->inviteLink($api, $group, $info);
+        $group->save();
+
+        SenderBotHistory::add('group_added', TelegramSenderBotEvent::ACTOR_ADMIN, group: $group, data: ['title' => $group->label()]);
 
         return $group;
     }
@@ -163,6 +174,7 @@ final class SenderBotService
                     'bot_status' => $this->standing($api, $group->chat_id),
                     'last_error' => null,
                 ]);
+                $group->invite_link = $this->inviteLink($api, $group, $info);
             } catch (BotApiError $e) {
                 $group->fill(['bot_status' => 'left', 'last_error' => mb_substr($e->reason(), 0, 500)]);
             }
@@ -183,7 +195,12 @@ final class SenderBotService
         }
 
         if (isset($update['callback_query'])) {
-            $this->dialog->callback($api, (array) $update['callback_query']);
+            $query = (array) $update['callback_query'];
+            $data = (string) ($query['data'] ?? '');
+
+            str_starts_with($data, 'am:') || str_starts_with($data, 'a:')
+                ? $this->admin->callback($api, $query)
+                : $this->dialog->callback($api, $query);
 
             return;
         }
@@ -192,7 +209,11 @@ final class SenderBotService
         $chat = (array) ($message['chat'] ?? []);
 
         if (($chat['type'] ?? '') === 'private') {
-            $this->dialog->message($api, $message);
+            match (true) {
+                $this->admin->wants($message) => $this->admin->message($api, $message),
+                $this->drivers->wants($message) && ! $this->writingPost($message) => $this->drivers->handle($api, $message),
+                default => $this->dialog->message($api, $message),
+            };
 
             return;
         }
@@ -202,6 +223,52 @@ final class SenderBotService
             TelegramSenderBotGroup::query()
                 ->where('chat_id', (int) $chat['id'])
                 ->update(['chat_id' => (int) $message['migrate_to_chat_id'], 'type' => 'supergroup']);
+        }
+    }
+
+    /**
+     * An operator in the middle of a post may forward a message to post it:
+     * that is theirs, not a driver's.
+     */
+    private function writingPost(array $message): bool
+    {
+        if (preg_match('/^\/start\s+p\d+$/', trim((string) ($message['text'] ?? ''))) === 1) {
+            return false;
+        }
+
+        $user = TelegramSenderBotUser::query()->where('telegram_user_id', (int) ($message['from']['id'] ?? 0))->first();
+
+        return $user !== null
+            && $user->status === TelegramSenderBotUser::STATUS_APPROVED
+            && $user->step === SenderBotDialog::STEP_TEXT;
+    }
+
+    /**
+     * The link people open a group by when it has no @name: the one Telegram
+     * gives the bot (it is admin), or a link of its own the bot makes - never
+     * the main link exported anew, which would cut off the old one. Kept as
+     * it was when none can be had (the admin may have typed it).
+     */
+    private function inviteLink(BotApi $api, TelegramSenderBotGroup $group, array $info): ?string
+    {
+        if (isset($info['username'])) {
+            return $group->invite_link;
+        }
+
+        if (is_string($info['invite_link'] ?? null) && $info['invite_link'] !== '') {
+            return $info['invite_link'];
+        }
+
+        if ($group->invite_link !== null || ! in_array($group->bot_status, ['administrator', 'creator'], true)) {
+            return $group->invite_link;
+        }
+
+        try {
+            $link = (array) $api->call('createChatInviteLink', ['chat_id' => $group->chat_id, 'name' => 'Sender bot']);
+
+            return is_string($link['invite_link'] ?? null) ? $link['invite_link'] : null;
+        } catch (BotApiError) {
+            return null;
         }
     }
 
@@ -223,12 +290,18 @@ final class SenderBotService
             $group->is_active = false;
         }
 
+        $before = $group->exists ? $group->botIsIn() : false;
+
         $group->fill([
             'title' => mb_substr((string) ($chat['title'] ?? ''), 0, 255) ?: $group->title,
             'username' => isset($chat['username']) ? (string) $chat['username'] : $group->username,
             'type' => (string) $chat['type'],
             'bot_status' => (string) ($change['new_chat_member']['status'] ?? $group->bot_status),
         ])->save();
+
+        if ($before !== $group->botIsIn()) {
+            SenderBotHistory::add($group->botIsIn() ? 'group_joined' : 'group_left', group: $group, data: ['title' => $group->label(), 'status' => $group->bot_status]);
+        }
     }
 
     private function standing(BotApi $api, int $chatId): ?string

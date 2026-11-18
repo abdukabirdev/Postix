@@ -414,6 +414,16 @@ final class DriverCheckController extends Controller
         return view('pages.driver-check.sender-bot', ['part' => 'settings']);
     }
 
+    public function senderBotLeads()
+    {
+        return view('pages.driver-check.sender-bot', ['part' => 'leads']);
+    }
+
+    public function senderBotHistory()
+    {
+        return view('pages.driver-check.sender-bot', ['part' => 'history']);
+    }
+
     public function groupJoin()
     {
         return view(

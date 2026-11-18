@@ -466,7 +466,7 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             [DriverCheckController::class, 'senderBot']
         )->name('driver-check.sender-bot');
 
-        foreach (['posts', 'groups', 'settings'] as $senderPage) {
+        foreach (['posts', 'groups', 'settings', 'leads', 'history'] as $senderPage) {
             Route::get(
                 "/sender-bot/{$senderPage}",
                 [DriverCheckController::class, 'senderBot' . ucfirst($senderPage)]
@@ -1035,6 +1035,9 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                 Route::patch('/notify', 'notify')->name('api.telegram.sender-bot.notify');
                 Route::post('/notify/test', 'testNotify')->name('api.telegram.sender-bot.notify.test');
                 Route::patch('/limits', 'limits')->name('api.telegram.sender-bot.limits');
+                Route::patch('/options', 'options')->name('api.telegram.sender-bot.options');
+                Route::get('/history', 'history')->name('api.telegram.sender-bot.history');
+                Route::get('/leads', 'leads')->name('api.telegram.sender-bot.leads');
 
                 Route::get('/users', 'users')->name('api.telegram.sender-bot.users');
                 Route::post('/users/{senderBotUser}/decide', 'decide')->name('api.telegram.sender-bot.users.decide');
@@ -1048,6 +1051,10 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
 
                 Route::get('/posts', 'posts')->name('api.telegram.sender-bot.posts');
                 Route::post('/posts/{senderBotPost}/stop', 'stopPost')->name('api.telegram.sender-bot.posts.stop');
+                Route::get('/posts/{senderBotPost}', 'post')->name('api.telegram.sender-bot.posts.show');
+                Route::post('/posts/{senderBotPost}/{action}', 'postAction')
+                    ->whereIn('action', ['pause', 'resume', 'now', 'delete'])
+                    ->name('api.telegram.sender-bot.posts.action');
             });
 
         /*

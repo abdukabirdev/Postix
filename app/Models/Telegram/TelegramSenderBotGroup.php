@@ -16,6 +16,7 @@ class TelegramSenderBotGroup extends Model
         'chat_id',
         'title',
         'username',
+        'invite_link',
         'type',
         'is_active',
         'bot_status',
@@ -45,6 +46,38 @@ class TelegramSenderBotGroup extends Model
     public function botIsIn(): bool
     {
         return ! in_array($this->bot_status, ['left', 'kicked'], true);
+    }
+
+    /**
+     * The link a person opens the group by: its @name, or the invite link
+     * the bot took or the admin typed. Null: nothing to open it by.
+     */
+    public function link(): ?string
+    {
+        if ($this->username !== null && $this->username !== '') {
+            return 'https://t.me/' . $this->username;
+        }
+
+        return $this->invite_link ?: null;
+    }
+
+    /**
+     * The link to one message of the bot in this group: by its @name, or
+     * t.me/c/... for a private supergroup (opens for its members only).
+     */
+    public function messageLink(?int $messageId): ?string
+    {
+        if ($messageId === null || $messageId <= 0 || $this->chat_id === null) {
+            return null;
+        }
+
+        if ($this->username !== null && $this->username !== '') {
+            return 'https://t.me/' . $this->username . '/' . $messageId;
+        }
+
+        $id = (string) $this->chat_id;
+
+        return str_starts_with($id, '-100') ? 'https://t.me/c/' . substr($id, 4) . '/' . $messageId : null;
     }
 
     public function label(): string

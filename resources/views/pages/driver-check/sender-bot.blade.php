@@ -30,6 +30,11 @@
             groupsDestroy: @js(route('api.telegram.sender-bot.groups.destroy', '__ID__')),
             posts: @js(route('api.telegram.sender-bot.posts')),
             postStop: @js(route('api.telegram.sender-bot.posts.stop', '__ID__')),
+            postShow: @js(route('api.telegram.sender-bot.posts.show', '__ID__')),
+            postAction: @js(str_replace('/pause', '/__ACTION__', route('api.telegram.sender-bot.posts.action', ['senderBotPost' => '__ID__', 'action' => 'pause']))),
+            options: @js(route('api.telegram.sender-bot.options')),
+            history: @js(route('api.telegram.sender-bot.history')),
+            leads: @js(route('api.telegram.sender-bot.leads')),
         },
         translations: @js(__('driver_check.sender_bot')),
     })"
@@ -73,7 +78,16 @@
                 </p>
                 @endif
 
-                @if ($part === 'requests' || $part === 'posts')
+                @if ($part === 'posts' || $part === 'history')
+                {{-- One person's list: who, and the way back to everyone --}}
+                <p x-show="personTitle()" x-cloak class="flex flex-wrap items-center gap-2 rounded-xl border border-brand-200 bg-brand-25 px-4 py-2.5 text-[13px] text-brand-800 dark:border-brand-500/30 dark:bg-brand-500/[0.07] dark:text-brand-300">
+                    <x-driver-check.icon name="user" class="h-4 w-4 shrink-0" />
+                    <span class="font-medium" x-text="personTitle()"></span>
+                    <button type="button" class="ml-auto text-[12.5px] font-semibold underline-offset-2 hover:underline" x-on:click="resetPerson()" x-text="part === 'history' ? t.history.reset : t.posts.reset"></button>
+                </p>
+                @endif
+
+                @if ($part === 'requests' || $part === 'posts' || $part === 'leads')
                 {{-- The readings: each is the filter of the list below --}}
                 <div class="dc-stats">
                     <template x-for="tile in tiles()" :key="tile.value">
@@ -135,8 +149,9 @@
                                             <span x-show="!noticeLine(user)" class="text-gray-400">—</span>
                                         </td>
                                         <td class="dc-num">
-                                            <span x-text="number(user.posts)"></span>
+                                            <a :href="personUrl(@js(route('driver-check.sender-bot.posts')), user)" class="font-medium text-brand-600 hover:underline dark:text-brand-400" :title="t.users.show_posts" x-text="number(user.posts)"></a>
                                             <span x-show="user.active_posts > 0" class="dc-sub2" x-text="t.users.active_posts.replace(':count', user.active_posts)"></span>
+                                            <a :href="personUrl(@js(route('driver-check.sender-bot.history')), user)" class="dc-sub2 text-gray-500 hover:underline" x-text="t.users.show_history"></a>
                                         </td>
                                         <td class="dc-acts">
                                             <div class="flex justify-end gap-1.5">
@@ -173,54 +188,272 @@
                     <p x-show="rowsLoaded && rows.length === 0" x-cloak class="dc-none">{{ __('driver_check.sender_bot.posts.empty') }}</p>
 
                     <div x-show="rowsLoaded && rows.length > 0" x-cloak>
-                        <x-driver-check.table min="980px">
+                        <x-driver-check.table min="1000px">
                             <thead>
                                 <tr>
                                     <th class="dc-num">#</th>
                                     <th>{{ __('driver_check.sender_bot.posts.cols.text') }}</th>
                                     <th>{{ __('driver_check.sender_bot.posts.cols.who') }}</th>
                                     <th>{{ __('driver_check.sender_bot.posts.cols.progress') }}</th>
-                                    <th>{{ __('driver_check.sender_bot.posts.cols.interval') }}</th>
                                     <th>{{ __('driver_check.sender_bot.posts.cols.next') }}</th>
                                     <th class="dc-num">{{ __('driver_check.sender_bot.posts.cols.copies') }}</th>
+                                    <th class="dc-num">{{ __('driver_check.sender_bot.posts.cols.leads') }}</th>
                                     <th>{{ __('driver_check.sender_bot.posts.cols.status') }}</th>
                                     <th class="dc-acts"></th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                <template x-for="post in rows" :key="post.id">
-                                    <tr :data-off="post.status !== 'active' || null">
+                            <template x-for="post in rows" :key="post.id">
+                                <tbody>
+                                    <tr :data-off="(post.status !== 'active' && post.status !== 'paused') || null">
                                         <td class="dc-num text-gray-500" x-text="post.id"></td>
                                         <td>
-                                            <span class="dc-main block max-w-[300px] truncate" :title="post.text || ''" x-text="preview(post)"></span>
-                                            <span class="dc-sub2" x-text="time(post.created_at)"></span>
+                                            <button type="button" class="dc-main block max-w-[240px] truncate text-left hover:underline" :title="post.text || ''" x-on:click="toggleDetails(post)" x-text="preview(post)"></button>
+                                            <span class="dc-sub2">
+                                                <span x-text="time(post.created_at)"></span>
+                                                <span x-show="post.groups" x-text="' · ' + (post.groups || []).length + ' 👥'"></span>
+                                                <span x-show="post.repeat_of_id" x-text="' · ' + t.posts.repeat_of.replace(':id', post.repeat_of_id)"></span>
+                                            </span>
                                         </td>
                                         <td>
-                                            <span class="block max-w-[170px] truncate" x-text="post.user ? post.user.name : '—'"></span>
+                                            <template x-if="post.user">
+                                                <a :href="personUrl(@js(route('driver-check.sender-bot.posts')), post.user)" class="block max-w-[170px] truncate hover:underline" x-text="post.user.name"></a>
+                                            </template>
+                                            <span x-show="!post.user">—</span>
                                             <span x-show="post.user && post.user.username" class="dc-sub2" x-text="post.user ? '@' + post.user.username : ''"></span>
                                         </td>
                                         <td class="min-w-[140px]">
                                             <div class="flex items-center gap-2">
                                                 <div class="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-white/[0.07]">
-                                                    <div class="h-full rounded-full" :class="post.status === 'failed' ? 'bg-error-500' : 'bg-brand-500'" :style="`width: ${progress(post)}%`"></div>
+                                                    <div class="h-full rounded-full" :class="post.status === 'failed' ? 'bg-error-500' : (post.status === 'paused' ? 'bg-warning-500' : 'bg-brand-500')" :style="`width: ${progress(post)}%`"></div>
                                                 </div>
                                                 <span class="text-[12px] tabular-nums text-gray-600 dark:text-gray-300" x-text="post.sent_times + ' / ' + post.times"></span>
                                             </div>
+                                            <span x-show="post.times > 1" class="dc-sub2 tabular-nums" x-text="'⏱ ' + interval(post.interval_minutes)"></span>
                                         </td>
-                                        <td class="whitespace-nowrap tabular-nums text-gray-600 dark:text-gray-300" x-text="post.times > 1 ? interval(post.interval_minutes) : '—'"></td>
                                         <td class="tabular-nums text-gray-600 dark:text-gray-300" x-text="post.status === 'active' && post.next_at ? time(post.next_at) : '—'"></td>
                                         <td class="dc-num">
                                             <span x-text="number(post.copies)"></span>
                                             <span x-show="post.failed > 0" class="dc-sub2 text-error-600 dark:text-error-400" :title="post.last_error || ''" x-text="t.posts.failed_copies.replace(':count', post.failed)"></span>
                                         </td>
-                                        <td><span class="dc-tag" :data-tone="postTone(post)" :title="post.last_error || ''" x-text="postStatus(post)"></span></td>
-                                        <td class="dc-acts">
-                                            <x-driver-check.button x-show="post.status === 'active'" size="sm" variant="danger" icon="stop" x-on:click="stopPost(post)" ::disabled="busy">{{ __('driver_check.sender_bot.posts.stop') }}</x-driver-check.button>
+                                        <td class="dc-num" x-text="post.leads ? number(post.leads) : '—'"></td>
+                                        <td>
+                                            <span class="dc-tag" :data-tone="postTone(post)" :title="post.last_error || ''" x-text="postStatus(post)"></span>
+                                            <span x-show="post.delete_asked_at && !post.copies_deleted_at" class="dc-sub2 text-warning-600" x-text="t.posts.deleting"></span>
                                         </td>
+                                        <td class="dc-acts">
+                                            <div class="flex justify-end gap-1">
+                                                <x-driver-check.button x-show="post.status === 'active'" size="icon" variant="ghost" x-on:click="postAction(post, 'pause')" ::disabled="busy" :title="__('driver_check.sender_bot.posts.actions.pause')" :aria-label="__('driver_check.sender_bot.posts.actions.pause')"><x-driver-check.icon name="clock" class="h-4 w-4" /></x-driver-check.button>
+                                                <x-driver-check.button x-show="post.status === 'paused'" size="icon" x-on:click="postAction(post, 'resume')" ::disabled="busy" :title="__('driver_check.sender_bot.posts.actions.resume')" :aria-label="__('driver_check.sender_bot.posts.actions.resume')"><x-driver-check.icon name="play" class="h-4 w-4" /></x-driver-check.button>
+                                                <x-driver-check.button x-show="post.status === 'active' || post.status === 'paused'" size="icon" variant="ghost" x-on:click="postAction(post, 'now')" ::disabled="busy" :title="__('driver_check.sender_bot.posts.actions.now')" :aria-label="__('driver_check.sender_bot.posts.actions.now')"><x-driver-check.icon name="send" class="h-4 w-4" /></x-driver-check.button>
+                                                <x-driver-check.button x-show="post.status === 'active' || post.status === 'paused'" size="icon" variant="danger" x-on:click="stopPost(post)" ::disabled="busy" :title="__('driver_check.sender_bot.posts.stop')" :aria-label="__('driver_check.sender_bot.posts.stop')"><x-driver-check.icon name="stop" class="h-4 w-4" /></x-driver-check.button>
+                                                <x-driver-check.button x-show="post.deletable > 0 && !post.delete_asked_at" size="icon" variant="ghost" x-on:click="postAction(post, 'delete')" ::disabled="busy" :title="__('driver_check.sender_bot.posts.actions.delete')" :aria-label="__('driver_check.sender_bot.posts.actions.delete')">
+                                                    <x-driver-check.icon name="trash" class="h-4 w-4" />
+                                                </x-driver-check.button>
+                                                <x-driver-check.button size="icon" variant="ghost" x-on:click="toggleDetails(post)" ::title="open === post.id ? t.posts.actions.hide : t.posts.actions.details" ::aria-label="open === post.id ? t.posts.actions.hide : t.posts.actions.details">
+                                                    <x-driver-check.icon name="chevron-down" class="h-4 w-4 transition" ::class="open === post.id && 'rotate-180'" />
+                                                </x-driver-check.button>
+                                            </div>
+                                        </td>
+                                    </tr>
+
+                                    {{-- The post in full: message, groups, rounds group by group, drivers, its history --}}
+                                    <tr x-show="open === post.id" x-cloak>
+                                        <td colspan="9" class="!whitespace-normal bg-gray-50/70 dark:bg-white/[0.02]">
+                                            <p x-show="!details[post.id]" class="py-2 text-[12.5px] text-gray-500">{{ __('driver_check.sender_bot.posts.detail.loading') }}</p>
+                                            <template x-if="details[post.id]">
+                                                <div class="grid gap-5 py-2 lg:grid-cols-2">
+                                                    <div class="flex flex-col gap-4">
+                                                        <div>
+                                                            <p class="mb-1 text-[11.5px] font-medium uppercase tracking-wide text-gray-400">{{ __('driver_check.sender_bot.posts.detail.text') }}</p>
+                                                            <p class="whitespace-pre-wrap break-words rounded-xl bg-white px-3.5 py-3 text-[13px] text-gray-800 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-100 dark:ring-gray-800" x-text="details[post.id].text || t.posts.media"></p>
+                                                        </div>
+                                                        <div>
+                                                            <p class="mb-1 text-[11.5px] font-medium uppercase tracking-wide text-gray-400">{{ __('driver_check.sender_bot.posts.detail.groups') }}</p>
+                                                            <p class="text-[13px] text-gray-700 dark:text-gray-200" x-text="groupsOf(details[post.id])"></p>
+                                                        </div>
+                                                        <div>
+                                                            <p class="mb-1.5 text-[11.5px] font-medium uppercase tracking-wide text-gray-400">{{ __('driver_check.sender_bot.posts.detail.rounds') }}</p>
+                                                            <p x-show="details[post.id].rounds.length === 0" class="text-[12.5px] text-gray-500">{{ __('driver_check.sender_bot.posts.detail.no_rounds') }}</p>
+                                                            <div class="flex flex-col gap-2">
+                                                                <template x-for="round in details[post.id].rounds" :key="round.round">
+                                                                    <div class="rounded-xl bg-white px-3.5 py-2.5 ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-gray-800">
+                                                                        <p class="mb-1 flex items-center justify-between text-[12.5px] font-medium text-gray-800 dark:text-gray-100">
+                                                                            <span x-text="t.posts.detail.round.replace(':round', round.round)"></span>
+                                                                            <span class="tabular-nums text-gray-500" x-text="time(round.at) + ' · ' + round.ok + '/' + round.sends.length"></span>
+                                                                        </p>
+                                                                        <ul class="flex flex-col gap-0.5 text-[12.5px]">
+                                                                            <template x-for="(send, i) in round.sends" :key="i">
+                                                                                <li class="flex items-center gap-2">
+                                                                                    <span class="dc-dot shrink-0" :class="send.error ? 'bg-error-500' : (send.deleted_at ? 'bg-gray-400' : 'bg-success-500')"></span>
+                                                                                    <span class="min-w-0 truncate text-gray-700 dark:text-gray-200" x-text="send.group"></span>
+                                                                                    <a x-show="send.link" :href="send.link" target="_blank" rel="noopener" class="shrink-0 text-brand-600 hover:underline dark:text-brand-400">{{ __('driver_check.sender_bot.posts.detail.open') }} ↗</a>
+                                                                                    <span x-show="send.deleted_at" class="shrink-0 text-gray-400" x-text="t.posts.detail.deleted"></span>
+                                                                                    <span x-show="send.error" class="min-w-0 truncate text-error-600 dark:text-error-400" :title="send.error" x-text="send.error"></span>
+                                                                                </li>
+                                                                            </template>
+                                                                        </ul>
+                                                                    </div>
+                                                                </template>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div class="flex flex-col gap-4">
+                                                        <div x-show="details[post.id].leads.length > 0">
+                                                            <p class="mb-1.5 text-[11.5px] font-medium uppercase tracking-wide text-gray-400">{{ __('driver_check.sender_bot.posts.detail.leads') }}</p>
+                                                            <ul class="flex flex-col gap-1 text-[12.5px]">
+                                                                <template x-for="lead in details[post.id].leads" :key="lead.id">
+                                                                    <li class="flex flex-wrap items-center gap-2">
+                                                                        <span class="font-medium text-gray-800 dark:text-gray-100" x-text="lead.driver.name"></span>
+                                                                        <span x-show="lead.driver.phone" class="tabular-nums text-gray-600 dark:text-gray-300" x-text="lead.driver.phone"></span>
+                                                                        <span class="dc-tag" :data-tone="leadTone(lead)" x-text="leadStatus(lead)"></span>
+                                                                        <span class="text-gray-400" x-text="time(lead.created_at)"></span>
+                                                                    </li>
+                                                                </template>
+                                                            </ul>
+                                                        </div>
+                                                        <div>
+                                                            <p class="mb-1.5 text-[11.5px] font-medium uppercase tracking-wide text-gray-400">{{ __('driver_check.sender_bot.posts.detail.events') }}</p>
+                                                            <ol class="flex flex-col gap-1.5 border-l border-gray-200 pl-3.5 text-[12.5px] dark:border-gray-800">
+                                                                <template x-for="event in details[post.id].events" :key="event.id">
+                                                                    <li class="relative">
+                                                                        <span class="dc-dot absolute -left-[19px] top-1.5" :class="eventTone(event) === 'bad' ? 'bg-error-500' : (eventTone(event) === 'ok' ? 'bg-success-500' : (eventTone(event) === 'warn' ? 'bg-warning-500' : 'bg-gray-300 dark:bg-gray-600'))"></span>
+                                                                        <span class="text-gray-800 dark:text-gray-100" x-text="eventText(event)"></span>
+                                                                        <span class="block text-[11.5px] text-gray-400" x-text="time(event.at) + ' · ' + actorName(event)"></span>
+                                                                    </li>
+                                                                </template>
+                                                            </ol>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </template>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </template>
+                        </x-driver-check.table>
+                    </div>
+                </x-driver-check.block>
+                @endif
+
+                @if ($part === 'leads')
+                {{-- ===================== Drivers ===================== --}}
+                <x-driver-check.block :title="__('driver_check.sender_bot.leads.title')" count="number(rows.length)">
+                    <div x-show="!rowsLoaded" class="dc-block__wait">
+                        <div class="dc-skeleton h-3 w-3/4 rounded bg-gray-100 dark:bg-white/[0.06]"></div>
+                    </div>
+
+                    <p x-show="rowsLoaded && rows.length === 0" x-cloak class="dc-none">{{ __('driver_check.sender_bot.leads.empty') }}</p>
+
+                    <div x-show="rowsLoaded && rows.length > 0" x-cloak>
+                        <x-driver-check.table min="900px">
+                            <thead>
+                                <tr>
+                                    <th>{{ __('driver_check.sender_bot.leads.cols.driver') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.leads.cols.post') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.leads.cols.operator') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.leads.cols.result') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.leads.cols.time') }}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="lead in rows" :key="lead.id">
+                                    <tr>
+                                        <td>
+                                            <template x-if="driverLink(lead.driver)">
+                                                <a :href="driverLink(lead.driver)" target="_blank" rel="noopener" class="dc-main block max-w-[220px] truncate hover:underline" x-text="lead.driver.name"></a>
+                                            </template>
+                                            <span x-show="!driverLink(lead.driver)" class="dc-main block max-w-[220px] truncate" x-text="lead.driver.name"></span>
+                                            <span class="dc-sub2 tabular-nums" x-text="[lead.driver.username ? '@' + lead.driver.username : null, lead.driver.phone, 'ID ' + lead.driver.telegram_id].filter(Boolean).join(' · ')"></span>
+                                        </td>
+                                        <td>
+                                            <template x-if="lead.post">
+                                                <span>
+                                                    <span class="block max-w-[260px] truncate text-gray-800 dark:text-gray-100" :title="lead.post.text" x-text="'#' + lead.post.id + ' · ' + lead.post.text"></span>
+                                                    <span class="dc-sub2" x-text="t.leads.source[lead.source] ?? lead.source"></span>
+                                                </span>
+                                            </template>
+                                            <span x-show="!lead.post" class="text-gray-400">—</span>
+                                        </td>
+                                        <td>
+                                            <template x-if="lead.operator">
+                                                <a :href="personUrl(@js(route('driver-check.sender-bot.posts')), lead.operator)" class="block max-w-[180px] truncate hover:underline" x-text="lead.operator.name"></a>
+                                            </template>
+                                            <span x-show="!lead.operator" class="text-gray-400">—</span>
+                                        </td>
+                                        <td>
+                                            <span class="dc-tag" :data-tone="leadTone(lead)" :title="lead.error || ''" x-text="leadStatus(lead)"></span>
+                                        </td>
+                                        <td class="whitespace-nowrap tabular-nums text-gray-600 dark:text-gray-300" x-text="time(lead.created_at)"></td>
                                     </tr>
                                 </template>
                             </tbody>
                         </x-driver-check.table>
+                    </div>
+                </x-driver-check.block>
+                @endif
+
+                @if ($part === 'history')
+                {{-- ===================== History ===================== --}}
+                <div class="flex flex-wrap gap-2">
+                    <template x-for="chip in historyFilters()" :key="chip.value">
+                        <button
+                            type="button"
+                            class="rounded-full border px-3.5 py-1.5 text-[12.5px] font-medium transition"
+                            :class="filter === chip.value
+                                ? 'border-brand-500 bg-brand-500 text-white'
+                                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-200'"
+                            x-on:click="setFilter(chip.value)"
+                            x-text="chip.label"
+                        ></button>
+                    </template>
+                </div>
+
+                <x-driver-check.block :title="__('driver_check.sender_bot.history.title')" count="number(rows.length)">
+                    <div x-show="!rowsLoaded" class="dc-block__wait">
+                        <div class="dc-skeleton h-3 w-3/4 rounded bg-gray-100 dark:bg-white/[0.06]"></div>
+                        <div class="dc-skeleton h-3 w-1/2 rounded bg-gray-100 dark:bg-white/[0.06]"></div>
+                    </div>
+
+                    <p x-show="rowsLoaded && rows.length === 0" x-cloak class="dc-none">{{ __('driver_check.sender_bot.history.empty') }}</p>
+
+                    <div x-show="rowsLoaded && rows.length > 0" x-cloak>
+                        <x-driver-check.table min="820px">
+                            <thead>
+                                <tr>
+                                    <th>{{ __('driver_check.sender_bot.history.cols.time') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.history.cols.event') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.history.cols.person') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.history.cols.who') }}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="event in rows" :key="event.id">
+                                    <tr>
+                                        <td class="whitespace-nowrap tabular-nums text-gray-600 dark:text-gray-300" x-text="time(event.at)"></td>
+                                        <td class="!whitespace-normal">
+                                            <span class="flex items-start gap-2">
+                                                <span class="dc-dot mt-1.5 shrink-0" :class="eventTone(event) === 'bad' ? 'bg-error-500' : (eventTone(event) === 'ok' ? 'bg-success-500' : (eventTone(event) === 'warn' ? 'bg-warning-500' : (eventTone(event) === 'run' ? 'bg-brand-500' : 'bg-gray-300 dark:bg-gray-600')))"></span>
+                                                <span>
+                                                    <span class="text-gray-900 dark:text-gray-100" x-text="eventText(event)"></span>
+                                                    <span x-show="event.post" class="dc-sub2 max-w-[420px] truncate" x-text="event.post ? '#' + event.post.id + ' · ' + event.post.text : ''"></span>
+                                                </span>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <template x-if="event.user">
+                                                <a :href="personUrl(@js(route('driver-check.sender-bot.history')), event.user)" class="block max-w-[180px] truncate hover:underline" x-text="event.user.name"></a>
+                                            </template>
+                                            <span x-show="!event.user" class="text-gray-400">—</span>
+                                        </td>
+                                        <td><span class="dc-tag" :data-tone="event.actor === 'admin' ? 'run' : undefined" x-text="actorName(event)"></span></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </x-driver-check.table>
+
+                        <div x-show="more" class="border-t border-gray-100 px-4 py-3 text-center dark:border-gray-800">
+                            <x-driver-check.button size="sm" x-on:click="loadMore()" ::disabled="busy">{{ __('driver_check.sender_bot.history.more') }}</x-driver-check.button>
+                        </div>
                     </div>
                 </x-driver-check.block>
                 @endif
@@ -260,6 +493,8 @@
                         <div class="dc-skeleton h-3 w-3/4 rounded bg-gray-100 dark:bg-white/[0.06]"></div>
                     </div>
 
+                    <p x-show="rowsLoaded && rows.some((g) => !g.link)" x-cloak class="border-b border-gray-100 px-4 py-2.5 text-[12px] text-gray-500 dark:border-gray-800">{{ __('driver_check.sender_bot.groups.link_hint') }}</p>
+
                     <p x-show="rowsLoaded && rows.length === 0" x-cloak class="dc-none">{{ __('driver_check.sender_bot.groups.empty') }}</p>
 
                     <div x-show="rowsLoaded && rows.length > 0" x-cloak>
@@ -269,6 +504,7 @@
                                     <th>{{ __('driver_check.sender_bot.groups.cols.group') }}</th>
                                     <th>{{ __('driver_check.sender_bot.groups.cols.bot') }}</th>
                                     <th>{{ __('driver_check.sender_bot.groups.cols.sending') }}</th>
+                                    <th>{{ __('driver_check.sender_bot.groups.cols.link') }}</th>
                                     <th>{{ __('driver_check.sender_bot.groups.cols.last') }}</th>
                                     <th class="dc-num">{{ __('driver_check.sender_bot.groups.cols.copies') }}</th>
                                     <th class="dc-acts"></th>
@@ -297,6 +533,15 @@
                                                 </span>
                                                 <span x-text="group.is_active ? t.groups.on : t.groups.off"></span>
                                             </label>
+                                        </td>
+                                        <td>
+                                            <div class="flex items-center gap-2">
+                                                <template x-if="group.link">
+                                                    <a :href="group.link" target="_blank" rel="noopener" class="block max-w-[200px] truncate text-[12.5px] text-brand-600 hover:underline dark:text-brand-400" x-text="group.link.replace('https://', '')"></a>
+                                                </template>
+                                                <span x-show="!group.link" class="text-[12.5px] text-warning-600 dark:text-warning-400" x-text="t.groups.no_link"></span>
+                                                <button x-show="!group.username" type="button" class="shrink-0 text-[12px] font-medium text-gray-500 hover:text-brand-600 hover:underline" x-on:click="setLink(group)" :disabled="busy" x-text="t.groups.set_link"></button>
+                                            </div>
                                         </td>
                                         <td class="tabular-nums text-gray-600 dark:text-gray-300" x-text="group.last_sent_at ? time(group.last_sent_at) : '—'"></td>
                                         <td class="dc-num">
@@ -460,6 +705,18 @@
                                 </span>
                             </label>
 
+                            <label class="flex cursor-pointer items-start gap-3 rounded-xl bg-gray-50 px-3.5 py-3 dark:bg-white/[0.03]">
+                                <span class="relative mt-0.5 inline-flex h-6 w-10 shrink-0 items-center">
+                                    <input type="checkbox" class="peer sr-only" x-model="form.new_posts" :disabled="busy">
+                                    <span class="{{ $toggleTrack }}"></span>
+                                    <span class="{{ $toggleKnob }}"></span>
+                                </span>
+                                <span class="text-[12.5px] leading-snug">
+                                    <span class="block font-medium text-gray-800 dark:text-gray-100">{{ __('driver_check.sender_bot.notify.new_posts') }}</span>
+                                    <span class="block text-gray-500">{{ __('driver_check.sender_bot.notify.new_posts_hint') }}</span>
+                                </span>
+                            </label>
+
                             <dl class="flex flex-col gap-2 text-[12.5px]">
                                 <div class="flex items-start gap-2">
                                     <dt class="w-32 shrink-0 text-gray-500">{{ __('driver_check.sender_bot.notify.who_now') }}</dt>
@@ -509,10 +766,36 @@
                                 </x-driver-check.field>
                             </div>
 
-                            <p class="rounded-xl bg-gray-50 px-3.5 py-3 text-[12.5px] leading-relaxed text-gray-600 dark:bg-white/[0.03] dark:text-gray-300" x-text="t.limits.preview
-                                .replace(':times', form.max_times || 1)
-                                .replace(':min', interval(Number(form.min_interval) || 1))
-                                .replace(':max', interval(Number(form.max_interval) || 1))"></p>
+                            <div class="grid gap-4 sm:grid-cols-2">
+                                <x-driver-check.field :label="__('driver_check.sender_bot.limits.max_active')">
+                                    <x-driver-check.input type="number" min="1" ::max="data.max.active" x-model.number="form.max_active" />
+                                </x-driver-check.field>
+                                <x-driver-check.field :label="__('driver_check.sender_bot.limits.per_day')">
+                                    <x-driver-check.input type="number" min="1" ::max="data.max.per_day" x-model.number="form.per_day" />
+                                </x-driver-check.field>
+                            </div>
+
+                            <div class="flex flex-col gap-2">
+                                <p class="text-[12.5px] font-medium text-gray-800 dark:text-gray-100">{{ __('driver_check.sender_bot.limits.quiet') }}</p>
+                                <div class="grid grid-cols-2 gap-4">
+                                    <x-driver-check.field :label="__('driver_check.sender_bot.limits.quiet_from')">
+                                        <x-driver-check.input type="time" x-model="form.quiet_from" />
+                                    </x-driver-check.field>
+                                    <x-driver-check.field :label="__('driver_check.sender_bot.limits.quiet_to')">
+                                        <x-driver-check.input type="time" x-model="form.quiet_to" />
+                                    </x-driver-check.field>
+                                </div>
+                                <p class="text-[12px] leading-snug text-gray-500">{{ __('driver_check.sender_bot.limits.quiet_hint') }}</p>
+                                <p x-show="data.quiet_now" x-cloak class="text-[12px] font-medium text-warning-700 dark:text-warning-400" x-text="t.limits.quiet_now.replace(':time', data.quiet_now ? time(data.quiet_now) : '')"></p>
+                            </div>
+
+                            <p class="rounded-xl bg-gray-50 px-3.5 py-3 text-[12.5px] leading-relaxed text-gray-600 dark:bg-white/[0.03] dark:text-gray-300">
+                                <span class="block" x-text="t.limits.preview
+                                    .replace(':times', form.max_times || 1)
+                                    .replace(':min', interval(Number(form.min_interval) || 1))
+                                    .replace(':max', interval(Number(form.max_interval) || 1))"></span>
+                                <span class="block" x-text="t.limits.person_preview.replace(':active', form.max_active || 1).replace(':day', form.per_day || 1)"></span>
+                            </p>
 
                             <div class="mt-auto pt-1">
                                 <x-driver-check.button type="submit" variant="primary" ::disabled="busy">{{ __('driver_check.sender_bot.save') }}</x-driver-check.button>
@@ -520,6 +803,40 @@
                         </form>
                     </x-driver-check.surface>
                 </div>
+
+                {{-- Drivers: what they get when they forward a post --}}
+                <x-driver-check.surface class="overflow-hidden">
+                    <div class="flex items-start gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+                        <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-600 dark:bg-white/[0.06] dark:text-gray-300">
+                            <x-driver-check.icon name="truck" class="h-[18px] w-[18px]" />
+                        </span>
+                        <div>
+                            <h2 class="text-sm font-semibold text-gray-950 dark:text-white">{{ __('driver_check.sender_bot.options.title') }}</h2>
+                            <p class="mt-0.5 text-[12px] leading-snug text-gray-500">{{ __('driver_check.sender_bot.options.hint') }}</p>
+                        </div>
+                    </div>
+
+                    <form class="flex flex-col gap-3 p-5" x-on:submit.prevent="saveOptions()">
+                        @foreach (['driver_contacts', 'contact_button'] as $option)
+                            <label class="flex cursor-pointer items-start gap-3 rounded-xl bg-gray-50 px-3.5 py-3 dark:bg-white/[0.03]">
+                                <span class="relative mt-0.5 inline-flex h-6 w-10 shrink-0 items-center">
+                                    <input type="checkbox" class="peer sr-only" x-model="form.{{ $option }}" :disabled="busy">
+                                    <span class="{{ $toggleTrack }}"></span>
+                                    <span class="{{ $toggleKnob }}"></span>
+                                </span>
+                                <span class="text-[12.5px] leading-snug">
+                                    <span class="block font-medium text-gray-800 dark:text-gray-100">{{ __('driver_check.sender_bot.options.' . $option) }}</span>
+                                    <span class="block text-gray-500">{{ __('driver_check.sender_bot.options.' . $option . '_hint') }}</span>
+                                </span>
+                            </label>
+                        @endforeach
+
+                        <div class="flex flex-wrap items-center gap-3 pt-1">
+                            <x-driver-check.button type="submit" variant="primary" ::disabled="busy">{{ __('driver_check.sender_bot.save') }}</x-driver-check.button>
+                            <a href="{{ route('driver-check.sender-bot.leads') }}" class="text-[12.5px] font-medium text-brand-600 hover:underline dark:text-brand-400" x-text="t.numbers.leads_today + ': ' + number(counts.leads_today ?? 0) + ' →'"></a>
+                        </div>
+                    </form>
+                </x-driver-check.surface>
 
                 {{-- How it goes, from Start to the groups --}}
                 <x-driver-check.surface class="overflow-hidden">

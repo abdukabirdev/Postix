@@ -21,6 +21,7 @@ class TelegramSenderBotSend extends Model
         'round',
         'message_id',
         'error',
+        'deleted_at',
     ];
 
     protected function casts(): array
@@ -28,6 +29,7 @@ class TelegramSenderBotSend extends Model
         return [
             'round' => 'integer',
             'message_id' => 'integer',
+            'deleted_at' => 'datetime',
         ];
     }
 

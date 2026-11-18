@@ -6,8 +6,9 @@
 | Our people press Start in the bot, choose a language and ask the admin;
 | once let in they send a message, say how many times and how often, and
 | the bot posts it into the groups the admin turned on. One component for
-| the four pages (requests, posts, groups, settings): each loads what its
-| part shows, plus the bot itself for the header.
+| the six pages (requests, posts, leads, history, groups, settings): each
+| loads what its part shows, plus the bot itself for the header. The posts
+| and the history may be of one person (?user=ID in the address).
 |
 | Also the badge of the left menu: the requests waiting, asked now and
 | then; a new one lights it and says so in a toast.
@@ -23,7 +24,18 @@ const BADGE_REFRESH = 30000;
 
 const USER_TONES = { pending: 'warn', approved: 'ok', rejected: 'bad', blocked: 'bad', new: undefined };
 
-const POST_TONES = { active: 'run', done: 'ok', stopped: undefined, failed: 'bad' };
+const POST_TONES = { active: 'run', paused: 'warn', done: 'ok', stopped: undefined, failed: 'bad' };
+
+const LEAD_TONES = { link_given: 'ok', contact_sent: 'ok', contact_asked: 'warn', not_found: 'bad' };
+
+const EVENT_TONES = {
+    approved: 'ok', unblocked: 'ok', post_done: 'ok', lead_link: 'ok', lead_contact: 'ok', group_joined: 'ok', group_on: 'ok',
+    rejected: 'bad', blocked: 'bad', post_failed: 'bad', lead_not_found: 'bad', group_left: 'bad',
+    requested: 'warn', post_paused: 'warn', lead_asked: 'warn',
+    post_created: 'run', post_now: 'run', round: 'run',
+};
+
+const FIRST_FILTER = { requests: 'pending' };
 
 export function senderBotPage(config) {
     const t = config.translations;
@@ -41,16 +53,27 @@ export function senderBotPage(config) {
         data: null,
         rows: [],
         rowsLoaded: false,
-        filter: config.part === 'requests' ? 'pending' : 'all',
+        filter: FIRST_FILTER[config.part] ?? 'all',
         busy: false,
         timer: null,
+
+        /* One person's posts / history: ?user=ID in the address. */
+        person: new URLSearchParams(window.location.search).get('user'),
+        extra: {},
+        more: false,
+        open: null,
+        details: {},
 
         token: '',
         replacing: false,
         groupInput: '',
 
         /* The forms: filled from the first answer and after a save, not by the refreshes. */
-        form: { chat_id: '', listener_key: '', via_bot: true, max_times: 20, min_interval: 1, max_interval: 1440 },
+        form: {
+            chat_id: '', listener_key: '', via_bot: true, new_posts: true,
+            max_times: 20, min_interval: 1, max_interval: 1440, max_active: 3, per_day: 10, quiet_from: '', quiet_to: '',
+            driver_contacts: true, contact_button: false,
+        },
         formFilled: false,
 
         init() {
@@ -86,9 +109,14 @@ export function senderBotPage(config) {
 
                 this.data = data;
 
-                if (rows !== null) {
+                /* The history keeps what "Show more" added while the first page is unchanged. */
+                if (rows !== null && !(quiet && this.part === 'history' && this.rows.length > rows.length)) {
                     this.rows = rows;
                     this.rowsLoaded = true;
+                }
+
+                if (this.open && quiet) {
+                    this.loadDetails(this.open, true);
                 }
 
                 this.loaded = true;
@@ -107,30 +135,79 @@ export function senderBotPage(config) {
             }
         },
 
-        async loadRows() {
-            const lists = { requests: ['users', 'users'], posts: ['posts', 'posts'], groups: ['groups', 'groups'] };
+        async loadRows(before = null) {
+            const lists = {
+                requests: ['users', 'users', 'status'],
+                posts: ['posts', 'posts', 'status'],
+                groups: ['groups', 'groups', null],
+                leads: ['leads', 'leads', 'status'],
+                history: ['history', 'events', 'type'],
+            };
             const list = lists[this.part];
 
             if (!list) {
                 return null;
             }
 
-            const status = this.part !== 'groups' && this.filter !== 'all' ? `?status=${this.filter}` : '';
+            const query = new URLSearchParams();
 
-            return (await requestJson(this.endpoints[list[0]] + status))[list[1]] ?? [];
+            if (list[2] && this.filter !== 'all') {
+                query.set(list[2], this.filter);
+            }
+
+            if (this.person && (this.part === 'posts' || this.part === 'history')) {
+                query.set('user', this.person);
+            }
+
+            if (before) {
+                query.set('before', before);
+            }
+
+            const json = await requestJson(this.endpoints[list[0]] + (query.toString() ? `?${query}` : ''));
+
+            this.extra = json;
+            this.more = !!json.more;
+
+            return json[list[1]] ?? [];
+        },
+
+        /* The history: the next page, added below. */
+        async loadMore() {
+            if (this.busy || !this.rows.length) {
+                return;
+            }
+
+            this.busy = true;
+
+            try {
+                const rows = await this.loadRows(this.rows[this.rows.length - 1].id);
+                this.rows = [...this.rows, ...rows];
+            } catch (error) {
+                notify(error?.message || t.load_failed, false);
+            } finally {
+                this.busy = false;
+            }
         },
 
         fillForm() {
             const n = this.data.notify;
             const l = this.data.limits;
+            const o = this.data.options ?? {};
 
             this.form = {
                 chat_id: n.chat_id ?? '',
                 listener_key: n.listener_key ?? '',
                 via_bot: n.via_bot,
+                new_posts: n.new_posts ?? true,
                 max_times: l.max_times,
                 min_interval: l.min_interval,
                 max_interval: l.max_interval,
+                max_active: l.max_active ?? 3,
+                per_day: l.per_day ?? 10,
+                quiet_from: l.quiet_from ?? '',
+                quiet_to: l.quiet_to ?? '',
+                driver_contacts: o.driver_contacts ?? true,
+                contact_button: o.contact_button ?? false,
             };
             this.formFilled = true;
         },
@@ -192,9 +269,23 @@ export function senderBotPage(config) {
                 ];
             }
 
+            if (this.part === 'leads') {
+                const l = this.extra?.counts ?? {};
+                const all = Object.values(l).reduce((sum, n) => sum + Number(n || 0), 0);
+
+                return [
+                    { value: 'all', label: t.leads.filters.all, total: all },
+                    { value: 'link_given', label: t.leads.filters.link_given, total: l.link_given },
+                    { value: 'contact_asked', label: t.leads.filters.contact_asked, total: l.contact_asked, warn: l.contact_asked > 0 },
+                    { value: 'contact_sent', label: t.leads.filters.contact_sent, total: l.contact_sent },
+                    { value: 'not_found', label: t.leads.filters.not_found, total: l.not_found },
+                ];
+            }
+
             return [
                 { value: 'all', label: t.posts.filters.all, total: c.posts_all },
                 { value: 'active', label: t.posts.filters.active, total: c.posts_active },
+                { value: 'paused', label: t.posts.filters.paused, total: c.posts_paused },
                 { value: 'done', label: t.posts.filters.done, total: c.posts_done },
                 { value: 'stopped', label: t.posts.filters.stopped, total: c.posts_stopped },
                 { value: 'failed', label: t.posts.filters.failed, total: c.posts_failed, warn: c.posts_failed > 0 },
@@ -235,6 +326,10 @@ export function senderBotPage(config) {
         },
 
         postStatus(post) {
+            if (post.copies_deleted_at) {
+                return `${t.posts.status[post.status === 'stopped' ? (post.stopped_by === 'admin' ? 'stopped_admin' : 'stopped_user') : post.status] ?? post.status} · ${t.posts.deleted}`;
+            }
+
             if (post.status === 'stopped') {
                 return t.posts.status[post.stopped_by === 'admin' ? 'stopped_admin' : 'stopped_user'];
             }
@@ -246,6 +341,103 @@ export function senderBotPage(config) {
             const text = String(post.text || '').replace(/\s+/g, ' ').trim();
 
             return text || t.posts.media;
+        },
+
+        /* The history filter chips. */
+        historyFilters() {
+            return ['all', 'requests', 'posts', 'drivers', 'groups'].map((value) => ({ value, label: t.history.filters[value] }));
+        },
+
+        personTitle() {
+            const name = this.extra?.person;
+
+            if (!this.person || !name) {
+                return null;
+            }
+
+            return (this.part === 'history' ? t.history.person : t.posts.person).replace(':name', name);
+        },
+
+        resetPerson() {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('user');
+            window.history.replaceState({}, '', url);
+            this.person = null;
+            this.rowsLoaded = false;
+            this.load();
+        },
+
+        personUrl(base, user) {
+            return `${base}?user=${user.id}`;
+        },
+
+        eventText(event) {
+            const template = t.history.types[event.type] ?? event.type;
+            const data = { ...(event.data || {}), title: event.group ?? event.data?.title ?? '' };
+
+            return template.replace(/:([a-z_]+)/g, (match, key) => (data[key] !== undefined && data[key] !== null ? String(data[key]) : '—'));
+        },
+
+        eventTone(event) {
+            if (event.type === 'round' && event.data && Number(event.data.ok) < Number(event.data.groups)) {
+                return 'warn';
+            }
+
+            return EVENT_TONES[event.type];
+        },
+
+        actorName(event) {
+            return t.history.actor[event.actor] ?? event.actor;
+        },
+
+        leadTone(lead) {
+            return LEAD_TONES[lead.status];
+        },
+
+        leadStatus(lead) {
+            if (lead.status === 'contact_asked' && lead.error === 'cancelled') {
+                return t.leads.cancelled;
+            }
+
+            return t.leads.status[lead.status] ?? lead.status;
+        },
+
+        driverLink(driver) {
+            return driver.username ? `https://t.me/${driver.username}` : null;
+        },
+
+        /* A post row opened: its rounds, history and drivers. */
+        toggleDetails(post) {
+            if (this.open === post.id) {
+                this.open = null;
+
+                return;
+            }
+
+            this.open = post.id;
+            this.loadDetails(post.id);
+        },
+
+        async loadDetails(id, quiet = false) {
+            try {
+                this.details = { ...this.details, [id]: await requestJson(this.url('postShow', id)) };
+            } catch (error) {
+                if (!quiet) {
+                    notify(error?.message || t.load_failed, false);
+                }
+            }
+        },
+
+        groupsOf(post) {
+            return post.groups === null || post.groups === undefined ? t.posts.detail.groups_all : post.groups.join(', ');
+        },
+
+        postAction(post, action) {
+            if (action === 'delete' && !window.confirm(t.confirm.delete.replace(':id', post.id).replace(':count', post.deletable))) {
+                return;
+            }
+
+            this.act(this.url('postAction', post.id).replace('__ACTION__', action));
         },
 
         progress(post) {
@@ -365,6 +557,14 @@ export function senderBotPage(config) {
                 chat_id: String(this.form.chat_id || '').trim() || null,
                 listener_key: this.form.listener_key || null,
                 via_bot: !!this.form.via_bot,
+                new_posts: !!this.form.new_posts,
+            }, () => { this.formFilled = false; });
+        },
+
+        saveOptions() {
+            this.act(this.endpoints.options, 'PATCH', {
+                driver_contacts: !!this.form.driver_contacts,
+                contact_button: !!this.form.contact_button,
             }, () => { this.formFilled = false; });
         },
 
@@ -377,6 +577,10 @@ export function senderBotPage(config) {
                 max_times: Number(this.form.max_times),
                 min_interval: Number(this.form.min_interval),
                 max_interval: Number(this.form.max_interval),
+                max_active: Number(this.form.max_active),
+                per_day: Number(this.form.per_day),
+                quiet_from: String(this.form.quiet_from || '').trim() || null,
+                quiet_to: String(this.form.quiet_to || '').trim() || null,
             }, () => { this.formFilled = false; });
         },
 
@@ -402,6 +606,16 @@ export function senderBotPage(config) {
 
         toggleGroup(group) {
             this.act(this.url('groupsUpdate', group.id), 'PATCH', { is_active: !group.is_active });
+        },
+
+        setLink(group) {
+            const link = window.prompt(t.groups.link_prompt, group.invite_link || '');
+
+            if (link === null) {
+                return;
+            }
+
+            this.act(this.url('groupsUpdate', group.id), 'PATCH', { invite_link: link.trim() || null });
         },
 
         removeGroup(group) {

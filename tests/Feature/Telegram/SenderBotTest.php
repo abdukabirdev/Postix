@@ -7,7 +7,9 @@ use App\Application\Telegram\Services\SenderBotDialog;
 use App\Application\Telegram\Services\SenderBotService;
 use App\Application\Telegram\Services\SenderBotSettings;
 use App\Application\Telegram\Support\BotApi;
+use App\Models\Telegram\TelegramSenderBotEvent;
 use App\Models\Telegram\TelegramSenderBotGroup;
+use App\Models\Telegram\TelegramSenderBotLead;
 use App\Models\Telegram\TelegramSenderBotPost;
 use App\Models\Telegram\TelegramSenderBotSend;
 use App\Models\Telegram\TelegramSenderBotUser;
@@ -39,6 +41,7 @@ final class SenderBotTest extends TestCase
 
         (include database_path('migrations/2026_10_05_100000_create_telegram_settings_table.php'))->up();
         (include database_path('migrations/2026_11_17_100000_create_telegram_sender_bot_tables.php'))->up();
+        (include database_path('migrations/2026_11_17_200000_extend_telegram_sender_bot_tables.php'))->up();
 
         $this->app->make(SenderBotSettings::class)->saveToken(self::TOKEN, ['id' => 900, 'username' => 'our_sender_bot', 'name' => 'Sender']);
         $this->api = new BotApi(self::TOKEN);
@@ -89,7 +92,7 @@ final class SenderBotTest extends TestCase
         $dialog->callback($this->api, $this->press('adm:ok:' . $person->id, from: self::ADMIN));
 
         $this->assertSame(TelegramSenderBotUser::STATUS_APPROVED, $person->fresh()->status);
-        $this->assertStringContainsString('Администратор открыл вам доступ', collect($this->sent)->where('method', 'sendMessage')->first()['params']['text']);
+        $this->assertStringContainsString('Доступ открыт', collect($this->sent)->where('method', 'sendMessage')->first()['params']['text']);
         $this->assertStringContainsString('✅ Разрешено', $this->last('editMessageText')['text']);
     }
 
@@ -129,7 +132,7 @@ final class SenderBotTest extends TestCase
         $this->assertSame(SenderBotDialog::STEP_CONFIRM, $person->fresh()->step);
 
         $confirm = $this->last('sendMessage');
-        $this->assertStringContainsString('Групп: 1', $confirm['text']);
+        $this->assertStringContainsString('Все группы (1)', $confirm['text']);
         $this->assertStringContainsString('Сколько раз: 3', $confirm['text']);
         $this->assertStringContainsString('15 мин', $confirm['text']);
         $this->assertSame(55, $confirm['reply_parameters']['message_id']);
@@ -298,6 +301,272 @@ final class SenderBotTest extends TestCase
         $this->assertNull(SenderBotService::chatRef('https://t.me/+AbCdEf'));
     }
 
+    public function test_a_driver_who_forwards_a_post_gets_the_operators_chat_and_the_operator_hears_of_it(): void
+    {
+        $group = $this->group(-1001, true);
+        $operator = $this->approved();
+        $operator->forceFill(['username' => 'ali_uz'])->save();
+        $post = $this->makePost($operator, times: 1);
+        $this->app->make(SenderBotDelivery::class)->dispatch($this->api, fn () => null);
+        $this->sent = [];
+
+        $this->webhook(['message' => $this->forward('Нужны   водители', date: now()->timestamp)]);
+
+        $toDriver = collect($this->sent)->where('method', 'sendMessage')->firstWhere('params.chat_id', self::DRIVER)['params'];
+        $this->assertStringContainsString('@ali_uz', $toDriver['text']);
+        $this->assertSame('https://t.me/ali_uz', $toDriver['reply_markup']['inline_keyboard'][0][0]['url']);
+
+        $toOperator = collect($this->sent)->where('method', 'sendMessage')->firstWhere('params.chat_id', self::PERSON)['params'];
+        $this->assertStringContainsString('#' . $post->id, $toOperator['text']);
+        $this->assertStringContainsString('Vali', $toOperator['text']);
+
+        $lead = TelegramSenderBotLead::query()->sole();
+        $this->assertSame(TelegramSenderBotLead::STATUS_LINK, $lead->status);
+        $this->assertSame($post->id, $lead->sender_bot_post_id);
+        $this->assertSame(1, TelegramSenderBotEvent::query()->where('type', 'lead_link')->count());
+
+        /* The driver is not made a person of the bot (no request, no language question). */
+        $this->assertSame(0, TelegramSenderBotUser::query()->where('telegram_user_id', self::DRIVER)->count());
+        $this->assertNotNull($group);
+    }
+
+    public function test_when_the_operators_chat_cannot_be_given_the_driver_is_asked_for_a_contact_and_it_goes_to_the_operator(): void
+    {
+        $this->group(-1001, true);
+        $operator = $this->approved();
+        $post = $this->makePost($operator, times: 1);
+        $this->answers['sendMessage'] = fn (array $p) => str_starts_with((string) ($p['reply_markup']['inline_keyboard'][0][0]['url'] ?? ''), 'tg://')
+            ? ['ok' => false, 'error_code' => 400, 'description' => 'Bad Request: BUTTON_USER_PRIVACY_RESTRICTED']
+            : null;
+
+        $this->webhook(['message' => [...$this->forward('нужны водители'), 'text' => '/start p' . $post->id, 'forward_origin' => null]]);
+
+        $ask = $this->last('sendMessage');
+        $this->assertSame(self::DRIVER, $ask['chat_id']);
+        $this->assertTrue($ask['reply_markup']['keyboard'][0][0]['request_contact']);
+        $this->assertSame(TelegramSenderBotLead::STATUS_ASKED, TelegramSenderBotLead::query()->sole()->status);
+        $this->assertSame(TelegramSenderBotLead::SOURCE_BUTTON, TelegramSenderBotLead::query()->sole()->source);
+
+        $this->sent = [];
+        $this->webhook(['message' => [
+            'message_id' => 70,
+            'from' => ['id' => self::DRIVER, 'first_name' => 'Vali', 'language_code' => 'uz'],
+            'chat' => ['id' => self::DRIVER, 'type' => 'private'],
+            'contact' => ['phone_number' => '+998901234567', 'first_name' => 'Vali', 'user_id' => self::DRIVER],
+        ]]);
+
+        $lead = TelegramSenderBotLead::query()->sole();
+        $this->assertSame(TelegramSenderBotLead::STATUS_SENT, $lead->status);
+        $this->assertSame('+998901234567', $lead->driver_phone);
+        $this->assertSame(self::PERSON, $this->last('sendContact')['chat_id']);
+        $this->assertStringContainsString('+998901234567', collect($this->sent)->where('method', 'sendMessage')->firstWhere('params.chat_id', self::PERSON)['params']['text']);
+        $this->assertTrue($this->last('sendMessage')['reply_markup']['remove_keyboard']);
+    }
+
+    public function test_a_forward_of_nothing_of_ours_is_told_so(): void
+    {
+        $this->webhook(['message' => $this->forward('чужое объявление')]);
+
+        $this->assertStringContainsString('topmadim', $this->last('sendMessage')['text']);
+        $this->assertSame(TelegramSenderBotLead::STATUS_NOT_FOUND, TelegramSenderBotLead::query()->sole()->status);
+    }
+
+    public function test_the_person_chooses_the_groups_and_only_those_get_the_post(): void
+    {
+        $a = $this->group(-1001, true);
+        $this->group(-1002, true);
+        $person = $this->approved();
+        $dialog = $this->app->make(SenderBotDialog::class);
+
+        $dialog->message($this->api, $this->message('Нужны водители на Ташкент', id: 55));
+        $this->assertSame(SenderBotDialog::STEP_GROUPS, $person->fresh()->step);
+        $this->assertSame(['g:' . $a->id, 'g:' . ($a->id + 1)], array_column(array_merge(...array_slice($this->last('sendMessage')['reply_markup']['inline_keyboard'], 0, 2)), 'callback_data'));
+
+        $dialog->callback($this->api, $this->press('g:' . ($a->id + 1)));
+        $dialog->callback($this->api, $this->press('g:next'));
+        $this->assertSame([$a->id], $person->fresh()->draft['groups']);
+        $this->assertSame(SenderBotDialog::STEP_TIMES, $person->fresh()->step);
+
+        $dialog->message($this->api, $this->message('1'));
+        $dialog->callback($this->api, $this->press('post:go'));
+
+        $post = TelegramSenderBotPost::query()->sole();
+        $this->assertSame([$a->id], $post->group_ids);
+        $this->assertSame('text', $post->payload['kind']);
+
+        $this->sent = [];
+        $this->app->make(SenderBotDelivery::class)->dispatch($this->api, fn () => null);
+        $this->assertSame([-1001], collect($this->sent)->where('method', 'copyMessage')->pluck('params.chat_id')->all());
+    }
+
+    public function test_a_message_that_cannot_be_copied_is_sent_anew_from_what_was_kept(): void
+    {
+        $this->fakeTelegram(copy: fn () => ['ok' => false, 'error_code' => 400, 'description' => "Bad Request: the message can't be copied"]);
+        $this->group(-1001, true);
+        $post = $this->makePost($this->approved(), times: 1);
+        $post->forceFill(['payload' => ['kind' => 'text', 'text' => 'Нужны водители', 'entities' => [['type' => 'bold', 'offset' => 0, 'length' => 5]]]])->save();
+
+        $this->app->make(SenderBotDelivery::class)->dispatch($this->api, fn () => null);
+
+        $sent = collect($this->sent)->where('method', 'sendMessage')->firstWhere('params.chat_id', -1001)['params'];
+        $this->assertSame('Нужны водители', $sent['text']);
+        $this->assertSame('bold', $sent['entities'][0]['type']);
+        $this->assertSame(TelegramSenderBotPost::STATUS_DONE, $post->fresh()->status);
+        $this->assertSame(1, TelegramSenderBotSend::query()->whereNull('error')->count());
+    }
+
+    public function test_a_paused_post_waits_and_send_now_sends_it(): void
+    {
+        $this->group(-1001, true);
+        $person = $this->approved();
+        $post = $this->makePost($person, times: 3, interval: 60);
+        $post->forceFill(['next_at' => now()->addHour()])->save();
+        $dialog = $this->app->make(SenderBotDialog::class);
+        $delivery = $this->app->make(SenderBotDelivery::class);
+
+        $dialog->callback($this->api, $this->press('p:pause:' . $post->id));
+        $this->assertSame(TelegramSenderBotPost::STATUS_PAUSED, $post->fresh()->status);
+        $this->assertStringContainsString('на паузе', $this->last('editMessageText')['text']);
+
+        $this->travel(2)->hours();
+        $this->sent = [];
+        $delivery->dispatch($this->api, fn () => null);
+        $this->assertSame([], collect($this->sent)->where('method', 'copyMessage')->all());
+
+        $dialog->callback($this->api, $this->press('p:now:' . $post->id));
+        $this->assertSame(TelegramSenderBotPost::STATUS_ACTIVE, $post->fresh()->status);
+        $delivery->dispatch($this->api, fn () => null);
+        $this->assertSame(1, $post->fresh()->sent_times);
+        $this->assertSame(['post_paused', 'post_now', 'round'], TelegramSenderBotEvent::query()->orderBy('id')->pluck('type')->all());
+    }
+
+    public function test_the_copies_are_deleted_from_the_groups_on_request(): void
+    {
+        $this->group(-1001, true);
+        $this->group(-1002, true);
+        $person = $this->approved();
+        $post = $this->makePost($person, times: 1);
+        $delivery = $this->app->make(SenderBotDelivery::class);
+        $delivery->dispatch($this->api, fn () => null);
+
+        $dialog = $this->app->make(SenderBotDialog::class);
+        $dialog->callback($this->api, $this->press('p:del:' . $post->id));
+        $this->assertSame('p:delok:' . $post->id, $this->last('editMessageReplyMarkup')['reply_markup']['inline_keyboard'][0][0]['callback_data']);
+
+        $dialog->callback($this->api, $this->press('p:delok:' . $post->id));
+        $this->assertNotNull($post->fresh()->delete_asked_at);
+
+        $this->sent = [];
+        $delivery->dispatch($this->api, fn () => null);
+
+        $this->assertSame([-1001, -1002], collect($this->sent)->where('method', 'deleteMessage')->pluck('params.chat_id')->all());
+        $this->assertSame(2, TelegramSenderBotSend::query()->whereNotNull('deleted_at')->count());
+        $this->assertNotNull($post->fresh()->copies_deleted_at);
+        $this->assertStringContainsString('удалено из групп 2', $this->last('sendMessage')['text']);
+    }
+
+    public function test_a_person_over_the_limit_may_not_start_one_more(): void
+    {
+        $this->group(-1001, true);
+        $this->app->make(SenderBotSettings::class)->saveLimits(20, 1, 1440, 1, 10);
+        $person = $this->approved();
+        $this->makePost($person);
+
+        $this->app->make(SenderBotDialog::class)->message($this->api, $this->message('✉️ Отправить сообщение'));
+
+        $this->assertNull($person->fresh()->step);
+        $this->assertStringContainsString('это предел', $this->last('sendMessage')['text']);
+    }
+
+    public function test_in_the_quiet_hours_the_rounds_wait_till_their_end(): void
+    {
+        $this->travelTo(now()->timezone(config('app.timezone'))->setTime(23, 30));
+        $this->app->make(SenderBotSettings::class)->saveLimits(20, 1, 1440, 3, 10, '23:00', '07:00');
+        $this->group(-1001, true);
+        $post = $this->makePost($this->approved());
+
+        $this->app->make(SenderBotDelivery::class)->dispatch($this->api, fn () => null);
+
+        $this->assertSame([], collect($this->sent)->where('method', 'copyMessage')->all());
+        $this->assertSame('07:00', $post->fresh()->next_at->timezone(config('app.timezone'))->format('H:i'));
+        $this->assertTrue($post->fresh()->next_at->isTomorrow() || $post->fresh()->next_at->timezone(config('app.timezone'))->isTomorrow());
+    }
+
+    public function test_the_groups_list_carries_the_links_to_open_them(): void
+    {
+        $this->group(-1001, true)->forceFill(['username' => 'yuk_uz'])->save();
+        $this->group(-1002, true)->forceFill(['invite_link' => 'https://t.me/+AbCd'])->save();
+        $this->approved();
+
+        $this->app->make(SenderBotDialog::class)->message($this->api, $this->message('👥 Группы'));
+
+        $list = $this->last('sendMessage');
+        $this->assertSame('HTML', $list['parse_mode']);
+        $this->assertStringContainsString('<a href="https://t.me/yuk_uz">', $list['text']);
+        $this->assertStringContainsString('<a href="https://t.me/+AbCd">', $list['text']);
+        $this->assertSame(['https://t.me/yuk_uz', 'https://t.me/+AbCd'], array_column(array_merge(...$list['reply_markup']['inline_keyboard']), 'url'));
+    }
+
+    public function test_the_admin_has_a_menu_in_the_bot_and_stops_a_post_of_somebody_else(): void
+    {
+        $this->group(-1001, true);
+        $post = $this->makePost($this->approved());
+        TelegramSenderBotUser::query()->create(['telegram_user_id' => self::ADMIN, 'language' => 'ru', 'status' => TelegramSenderBotUser::STATUS_APPROVED]);
+
+        $this->webhook(['message' => [...$this->message('🛠 Админ'), 'from' => ['id' => self::ADMIN, 'first_name' => 'A'], 'chat' => ['id' => self::ADMIN, 'type' => 'private']]]);
+        $this->assertStringContainsString('Идут рассылки: 1', $this->last('sendMessage')['text']);
+
+        $this->webhook(['callback_query' => $this->press('a:stop:' . $post->id, from: self::ADMIN)]);
+
+        $this->assertSame(TelegramSenderBotPost::STATUS_STOPPED, $post->fresh()->status);
+        $this->assertSame(TelegramSenderBotPost::STOPPED_BY_ADMIN, $post->fresh()->stopped_by);
+        $this->assertTrue(collect($this->sent)->where('method', 'sendMessage')->contains(fn ($c) => $c['params']['chat_id'] === self::PERSON && str_contains($c['params']['text'], 'Администратор остановил')));
+
+        /* Somebody else may not press the admin's buttons. */
+        $this->webhook(['callback_query' => [...$this->press('a:now:' . $post->id), 'id' => 'q2']]);
+        $this->assertSame('Это может только администратор.', $this->last('answerCallbackQuery')['text']);
+    }
+
+    public function test_a_new_post_of_somebody_else_is_brought_to_the_admin(): void
+    {
+        $this->group(-1001, true);
+        $person = $this->approved();
+        $person->forceFill(['step' => SenderBotDialog::STEP_CONFIRM, 'draft' => ['chat_id' => self::PERSON, 'message_id' => 55, 'kind' => 'text', 'text' => 'Нужны', 'times' => 1, 'interval' => 0]])->save();
+
+        $this->app->make(SenderBotDialog::class)->callback($this->api, $this->press('post:go'));
+
+        $this->assertSame(self::ADMIN, $this->last('copyMessage')['chat_id']);
+        $card = collect($this->sent)->where('method', 'sendMessage')->last(fn ($c) => $c['params']['chat_id'] === self::ADMIN)['params'];
+        $this->assertStringContainsString('Новая рассылка', $card['text']);
+        $this->assertContains('a:block:' . TelegramSenderBotPost::query()->sole()->id, array_column(array_merge(...$card['reply_markup']['inline_keyboard']), 'callback_data'));
+    }
+
+    private const DRIVER = 9100;
+
+    /** @var array<string, callable> answers of the fake by method; null from one falls through */
+    private array $answers = [];
+
+    private function webhook(array $update): void
+    {
+        static $id = 1000;
+
+        $this->postJson('/api/telegram/sender-bot/webhook', ['update_id' => ++$id, ...$update], ['X-Postix-Secret' => 'c2283uJ2AdZxSQO-oD9XjDNesZ8CLkLnNUhg-K9xuws'])
+            ->assertOk()
+            ->assertJsonMissingPath('error');
+    }
+
+    /** A driver forwards the bot's message from a group. */
+    private function forward(string $text, ?int $date = null): array
+    {
+        return [
+            'message_id' => 60,
+            'from' => ['id' => self::DRIVER, 'first_name' => 'Vali', 'language_code' => 'uz'],
+            'chat' => ['id' => self::DRIVER, 'type' => 'private'],
+            'forward_origin' => ['type' => 'user', 'sender_user' => ['id' => 555, 'is_bot' => true], 'date' => $date ?? now()->subDay()->timestamp],
+            'text' => $text,
+        ];
+    }
+
     /** What the fake answers: set by fakeTelegram(), read by the one fake of setUp(). */
     private array $updates = [];
 
@@ -321,6 +590,10 @@ final class SenderBotTest extends TestCase
             $method = basename(parse_url($request->url(), PHP_URL_PATH));
             $params = $request->data();
             $this->sent[] = ['method' => $method, 'params' => $params];
+
+            if (isset($this->answers[$method]) && ($answer = ($this->answers[$method])($params)) !== null) {
+                return Http::response($answer);
+            }
 
             return Http::response(match ($method) {
                 'getUpdates' => ['ok' => true, 'result' => array_values(array_filter(

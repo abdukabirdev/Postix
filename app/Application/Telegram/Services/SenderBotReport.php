@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace App\Application\Telegram\Services;
 
 use App\Console\Commands\Telegram\TelegramSenderBotCommand;
+use App\Models\Telegram\TelegramSenderBotEvent;
 use App\Models\Telegram\TelegramSenderBotGroup;
+use App\Models\Telegram\TelegramSenderBotLead;
 use App\Models\Telegram\TelegramSenderBotPost;
 use App\Models\Telegram\TelegramSenderBotSend;
 use App\Models\Telegram\TelegramSenderBotUser;
@@ -130,6 +132,32 @@ final class SenderBotReport
                     'error' => $s->error,
                     'at' => $s->created_at?->toIso8601String(),
                 ]),
+            'options' => $this->settings->options(),
+            'leads' => rescue(fn () => TelegramSenderBotLead::query()
+                ->latest('id')
+                ->limit(20)
+                ->get()
+                ->map(fn (TelegramSenderBotLead $l) => [
+                    'id' => $l->id,
+                    'post' => $l->sender_bot_post_id,
+                    'status' => $l->status,
+                    'source' => $l->source,
+                    'driver' => $l->driverLabel(),
+                    'error' => $l->error,
+                    'at' => $l->created_at?->toIso8601String(),
+                ]), [], false),
+            'events' => rescue(fn () => TelegramSenderBotEvent::query()
+                ->latest('id')
+                ->limit(40)
+                ->get()
+                ->map(fn (TelegramSenderBotEvent $e) => [
+                    'type' => $e->type,
+                    'actor' => $e->actor,
+                    'user' => $e->sender_bot_user_id,
+                    'post' => $e->sender_bot_post_id,
+                    'data' => $e->data,
+                    'at' => $e->created_at?->toIso8601String(),
+                ]), [], false),
             'log' => [
                 'laravel' => self::grep(storage_path('logs/laravel.log'), '/sender[ _-]?bot/i', $lines),
                 'schedule' => self::grep(storage_path('logs/schedule.log'), '/sender-bot/i', $lines),

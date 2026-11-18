@@ -139,6 +139,8 @@ final class DriverCheckNav
             'work' => [
                 ['sender_requests', 'sender-bot', 'inbox'],
                 ['sender_posts', 'sender-bot/posts', 'send'],
+                ['sender_leads', 'sender-bot/leads', 'truck'],
+                ['sender_history', 'sender-bot/history', 'clock'],
             ],
             'setup' => [
                 ['sender_groups', 'sender-bot/groups', 'users'],
