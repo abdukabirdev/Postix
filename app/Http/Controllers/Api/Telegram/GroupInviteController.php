@@ -201,7 +201,8 @@ final class GroupInviteController extends Controller
     /**
      * Who is worth inviting (PeopleActivity), as the owner asks it: how many
      * are green - the only ones invited while "only active" is on - how many
-     * red, how many nobody looked at yet; why the green are green; how many
+     * red (left our groups), how many nobody looked at yet; what is known of
+     * the green; how many
      * of the accounts taking part looked at their people lately, and what
      * the looks of the last day found.
      *
@@ -215,12 +216,12 @@ final class GroupInviteController extends Controller
         $checked = $counts['green'] + $counts['red'];
 
         /* Over the green only (indexed): a few thousand rows, not the whole base. Kept like the counts. */
-        $why = Cache::remember('group_invite.activity_why:' . $config['posted_days'] . ':' . $config['seen_days'], 30, function () use ($config) {
+        /* seen: Telegram told when they were online - any status, "long ago" too. */
+        $why = Cache::remember('group_invite.activity_why:known:' . $config['posted_days'], 30, function () use ($config) {
             $row = $this->base->people()
                 ->where('invite_ok', true)
-                ->selectRaw('SUM(last_posted_at >= ?) as posted, SUM(last_seen_at >= ?) as seen, SUM(our_group_at >= ?) as ours', [
+                ->selectRaw('SUM(last_posted_at >= ?) as posted, SUM(seen_status IS NOT NULL OR last_seen_at IS NOT NULL) as seen, SUM(our_group_at >= ?) as ours', [
                     now()->subDays((int) $config['posted_days'])->toDateTimeString(),
-                    now()->subDays((int) $config['seen_days'])->toDateTimeString(),
                     now()->subDays(PeopleActivity::OUR_GROUP_DAYS)->toDateTimeString(),
                 ])
                 ->first();

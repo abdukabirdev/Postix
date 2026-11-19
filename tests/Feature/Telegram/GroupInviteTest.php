@@ -1656,7 +1656,8 @@ final class GroupInviteTest extends TestCase
         $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
         [$one, $two] = [TelegramAccount::query()->find(1), TelegramAccount::query()->find(2)];
 
-        $added = function (TelegramScrapedUser $person, int $account, string $status = TelegramGroupInvite::STATUS_LEFT) use ($old): void {
+        /* Still in the old group: who left it is not invited anywhere (2026-11-18). */
+        $added = function (TelegramScrapedUser $person, int $account, string $status = TelegramGroupInvite::STATUS_INVITED) use ($old): void {
             TelegramGroupInvite::query()->create([
                 'invite_group_id' => $old->id,
                 'scraped_user_id' => $person->id,
@@ -2408,14 +2409,24 @@ final class GroupInviteTest extends TestCase
     |--------------------------------------------------------------------------
     */
 
-    public function test_a_person_is_green_when_they_wrote_lately_were_online_lately_or_sit_in_our_group(): void
+    public function test_a_person_is_green_when_anything_is_known_of_them_and_red_when_they_left_our_group(): void
     {
         $activity = $this->app->make(PeopleActivity::class);
         $now = now();
 
-        foreach ([3101, 3102, 3103, 3104, 3105, 3106, 3107] as $id) {
+        foreach ([3101, 3102, 3103, 3104, 3105, 3106, 3107, 3108, 3109] as $id) {
             $this->person($id, "P{$id}");
         }
+
+        /* 3108 was added into one of our groups and left it. */
+        $ours = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        TelegramGroupInvite::query()->create([
+            'invite_group_id' => $ours->id,
+            'scraped_user_id' => TelegramScrapedUser::query()->where('telegram_user_id', 3108)->value('id'),
+            'telegram_account_id' => 1,
+            'status' => TelegramGroupInvite::STATUS_LEFT,
+            'left_at' => $now,
+        ]);
 
         $activity->observe([
             ['_' => 'user', 'id' => 3101, 'status' => ['_' => 'userStatusOnline', 'expires' => $now->timestamp + 60]],
@@ -2425,14 +2436,18 @@ final class GroupInviteTest extends TestCase
             /* No status on a full user: hidden for good or never there. */
             ['_' => 'user', 'id' => 3105],
             ['_' => 'user', 'id' => 3106, 'status' => ['_' => 'userStatusOffline', 'was_online' => $now->copy()->subDays(30)->timestamp]],
+            ['_' => 'user', 'id' => 3108, 'status' => ['_' => 'userStatusOnline', 'expires' => $now->timestamp + 60]],
+            /* A "min" user tells nothing. */
+            ['_' => 'user', 'id' => 3109, 'min' => true],
         ], [3106 => $now->copy()->subDays(2)->timestamp]);
 
         $activity->observe([['_' => 'user', 'id' => 3107, 'status' => ['_' => 'userStatusLastMonth']]], ourGroup: true);
 
         $people = TelegramScrapedUser::query()->get()->keyBy('telegram_user_id');
 
+        /* Online today, ten days ago, a month ago, never shown - all taken (the owner, 2026-11-18). */
         $this->assertSame(
-            [3101 => true, 3102 => false, 3103 => true, 3104 => false, 3105 => false, 3106 => true, 3107 => true],
+            [3101 => true, 3102 => true, 3103 => true, 3104 => true, 3105 => true, 3106 => true, 3107 => true, 3108 => false, 3109 => null],
             $people->map(fn ($p) => $p->invite_ok)->all(),
         );
         $this->assertSame('recently', $people[3103]->seen_status);
@@ -2449,22 +2464,59 @@ final class GroupInviteTest extends TestCase
         $this->assertTrue(TelegramScrapedUser::query()->where('telegram_user_id', 3202)->first()->invite_ok);
     }
 
-    public function test_time_turns_the_green_red_and_a_fresh_look_turns_them_back(): void
+    public function test_who_left_our_group_turns_red_who_came_back_or_was_red_by_the_old_rule_turns_green(): void
     {
         $activity = $this->app->make(PeopleActivity::class);
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
 
-        $wrote = $this->person(3301, 'Wrote');
-        $wrote->forceFill(['last_posted_at' => now()->subDays(4), 'activity_checked_at' => now()->subDays(4), 'invite_ok' => true])->save();
+        $left = $this->person(3301, 'Left');
+        $left->forceFill(['last_seen_at' => now()->subDay(), 'activity_checked_at' => now(), 'invite_ok' => true])->save();
+        $leftRow = TelegramGroupInvite::query()->create(['invite_group_id' => $group->id, 'scraped_user_id' => $left->id, 'telegram_account_id' => 1, 'status' => TelegramGroupInvite::STATUS_LEFT, 'left_at' => now()]);
 
-        $seen = $this->person(3302, 'Seen');
-        $seen->forceFill(['last_seen_at' => now()->subDay(), 'activity_checked_at' => now()->subDay(), 'invite_ok' => false])->save();
+        /* Red by the 11-16 rule: not online lately. */
+        $away = $this->person(3302, 'Away');
+        $away->forceFill(['last_seen_at' => now()->subDays(20), 'seen_status' => 'last_month', 'activity_checked_at' => now(), 'invite_ok' => false])->save();
 
-        $unchecked = $this->person(3303, 'Unchecked');
+        $nothing = $this->person(3303, 'Nothing known');
+        $nothing->forceFill(['activity_checked_at' => now(), 'invite_ok' => false])->save();
+
+        $unchecked = $this->person(3304, 'Unchecked');
 
         $this->assertSame(['green' => 1, 'red' => 1], $activity->recompute());
-        $this->assertFalse($wrote->fresh()->invite_ok);
-        $this->assertTrue($seen->fresh()->invite_ok);
+        $this->assertFalse($left->fresh()->invite_ok);
+        $this->assertTrue($away->fresh()->invite_ok);
+        $this->assertNull($nothing->fresh()->invite_ok);
         $this->assertNull($unchecked->fresh()->invite_ok);
+
+        /* Back in the group: green again. */
+        $leftRow->update(['status' => TelegramGroupInvite::STATUS_INVITED, 'left_at' => null]);
+
+        $this->assertSame(['green' => 1, 'red' => 0], $activity->recompute());
+        $this->assertTrue($left->fresh()->invite_ok);
+    }
+
+    public function test_who_left_one_of_our_groups_is_never_invited_into_another(): void
+    {
+        $first = TelegramInviteGroup::query()->create(['link' => 'first', 'is_active' => false]);
+        $group = TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
+        $account = TelegramAccount::query()->find(1);
+
+        $stays = $this->person(3311, 'Stays');
+        $left = $this->person(3312, 'Left');
+
+        foreach ([$stays, $left] as $person) {
+            $person->forceFill(['invite_ok' => true, 'seen_status' => 'online', 'activity_checked_at' => now()])->save();
+            $this->hold(1, $person);
+        }
+
+        TelegramGroupInvite::query()->create(['invite_group_id' => $first->id, 'scraped_user_id' => $left->id, 'telegram_account_id' => 1, 'status' => TelegramGroupInvite::STATUS_LEFT, 'left_at' => now()]);
+
+        /* Even with "only active" off. */
+        $this->assertSame([$stays->id], $this->service->candidates($account, $group, 10)->modelKeys());
+
+        $this->onlyActive();
+
+        $this->assertSame([$stays->id], $this->service->candidates($account, $group, 10)->modelKeys());
     }
 
     public function test_with_only_active_on_red_and_unchecked_people_are_not_invited(): void
@@ -2496,14 +2548,17 @@ final class GroupInviteTest extends TestCase
         $this->assertSame([1, 1, 1], [$counts['green'], $counts['red'], $counts['unchecked']]);
     }
 
-    public function test_before_it_invites_an_account_looks_at_its_contacts_and_invites_the_ones_online(): void
+    public function test_before_it_invites_an_account_looks_at_its_contacts_and_invites_the_ones_it_knows(): void
     {
         TelegramInviteGroup::query()->create(['link' => 'drivers', 'is_active' => true]);
 
         $online = $this->person(3501, 'Online');
         $gone = $this->person(3502, 'Gone');
+        /* Not among the contacts Telegram gave: nothing known. */
+        $unknown = $this->person(3503, 'Unknown');
         $this->hold(1, $online);
         $this->hold(1, $gone);
+        $this->hold(1, $unknown);
 
         $this->onlyActive();
 
@@ -2525,10 +2580,12 @@ final class GroupInviteTest extends TestCase
 
         $this->service->run();
 
+        /* Online now or a month ago - both taken; nothing known - not. */
         $this->assertTrue($online->fresh()->invite_ok);
-        $this->assertFalse($gone->fresh()->invite_ok);
-        $this->assertSame([[3501]], $calls->getArrayCopy());
-        $this->assertNull(TelegramGroupInvite::query()->where('scraped_user_id', $gone->id)->first());
+        $this->assertTrue($gone->fresh()->invite_ok);
+        $this->assertNull($unknown->fresh()->invite_ok);
+        $this->assertEqualsCanonicalizing([3501, 3502], array_merge(...$calls->getArrayCopy()));
+        $this->assertNull(TelegramGroupInvite::query()->where('scraped_user_id', $unknown->id)->first());
         $this->assertFalse($this->app->make(PeopleActivity::class)->dueFor(TelegramAccount::query()->find(1)));
 
         $line = TelegramGroupInviteLog::query()->get()->first(fn ($log) => ($log->context['mode'] ?? null) === 'activity');
@@ -2656,7 +2713,7 @@ final class GroupInviteTest extends TestCase
         $this->assertNotNull($member->fresh()->our_group_at);
         $this->assertTrue(TelegramScrapedUser::query()->where('telegram_user_id', 3702)->first()->invite_ok);
 
-        /* Switched off on the groups page: its list is not read any more, the mark runs out in a week. */
+        /* Switched off on the groups page: its list is not read any more; who was seen there is known, stays green. */
         $this->app->make(GroupInviteGroupController::class)->update(Request::create('/', 'PATCH', ['members_welcome' => false]), $welcome);
 
         $this->assertFalse($welcome->fresh()->members_welcome);
@@ -2665,7 +2722,7 @@ final class GroupInviteTest extends TestCase
         $this->travel(PeopleActivity::OUR_GROUP_DAYS + 1)->days();
         $this->app->make(PeopleActivity::class)->recompute();
 
-        $this->assertFalse($member->fresh()->invite_ok);
+        $this->assertTrue($member->fresh()->invite_ok);
     }
 
     public function test_the_people_page_filters_by_activity(): void

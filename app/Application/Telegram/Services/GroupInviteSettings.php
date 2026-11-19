@@ -85,14 +85,15 @@ final class GroupInviteSettings
              */
             'audience' => self::AUDIENCE_ALL,
             /*
-             * Only people who live in Telegram are invited (the owner,
-             * 2026-11-16): wrote in a group in the last posted_days days,
-             * or were online in the last seen_days, or sit in our welcome
-             * groups (PeopleActivity). The rest - and whoever is not
-             * checked yet - waits.
+             * Only the green are invited (PeopleActivity, the owner
+             * 2026-11-18): something is known of them - any online status,
+             * wrote in a group, sit in our welcome group - and they never
+             * left one of our groups. Whoever is not checked yet waits.
              */
             'only_active' => true,
+            /* The days of messages an account reads in a group to learn who writes there. */
             'posted_days' => 3,
+            /* Not used since 2026-11-18 (any online status counts); kept for the saved settings. */
             'seen_days' => 7,
             /* Each account looks at its people again after this many hours: its contacts' statuses, who wrote in its groups. */
             'activity_hours' => 20,

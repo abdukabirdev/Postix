@@ -104,10 +104,6 @@
                             <x-driver-check.input type="number" inputmode="numeric" x-model="form.posted_days" ::min="limits.posted_days?.[0]" ::max="limits.posted_days?.[1]" required />
                         </x-driver-check.field>
 
-                        <x-driver-check.field :label="__('driver_check.invites.settings.seen_days')" :hint="__('driver_check.invites.settings.seen_days_hint')">
-                            <x-driver-check.input type="number" inputmode="numeric" x-model="form.seen_days" ::min="limits.seen_days?.[0]" ::max="limits.seen_days?.[1]" required />
-                        </x-driver-check.field>
-
                         <x-driver-check.field :label="__('driver_check.invites.settings.activity_hours')" :hint="__('driver_check.invites.settings.activity_hours_hint')">
                             <x-driver-check.input type="number" inputmode="numeric" x-model="form.activity_hours" ::min="limits.activity_hours?.[0]" ::max="limits.activity_hours?.[1]" required />
                         </x-driver-check.field>

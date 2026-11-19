@@ -478,12 +478,12 @@ final class GroupInviteService
 
         $this->releaseStuck();
 
-        /* Who wrote four days ago is not "lately" any more: the green are told again. Never stops the run. */
+        /* Who left our groups since the last run turns red, who came back green. Never stops the run. */
         try {
             $recoloured = $this->activity->recompute();
 
             if ($recoloured['green'] + $recoloured['red'] > 0) {
-                $say("Activity: {$recoloured['green']} became active, {$recoloured['red']} inactive since the last look");
+                $say("Activity: {$recoloured['green']} became green, {$recoloured['red']} left our groups (red) since the last look");
             }
         } catch (Throwable $e) {
             Log::warning('Group invite: the activity colours were not told again', ['message' => $e->getMessage()]);
@@ -2835,8 +2835,9 @@ final class GroupInviteService
     }
 
     /**
-     * Not a bot, not one of ours, not refusing everybody, not tried for the
-     * group. With the "proven" audience: added into some group before.
+     * Not a bot, not one of ours, not refusing everybody, never left one of
+     * our groups, not tried for the group. With the "proven" audience: added
+     * into some group before.
      *
      * @return Builder<TelegramScrapedUser>
      */
@@ -2856,6 +2857,8 @@ final class GroupInviteService
                 fn ($q) => $q->addableToGroup(),
             )
             ->when($this->onlyActive ?? (bool) $this->settings->current()['only_active'], fn ($q) => $q->where('invite_ok', true))
+            /* Left one of our groups: not invited into any other (the owner, 2026-11-18). */
+            ->whereNotIn('id', PeopleActivity::leftQuery())
             ->when($own !== [], fn ($q) => $q->whereNotIn('telegram_user_id', $own))
             ->whereNotIn(
                 'id',

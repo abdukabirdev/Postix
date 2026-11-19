@@ -5,13 +5,14 @@ declare(strict_types=1);
 namespace App\Application\Telegram\Services;
 
 use App\Models\Telegram\TelegramAccount;
+use App\Models\Telegram\TelegramGroupInvite;
 use App\Models\Telegram\TelegramJoinMembership;
 use App\Models\Telegram\TelegramScrapeGroup;
 use App\Models\Telegram\TelegramScrapedUser;
 use App\Models\Telegram\TelegramSetting;
 use danog\MadelineProto\API;
 use danog\MadelineProto\RPCErrorException;
-use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
@@ -19,16 +20,20 @@ use Illuminate\Support\Facades\Log;
 use Throwable;
 
 /**
- * Who of the base is worth inviting into our groups (the owner, 2026-11-16:
- * "мы берём всех ... они всё равно выходят"). A person is green - invited -
- * when at least one holds:
- *  - wrote in some group in the last `posted_days` days (3);
- *  - was online in the last `seen_days` days (7) - the active and the
- *    little active, not the ones gone from Telegram;
- *  - sits in one of our groups marked "members welcome" (Cargo Connect,
- *    Логистика и Грузы): they do not mind being invited.
- * Red otherwise; unchecked while nothing is known of them yet - the invite
- * takes neither (while the panel's "only active" is on).
+ * Who of the base is worth inviting into our groups. The owner answered
+ * case by case (2026-11-18): online today, ten days ago, a month ago, wrote
+ * or not - all taken; nothing known of them - not taken; left one of our
+ * groups after being added - not taken in any other group either.
+ *  - green (invite_ok true): something is known of them - when they were
+ *    online (any status, "long ago" too), that they wrote in a group, or
+ *    that they sit in our "members welcome" group - and they never left
+ *    one of our groups;
+ *  - red (false): Telegram showed them added into one of our groups and
+ *    the "who left" check does not find them there any more (STATUS_LEFT);
+ *    back in the group - green again;
+ *  - unchecked (null): nothing known of them yet.
+ * The invite takes the green only (while the panel's "only active" is on),
+ * and never the ones who left.
  *
  * Learnt from what Telegram sends anyway: every user object carries its
  * status (members lists, contacts, messages), every message its author.
@@ -45,11 +50,8 @@ final class PeopleActivity
 
     public const STATES = [self::GREEN, self::RED, self::UNCHECKED];
 
-    /** Seen on our group's members list this long ago still counts: the lists are read every invite run. */
+    /** Seen on our group's members list this long ago: the overview's "in our groups" number. */
     public const OUR_GROUP_DAYS = 7;
-
-    /** The days recompute() last told the colours by: "posted:seen:ours". */
-    private const RULE_KEY = 'group_invite.activity_rule';
 
     /** One account's last look, by account id (unix time). */
     private const ACCOUNTS_KEY = 'group_invite.activity_accounts';
@@ -100,18 +102,23 @@ final class PeopleActivity
     }
 
     /**
-     * Green or red, from what is known.
-     *
-     * @param array<string, mixed>|null $config the invite settings
+     * Green, red or unchecked (null): left one of our groups - red; anything
+     * known of them - green; nothing - unchecked.
      */
-    public function rule(?Carbon $seen, ?Carbon $posted, ?Carbon $ourGroup, ?array $config = null, ?Carbon $now = null): bool
+    public static function rule(bool $known, bool $left): ?bool
     {
-        $config ??= $this->settings->current();
-        $now ??= now();
+        return $left ? false : ($known ? true : null);
+    }
 
-        return ($posted !== null && $posted->gte($now->copy()->subDays((int) $config['posted_days'])))
-            || ($seen !== null && $seen->gte($now->copy()->subDays((int) $config['seen_days'])))
-            || ($ourGroup !== null && $ourGroup->gte($now->copy()->subDays(self::OUR_GROUP_DAYS)));
+    /**
+     * The people who were added into one of our groups and left it: their
+     * ids in the base.
+     */
+    public static function leftQuery(): QueryBuilder
+    {
+        return DB::table('telegram_group_invites')
+            ->where('status', TelegramGroupInvite::STATUS_LEFT)
+            ->select('scraped_user_id');
     }
 
     /**
@@ -130,7 +137,6 @@ final class PeopleActivity
     public function observe(array $users, array $posted = [], bool $ourGroup = false, bool $insert = false, bool $authorsOnly = false): array
     {
         $now = now();
-        $config = $this->settings->current();
         $own = array_flip($this->ownIds());
         $found = [];
 
@@ -153,8 +159,15 @@ final class PeopleActivity
         foreach (array_chunk($found, 500, true) as $chunk) {
             $known = DB::table('telegram_scraped_users')
                 ->whereIn('telegram_user_id', array_keys($chunk))
-                ->get(['telegram_user_id', 'last_seen_at', 'seen_status', 'last_posted_at', 'our_group_at'])
+                ->get(['id', 'telegram_user_id', 'last_seen_at', 'seen_status', 'last_posted_at', 'our_group_at'])
                 ->keyBy('telegram_user_id');
+
+            $left = $known->isEmpty() ? [] : array_flip(self::leftQuery()
+                ->whereIn('scraped_user_id', $known->pluck('id')->all())
+                ->distinct()
+                ->pluck('scraped_user_id')
+                ->map(fn ($id) => (int) $id)
+                ->all());
 
             $update = [];
             $fresh = [];
@@ -170,16 +183,21 @@ final class PeopleActivity
                 $lastSeen = self::later(self::time($old?->last_seen_at), $seen['at'] ?? null);
                 $lastPosted = self::later(self::time($old?->last_posted_at), isset($posted[$id]) ? Carbon::createFromTimestamp($posted[$id])->setTimezone($now->getTimezone()) : null);
                 $inOurs = $ourGroup ? $now->copy() : self::time($old?->our_group_at);
-                $green = $this->rule($lastSeen, $lastPosted, $inOurs, $config, $now);
+                $seenKind = $seen['kind'] ?? $old?->seen_status;
+                $state = self::rule(
+                    $lastSeen !== null || $seenKind !== null || $lastPosted !== null || $inOurs !== null,
+                    $old !== null && isset($left[(int) $old->id]),
+                );
+                $green = $state === true;
 
                 $row = [
                     'telegram_user_id' => $id,
                     'last_seen_at' => $lastSeen?->toDateTimeString(),
-                    'seen_status' => $seen['kind'] ?? $old?->seen_status,
+                    'seen_status' => $seenKind,
                     'last_posted_at' => $lastPosted?->toDateTimeString(),
                     'our_group_at' => $inOurs?->toDateTimeString(),
                     'activity_checked_at' => $now->toDateTimeString(),
-                    'invite_ok' => $green,
+                    'invite_ok' => $state,
                     'updated_at' => $now->toDateTimeString(),
                 ];
 
@@ -285,42 +303,34 @@ final class PeopleActivity
     }
 
     /**
-     * Time passes: who wrote four days ago is not "lately" any more. Time
-     * only turns the green red - one update over the green (indexed). The
-     * red may turn green only when the panel's days grew: then the second
-     * update, once. No Telegram.
+     * The colours by who left our groups: whoever left turns red, whoever
+     * is back in (or was red by the old "online lately" rule) turns green
+     * again when something is known of them, unchecked when nothing is.
+     * Run at every invite run start, after the "who left" lists of the
+     * last run. No Telegram.
      *
      * @return array{green: int, red: int} the people whose colour changed
      */
     public function recompute(): array
     {
-        $config = $this->settings->current();
-        $rule = $config['posted_days'] . ':' . $config['seen_days'] . ':' . self::OUR_GROUP_DAYS;
-        $ruleChanged = TelegramSetting::get(self::RULE_KEY) !== $rule;
-        $posted = now()->subDays((int) $config['posted_days'])->toDateTimeString();
-        $seen = now()->subDays((int) $config['seen_days'])->toDateTimeString();
-        $ours = now()->subDays(self::OUR_GROUP_DAYS)->toDateTimeString();
-
-        $active = fn (Builder $q) => $q
-            ->where('last_posted_at', '>=', $posted)
-            ->orWhere('last_seen_at', '>=', $seen)
-            ->orWhere('our_group_at', '>=', $ours);
-
-        $green = ! $ruleChanged ? 0 : TelegramScrapedUser::query()
-            ->where('invite_ok', false)
-            ->where($active)
-            ->update(['invite_ok' => true]);
-
         $red = TelegramScrapedUser::query()
-            ->where('invite_ok', true)
-            ->where(fn ($q) => $q->whereNull('last_posted_at')->orWhere('last_posted_at', '<', $posted))
-            ->where(fn ($q) => $q->whereNull('last_seen_at')->orWhere('last_seen_at', '<', $seen))
-            ->where(fn ($q) => $q->whereNull('our_group_at')->orWhere('our_group_at', '<', $ours))
+            ->whereIn('id', self::leftQuery())
+            ->where(fn ($q) => $q->whereNull('invite_ok')->orWhere('invite_ok', true))
             ->update(['invite_ok' => false]);
 
-        if ($ruleChanged) {
-            TelegramSetting::set(self::RULE_KEY, $rule);
-        }
+        $notLeft = fn ($q) => $q->where('invite_ok', false)->whereNotIn('id', self::leftQuery());
+
+        $green = TelegramScrapedUser::query()
+            ->where($notLeft)
+            ->where(fn ($q) => $q
+                ->whereNotNull('seen_status')
+                ->orWhereNotNull('last_seen_at')
+                ->orWhereNotNull('last_posted_at')
+                ->orWhereNotNull('our_group_at'))
+            ->update(['invite_ok' => true]);
+
+        /* Red by the old rule and nothing known: not checked, in fact. */
+        TelegramScrapedUser::query()->where($notLeft)->update(['invite_ok' => null]);
 
         if ($green + $red > 0) {
             GroupInviteBase::forget();

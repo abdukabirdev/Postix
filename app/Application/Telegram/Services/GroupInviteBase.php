@@ -125,7 +125,7 @@ final class GroupInviteBase
             'untried' => $untried,
             'untried_reachable' => $reachable,
             'untried_unreachable' => max(0, $untried - $reachable),
-            /* Worth inviting or not (PeopleActivity): active lately / not / not looked at yet. */
+            /* Worth inviting or not (PeopleActivity): something known of them / left our groups / nothing known yet. */
             'green' => $green = $this->people()->where('invite_ok', true)->count(),
             'red' => $red = $this->people()->where('invite_ok', false)->count(),
             'unchecked' => max(0, $total - $green - $red),
@@ -175,6 +175,7 @@ final class GroupInviteBase
     {
         $left = fn () => $this->whereReachable($this->people(), (bool) $config['use_usernames'])
             ->when(! empty($config['only_active']), fn ($q) => $q->where('invite_ok', true))
+            ->whereNotIn('id', PeopleActivity::leftQuery())
             ->whereDoesntHave('groupInvites', fn ($q) => $q->where('invite_group_id', $group->id));
 
         return [
