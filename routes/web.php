@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\Telegram\AiController;
 use App\Http\Controllers\Api\Telegram\ClientCheckController;
 use App\Http\Controllers\Api\Telegram\ContactAccountsController;
 use App\Http\Controllers\Api\Telegram\ContactCatalogController;
@@ -456,6 +457,11 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
             '/group-invites/spam/admins',
             [DriverCheckController::class, 'groupInvitesSpamAdmins']
         )->name('driver-check.group-invites.spam.admins');
+
+        /* Claude in the flows: what it does and costs; its prompts. */
+        Route::get('/ai', [DriverCheckController::class, 'ai'])->name('driver-check.ai');
+        Route::get('/ai/journal', [DriverCheckController::class, 'aiJournal'])->name('driver-check.ai.journal');
+        Route::get('/ai/prompts', [DriverCheckController::class, 'aiPrompts'])->name('driver-check.ai.prompts');
 
         /*
          * The sender bot: our people write to it, it posts their message
@@ -1019,6 +1025,22 @@ Route::middleware(['auth', 'role:driverCheck,superadmin'])
                     Route::post('/spam/admins/invite', 'invite')->name('api.telegram.group-invites.spam.admins.invite');
                     Route::delete('/spam/admins/{spamAdmin}', 'destroy')->name('api.telegram.group-invites.spam.admins.destroy');
                 });
+            });
+
+        /*
+         * Claude in the flows: modes, cap, pause, journal, prompts, a test.
+         */
+        Route::prefix('/ai')
+            ->controller(AiController::class)
+            ->group(function () {
+                Route::get('/', 'show')->name('api.telegram.ai');
+                Route::patch('/', 'update')->name('api.telegram.ai.update');
+                Route::post('/resume', 'resume')->name('api.telegram.ai.resume');
+                Route::get('/calls', 'calls')->name('api.telegram.ai.calls');
+                Route::get('/prompts', 'prompts')->name('api.telegram.ai.prompts');
+                Route::put('/prompts/{key}', 'savePrompt')->name('api.telegram.ai.prompts.save');
+                Route::delete('/prompts/{key}', 'resetPrompt')->name('api.telegram.ai.prompts.reset');
+                Route::post('/test/driver', 'testDriver')->name('api.telegram.ai.test.driver');
             });
 
         /*

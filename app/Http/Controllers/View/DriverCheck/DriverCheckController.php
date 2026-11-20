@@ -394,6 +394,21 @@ final class DriverCheckController extends Controller
     }
 
     /* The sender bot: one page, cut into its four jobs. */
+    public function ai()
+    {
+        return view('pages.driver-check.ai', ['part' => 'overview']);
+    }
+
+    public function aiJournal()
+    {
+        return view('pages.driver-check.ai', ['part' => 'journal']);
+    }
+
+    public function aiPrompts()
+    {
+        return view('pages.driver-check.ai', ['part' => 'prompts']);
+    }
+
     public function senderBot()
     {
         return view('pages.driver-check.sender-bot', ['part' => 'requests']);

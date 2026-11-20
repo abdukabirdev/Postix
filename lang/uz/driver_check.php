@@ -130,6 +130,12 @@ return [
                 'members' => 'Ishtirokchilar',
                 'spam' => 'Antispam',
             ],
+            'ai' => [
+                'title' => 'SI (Claude)',
+                'about' => 'Claude Haiku Shohrux nomidan yozadi va haydovchi ismlarini tekshiradi: rejimlar, xarajat, jurnal va promptlar',
+                'work' => 'Ish',
+                'setup' => 'Sozlash',
+            ],
             'sender_bot' => [
                 'title' => 'Xabar boti',
                 'about' => 'Odamlarimiz botga yozadi, bot ularning xabarini siz tanlagan guruhlarga yuboradi',
@@ -199,6 +205,9 @@ return [
             'spam_list' => 'Spamchilar ro\'yxati',
             'spam_admins' => 'Adminlar',
             'spam_messages' => 'O\'chirilgan xabarlar',
+            'ai_overview' => 'Rejimlar va xarajat',
+            'ai_journal' => 'SI jurnali',
+            'ai_prompts' => 'Promptlar',
             'sender_requests' => 'Ruxsat so\'rovlari',
             'sender_leads' => 'Haydovchilar',
             'sender_history' => 'Tarix',

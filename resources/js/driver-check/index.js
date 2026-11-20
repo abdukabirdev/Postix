@@ -40,6 +40,7 @@ import { groupInvitesDriversPage } from './group-invites-drivers';
 import { groupInvitesSettingsPage } from './group-invites-settings';
 import { groupInvitesBotPage } from './group-invites-bot';
 import { senderBotPage, senderBadgeStore } from './sender-bot';
+import { aiPage } from './ai';
 import { groupInvitesSpamPage } from './group-invites-spam';
 import { groupInvitesSpamAdminsPage } from './group-invites-spam-admins';
 import { groupInvitesMembersPage } from './group-invites-members';
@@ -1268,6 +1269,7 @@ export function registerDriverCheck(Alpine) {
     Alpine.data('dcGroupInvitesSettings', groupInvitesSettingsPage);
     Alpine.data('dcGroupInvitesBot', groupInvitesBotPage);
     Alpine.data('dcSenderBot', senderBotPage);
+    Alpine.data('dcAi', aiPage);
     Alpine.store('dcSenderBadge', senderBadgeStore());
     Alpine.data('dcGroupInvitesSpam', groupInvitesSpamPage);
     Alpine.data('dcGroupInvitesSpamAdmins', groupInvitesSpamAdminsPage);

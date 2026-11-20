@@ -130,6 +130,12 @@ return [
                 'members' => 'Members',
                 'spam' => 'Anti-spam',
             ],
+            'ai' => [
+                'title' => 'AI (Claude)',
+                'about' => 'Claude Haiku writes for Shohruh and checks driver names: modes, spend, journal and prompts',
+                'work' => 'Work',
+                'setup' => 'Setup',
+            ],
             'sender_bot' => [
                 'title' => 'Sender bot',
                 'about' => 'Our people write to the bot, the bot posts their messages into the groups you chose',
@@ -199,6 +205,9 @@ return [
             'spam_list' => 'Spammer list',
             'spam_admins' => 'Admins',
             'spam_messages' => 'Deleted messages',
+            'ai_overview' => 'Modes and spend',
+            'ai_journal' => 'AI journal',
+            'ai_prompts' => 'Prompts',
             'sender_requests' => 'Access requests',
             'sender_leads' => 'Drivers',
             'sender_history' => 'History',

@@ -44,6 +44,15 @@ final class DriverCheckNav
                 ['penalty_texts', 'penalties/settings', 'pencil'],
             ],
         ]],
+        ['ai', 'check', 'spark', [
+            'work' => [
+                ['ai_overview', 'ai', 'pulse'],
+                ['ai_journal', 'ai/journal', 'layers'],
+            ],
+            'setup' => [
+                ['ai_prompts', 'ai/prompts', 'pencil'],
+            ],
+        ]],
         ['people', 'check', 'users', [
             'staff' => [
                 ['people', 'people', 'users'],
