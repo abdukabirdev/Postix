@@ -10,6 +10,7 @@
     "license": "MIT",
     "require": {
         "php": "^8.2",
+        "anthropic-ai/sdk": "^1.10",
         "danog/madelineproto": "^8.7",
         "irazasyed/telegram-bot-sdk": "^3.16",
         "laravel/framework": "^12.0",
