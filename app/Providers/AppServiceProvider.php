@@ -19,7 +19,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        /* Claude behind the AI flows; tests bind a fake. */
+        $this->app->singleton(
+            \App\Application\Telegram\Ai\AiModel::class,
+            \App\Application\Telegram\Ai\AnthropicAiModel::class,
+        );
     }
 
     /**

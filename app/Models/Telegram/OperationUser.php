@@ -61,6 +61,7 @@ class OperationUser extends Model
         'respectful',
         'address',
         'personal_answers',
+        'ai_profile',
         'telegram_username',
         'telegram_id',
         'is_active',
