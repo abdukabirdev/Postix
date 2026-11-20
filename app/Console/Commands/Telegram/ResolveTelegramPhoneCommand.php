@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Console\Commands\Telegram;
 
+use App\Application\Telegram\Ai\DriverNameJudge;
 use App\Application\Telegram\Services\MadelineService;
 use App\Application\Telegram\Services\TelegramAccountProcessService;
 use App\Application\Telegram\Services\TelegramContactResolver;
@@ -1920,6 +1921,23 @@ final class ResolveTelegramPhoneCommand extends Command
             $resolvedPhone->telegram_last_name,
             $resolvedPhone->telegram_username,
         );
+
+        /*
+         * The code found the names different and Telegram has a name to
+         * look at: Claude decides (DriverNameJudge). A separate process,
+         * so the call may wait here.
+         */
+        $aiJudge = app(DriverNameJudge::class);
+
+        if ($aiJudge->wanted($match)) {
+            $match = $aiJudge->judge(
+                $check->id,
+                $match,
+                $resolvedPhone->telegram_first_name,
+                $resolvedPhone->telegram_last_name,
+                $resolvedPhone->telegram_username,
+            );
+        }
 
         $telegramRaw[
             'name_match'

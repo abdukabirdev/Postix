@@ -373,6 +373,8 @@ final class TelegramDriverCheckReporter
                 lines: $lines,
                 match: $match,
             );
+        } elseif ($check->status?->isFinal()) {
+            $this->appendPlainReason($lines, $check);
         }
 
         /*
@@ -546,57 +548,87 @@ final class TelegramDriverCheckReporter
             }
         }
 
-        /*
-         * -------------------------------------------------------------
-         * REASONS
-         * -------------------------------------------------------------
-         */
-        $reasons
-            = $match['reasons']
-            ?? [];
+        $this->appendReasons($lines, $match);
+    }
 
-        if (
-            is_array($reasons)
-            && $reasons !== []
-        ) {
-            $labels = [];
+    /**
+     * "Причина:" at the end of the report: what the code found, and what
+     * the AI decided when it was asked (DriverNameJudge) - in Russian, so
+     * nobody needs the logs to see why a driver was (not) confirmed.
+     *
+     * @param list<string> $lines
+     */
+    private function appendReasons(array &$lines, array $match): void
+    {
+        $bullets = [];
 
-            foreach ($reasons as $reason) {
-                if (
-                    ! is_string($reason)
-                    || trim($reason) === ''
-                ) {
-                    continue;
-                }
+        $score = round((float) ($match['score'] ?? 0), 1);
+        $codeSaid = ($match['matched_by'] ?? null) === 'ai'
+            ? (($match['ai']['code_matched'] ?? false) ? 'совпадает' : 'не совпадает')
+            : (($match['matched'] ?? false) ? 'совпадает' : 'не совпадает');
 
-                $labels[]
-                    = $this->reasonLabel(
-                        $reason,
-                    );
-            }
+        $why = [];
 
-            $labels
-                = array_values(
-                    array_unique(
-                        $labels,
-                    ),
-                );
-
-            if ($labels !== []) {
-                $lines[] = '';
-
-                $lines[]
-                    = '<b>Причина:</b>';
-
-                foreach ($labels as $label) {
-                    $lines[]
-                        = '• '
-                        . $this->escape(
-                            $label,
-                        );
-                }
+        foreach ((array) ($match['reasons'] ?? []) as $reason) {
+            if (is_string($reason) && trim($reason) !== '') {
+                $why[] = $this->reasonLabel(trim($reason));
             }
         }
+
+        $why = array_values(array_unique($why));
+
+        $bullets[] = 'Проверка кодом: ' . $codeSaid . ' (' . $score . ')'
+            . ($why !== [] ? ' — ' . implode('; ', $why) : '');
+
+        $ai = $match['ai'] ?? null;
+
+        if (is_array($ai)) {
+            $verdict = match ($ai['verdict'] ?? null) {
+                'match' => 'совпадает',
+                'mismatch' => 'не совпадает',
+                default => null,
+            };
+            $reason = trim((string) ($ai['reason'] ?? ''));
+
+            if ($verdict === null) {
+                $bullets[] = 'ИИ не ответил, решил код'
+                    . (trim((string) ($ai['error'] ?? '')) !== '' ? ': ' . mb_substr(trim((string) $ai['error']), 0, 160) : '');
+            } elseif (($ai['mode'] ?? null) === 'shadow') {
+                $bullets[] = 'ИИ считает (пробный режим, решил код): ' . $verdict . ($reason !== '' ? ' — ' . $reason : '');
+            } else {
+                $bullets[] = 'Вердикт ИИ: ' . $verdict . ($reason !== '' ? ' — ' . $reason : '');
+            }
+        }
+
+        $lines[] = '';
+        $lines[] = '<b>Причина:</b>';
+
+        foreach ($bullets as $bullet) {
+            $lines[] = '• ' . $this->escape($bullet);
+        }
+    }
+
+    /**
+     * "Причина:" of a check that compared no names: the number is not in
+     * Telegram, or the check failed.
+     *
+     * @param list<string> $lines
+     */
+    private function appendPlainReason(array &$lines, TelegramDriverCheck $check): void
+    {
+        $result = data_get($check->telegram_raw, 'resolver_result');
+
+        $reason = match (true) {
+            $result === 'phone_not_registered' => 'Номер не зарегистрирован в Telegram',
+            in_array($result, TelegramDriverCheck::TECHNICAL_FAILURES, true),
+            is_string($result) && str_starts_with($result, 'command_failed') => 'Техническая ошибка проверки — номер не удалось проверить',
+            $check->telegram_user_id === null => 'Аккаунт Telegram по номеру не найден',
+            default => 'В Telegram нет имени, сравнивать не с чем',
+        };
+
+        $lines[] = '';
+        $lines[] = '<b>Причина:</b>';
+        $lines[] = '• ' . $this->escape($reason);
     }
 
     private function telegramDisplayName(
@@ -835,6 +867,18 @@ final class TelegramDriverCheckReporter
 
             'fuzzy'
             => 'Обнаружено близкое написание имени.',
+
+            'No match' => 'совпадений нет',
+            'Exact match' => 'точное совпадение',
+            'Transliteration variant' => 'то же имя в другой транслитерации',
+            'Minor spelling variation' => 'небольшая разница в написании',
+            'Partial name / nickname match' => 'совпала часть имени или уменьшительная форма',
+            'Short partial-name match' => 'совпала только короткая часть имени',
+            'Same name root, different name affix' => 'тот же корень имени, другое окончание',
+            'Same name, different vowel spelling' => 'то же имя, другие гласные',
+            'Same name root, different vowel spelling' => 'тот же корень имени, другие гласные',
+            'All driver name tokens match exactly.' => 'всё ФИО совпало',
+            'Initials match the driver name' => 'совпали инициалы',
 
             default
             => $this->humanizeReason(

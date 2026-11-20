@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Application\Telegram\Actions;
 
+use App\Application\Telegram\Ai\DriverNameJudge;
 use App\Application\Telegram\Services\TelegramNameMatcher;
 use App\Enums\Drivers\TelegramDriverCheckStatus;
+use App\Jobs\Telegram\JudgeDriverNameJob;
 use App\Models\Driver\TelegramDriverCheck;
 use App\Models\Telegram\TelegramResolvedPhone;
 
@@ -13,6 +15,7 @@ final class ApplyResolvedTelegramPhone
 {
     public function __construct(
         private readonly TelegramNameMatcher $nameMatcher,
+        private readonly DriverNameJudge $aiJudge,
     ) {
     }
 
@@ -46,13 +49,22 @@ final class ApplyResolvedTelegramPhone
 
         $telegramRaw['name_match'] = $match;
 
+        /*
+         * The code found the names different: the AI decides. This path
+         * runs inside a Telegram process, so the call goes to the queue
+         * (JudgeDriverNameJob) and the check waits in "processing".
+         */
+        $waitsForAi = $this->aiJudge->wanted($match);
+
         $matched = (bool) (
             $match['matched'] ?? false
         );
 
-        $status = $matched
-            ? TelegramDriverCheckStatus::Confirmed
-            : TelegramDriverCheckStatus::NotConfirmed;
+        $status = $waitsForAi
+            ? TelegramDriverCheckStatus::Processing
+            : ($matched
+                ? TelegramDriverCheckStatus::Confirmed
+                : TelegramDriverCheckStatus::NotConfirmed);
 
         $check->update([
             'telegram_resolved_phone_id'
@@ -82,6 +94,12 @@ final class ApplyResolvedTelegramPhone
             'checked_at'
                 => now(),
         ]);
+
+        if ($waitsForAi) {
+            JudgeDriverNameJob::dispatch($check->id)->onQueue('telegram')->afterCommit();
+
+            return;
+        }
 
         /*
          * Current driver state.
