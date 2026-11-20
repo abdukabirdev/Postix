@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\Auth\AuthController;
 use App\Http\Controllers\Api\Telegram\AccountsReportController;
+use App\Http\Controllers\Api\Telegram\AiReportController;
 use App\Http\Controllers\Api\Telegram\ChatReaderController;
 use App\Http\Controllers\Api\Telegram\ContactSyncDevReportController;
 use App\Http\Controllers\Api\Telegram\GroupInviteReportController;
@@ -41,6 +42,11 @@ Route::get('/telegram/report/accounts', AccountsReportController::class)
 Route::get('/telegram/report/sender-bot', SenderBotReportController::class)
     ->middleware('throttle:30,1')
     ->name('telegram.report.sender-bot');
+
+// The AI (Claude): modes, pause, money, the latest calls - the same token.
+Route::get('/telegram/report/ai', AiReportController::class)
+    ->middleware('throttle:30,1')
+    ->name('telegram.report.ai');
 
 // Who never answers the penalties (no word, no reaction), the same token.
 Route::get('/telegram/report/silent-people', SilentPeopleReportController::class)
